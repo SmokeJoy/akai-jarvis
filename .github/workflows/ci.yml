@@ -92,12 +92,7 @@ jobs:
             echo "Android NDK Clang not found in standard paths; installing gcc-arm-linux-gnueabihf cross-compiler..."
             sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-linux-gnueabihf
             mkdir -p /tmp/jni_include/android
-            cat << 'EOF' > /tmp/jni_include/android/log.h
-            #pragma once
-            #define ANDROID_LOG_INFO 4
-            #define ANDROID_LOG_ERROR 6
-            static inline int __android_log_print(int prio, const char* tag, const char* fmt, ...) { (void)prio; (void)tag; (void)fmt; return 0; }
-            EOF
+            printf '#pragma once\n#define ANDROID_LOG_INFO 4\n#define ANDROID_LOG_ERROR 6\nstatic inline int __android_log_print(int prio, const char* tag, const char* fmt, ...) { (void)prio; (void)tag; (void)fmt; return 0; }\n' > /tmp/jni_include/android/log.h
 
             arm-linux-gnueabihf-gcc -shared -fPIC -O2 \
               -I"$JAVA_HOME/include" \
