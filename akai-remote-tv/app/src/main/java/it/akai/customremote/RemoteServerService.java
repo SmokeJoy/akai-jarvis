@@ -205,13 +205,28 @@ public class RemoteServerService extends Service {
             KeyStore keyStore = KeyStore.getInstance("PKCS12");
             InputStream is = null;
 
-            // 1. Priorità a Keystore TLS esterno provisionato in storage privato locale (/data/data/.../files)
+            // 1. Password resolution: cerca server_keystore.pass in internal storage privato o usa default di collaudo
+            char[] keyPassword = "akai1234".toCharArray();
+            File passFile = new File(getFilesDir(), "server_keystore.pass");
+            if (passFile.exists() && passFile.length() > 0) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(passFile), StandardCharsets.UTF_8))) {
+                    String p = reader.readLine();
+                    if (p != null && !p.trim().isEmpty()) {
+                        keyPassword = p.trim().toCharArray();
+                        Log.i(TAG, "Custom TLS keystore password loaded from provisioned storage.");
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Error reading TLS password file: " + e.getMessage());
+                }
+            }
+
+            // 2. Priorità a Keystore TLS esterno provisionato in storage privato locale (/data/data/.../files)
             File localKeystore = new File(getFilesDir(), "server_keystore.p12");
             if (localKeystore.exists() && localKeystore.length() > 0) {
                 Log.i(TAG, "Loading provisioned TLS keystore from internal files: " + localKeystore.getAbsolutePath());
                 is = new FileInputStream(localKeystore);
             } else {
-                // 2. Fallback su asset pacchettizzato nell'APK
+                // 3. Fallback su asset pacchettizzato nell'APK
                 try {
                     is = getAssets().open("server_keystore.p12");
                 } catch (FileNotFoundException fnf) {
@@ -221,7 +236,7 @@ public class RemoteServerService extends Service {
             }
 
             try {
-                keyStore.load(is, "akai1234".toCharArray());
+                keyStore.load(is, keyPassword);
             } finally {
                 if (is != null) {
                     try { is.close(); } catch (Exception ignored) {}
@@ -229,7 +244,7 @@ public class RemoteServerService extends Service {
             }
 
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-            kmf.init(keyStore, "akai1234".toCharArray());
+            kmf.init(keyStore, keyPassword);
             SSLContext sslContext = SSLContext.getInstance("TLS");
             sslContext.init(kmf.getKeyManagers(), null, new SecureRandom());
             return sslContext;

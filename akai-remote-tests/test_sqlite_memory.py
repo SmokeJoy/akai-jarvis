@@ -111,27 +111,27 @@ def run_tests():
                     ("guest_mode", "false", "settings", 0, 1, now))
         conn.commit()
 
-        # Esegui migrazione v5 -> v6 esattamente come definito in AkaiMemoryEngine.onUpgrade()
-        # con Whitelist Rigorosa a Fingerprint Immutabile
+        # Esegui migrazione v5 -> v6 categorica esattamente come definito in AkaiMemoryEngine.onUpgrade()
+        # Criterio 3: TUTTE le procedure legacy v5 rimangono rigorosamente private (is_personal = 1)
         cur.execute("ALTER TABLE procedural_memory ADD COLUMN is_personal INTEGER DEFAULT 1;")
+        
+        # Inserimento post-upgrade di template di sistema v6 esplicito pubblico
         cur.execute("""
-            UPDATE procedural_memory SET is_personal = 0 WHERE 
-                intent_key = 'youtube' AND 
-                app_package = 'com.google.android.youtube.tv' AND 
-                goal_intent = 'apri youtube' AND 
-                description = 'Template apertura YouTube TV';
-        """)
+            INSERT INTO procedural_memory 
+            (intent_key, goal_intent, description, app_package, initial_state, action_sequence, success_condition, app_version, is_personal, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, ("system_yt_template", "apri youtube", "Template di sistema v6", "com.google.android.youtube.tv", "{}", "[]", "{}", "v2.0", 0, now))
         conn.commit()
 
-        # Verifica che il template autentico sia is_personal = 0, mentre le varianti personali o storiche siano is_personal = 1
+        # Verifica che tutte le procedure legacy v5 siano is_personal = 1, e solo il template di sistema sia 0
         cur.execute("SELECT intent_key, is_personal FROM procedural_memory ORDER BY id ASC;")
         procs_migrated = {row[0]: row[1] for row in cur.fetchall()}
 
-        if procs_migrated.get("youtube") == 0 and procs_migrated.get("youtube_custom") == 1 and procs_migrated.get("dan_vacation_photos") == 1:
-            print("[PASS] SQLite Test 1: Migrazione v5 -> v6 ultra-rigorosa con fingerprint immutabile: template di sistema pubblico (is_personal=0), varianti e procedure storiche private (is_personal=1)")
+        if procs_migrated.get("youtube") == 1 and procs_migrated.get("youtube_custom") == 1 and procs_migrated.get("dan_vacation_photos") == 1 and procs_migrated.get("system_yt_template") == 0:
+            print("[PASS] SQLite Test 1: Migrazione v5 -> v6 categorica (Criterio 3): TUTTE le procedure legacy v5 rimangono private (is_personal=1), solo i template di sistema v6 espliciti sono pubblici (is_personal=0)")
             passed += 1
         else:
-            print(f"[FAIL] SQLite Test 1: Migrazione non rigorosa! Stato: {procs_migrated}")
+            print(f"[FAIL] SQLite Test 1: Migrazione non categorica! Stato: {procs_migrated}")
             failed += 1
 
         # ---------------------------------------------------------------------

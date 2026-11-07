@@ -54,11 +54,13 @@ jobs:
           fi
           echo "Secrets scan passed: zero private keystores or unmasked API keys detected."
 
-      - name: 3. Real SQLite Database Integrity & v5->v6 Migration Test
+      - name: 3. Real SQLite Database Integrity, Migration & Offline Rollback Simulation
         run: |
           echo "=== Running Real SQLite Database & Migration Tests ==="
           python3 akai-remote-tests/test_sqlite_memory.py
-          echo "SQLite persistence, v5->v6 migration, Guest Mode privacy and budget enforcement verified on real engine."
+          echo "=== Running Offline Rollback & 15MB Storage Budget Simulation ==="
+          python3 akai-remote-tests/test_rollback_offline_simulation.py
+          echo "SQLite persistence, v5->v6 migration, offline rollback, and budget enforcement verified on real engine."
 
       - name: 4. Compile and Run Host Java Unit Tests (17 Tests)
         run: |

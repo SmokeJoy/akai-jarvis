@@ -89,25 +89,26 @@ function runTests() {
         db.prepare("INSERT INTO user_preferences (pref_key, pref_value, category, is_personal, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?);")
           .run("guest_mode", "false", "settings", 0, 1, now);
 
-        // Migrazione conservativa v5 -> v6 con Whitelist Rigorosa a Fingerprint Immutabile
+        // Migrazione conservativa v5 -> v6 categorica (Criterio 3: zero leaks)
+        // Tutte le procedure legacy v5 rimangono rigorosamente private (is_personal = 1)
         db.exec("ALTER TABLE procedural_memory ADD COLUMN is_personal INTEGER DEFAULT 1;");
-        db.exec(`
-            UPDATE procedural_memory SET is_personal = 0 WHERE 
-                intent_key = 'youtube' AND 
-                app_package = 'com.google.android.youtube.tv' AND 
-                goal_intent = 'apri youtube' AND 
-                description = 'Template apertura YouTube TV';
-        `);
+
+        // Inserimento post-upgrade del template di sistema v6 pubblico (is_personal = 0)
+        db.prepare(`
+            INSERT INTO procedural_memory 
+            (intent_key, goal_intent, description, app_package, initial_state, action_sequence, success_condition, app_version, is_personal, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        `).run("system_yt_template", "apri youtube", "Template di sistema v6", "com.google.android.youtube.tv", "{}", "[]", "{}", "v2.0", 0, now);
 
         const procs = db.prepare("SELECT intent_key, is_personal FROM procedural_memory;").all();
         const mapProcs = {};
         for (const p of procs) mapProcs[p.intent_key] = p.is_personal;
 
-        if (mapProcs["youtube"] === 0 && mapProcs["youtube_custom"] === 1 && mapProcs["dan_vacation_photos"] === 1) {
-            console.log("[PASS] SQLite Test 1: Migrazione v5 -> v6 ultra-rigorosa con fingerprint immutabile: template di sistema pubblico (is_personal=0), procedure storiche e varianti personalizzate rigorosamente private (is_personal=1)");
+        if (mapProcs["youtube"] === 1 && mapProcs["youtube_custom"] === 1 && mapProcs["dan_vacation_photos"] === 1 && mapProcs["system_yt_template"] === 0) {
+            console.log("[PASS] SQLite Test 1: Migrazione v5 -> v6 categorica (Criterio 3): TUTTE le procedure legacy v5 rimangono private (is_personal=1), solo i template di sistema v6 espliciti sono pubblici (is_personal=0)");
             passed++;
         } else {
-            console.error("[FAIL] SQLite Test 1: Migrazione v5 -> v6 fallita: " + JSON.stringify(mapProcs));
+            console.error("[FAIL] SQLite Test 1: Migrazione v5 -> v6 non categorica: " + JSON.stringify(mapProcs));
             failed++;
         }
 

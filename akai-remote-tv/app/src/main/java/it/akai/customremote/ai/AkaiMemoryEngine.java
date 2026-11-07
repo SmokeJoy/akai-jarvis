@@ -191,16 +191,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
         }
         if (oldVersion < 6) {
             try {
-                // Politica conservativa: le procedure pregresse create dall'utente
-                // vengono marcate di default come personali (is_personal = 1) per prevenire leak in Guest Mode
+                // Politica categorica di privacy (Criterio 3): TUTTE le procedure legacy v5 pre-esistenti
+                // vengono marcate indistintamente come personali (is_personal = 1) per prevenire
+                // qualsiasi trapelamento di dati o abitudini in Guest Mode.
+                // Nessuna procedura pregressa viene promossa a pubblica per confronto parziale.
                 db.execSQL("ALTER TABLE " + TABLE_PROCEDURES + " ADD COLUMN " + COL_IS_PERSONAL + " INTEGER DEFAULT 1;");
-                // Whitelist rigorosa basata su fingerprint esatto del template immutabile di sistema
-                // Se l'utente ha modificato la query, la descrizione o il pacchetto, la procedura rimane is_personal = 1
-                db.execSQL("UPDATE " + TABLE_PROCEDURES + " SET " + COL_IS_PERSONAL + " = 0 WHERE " +
-                        COL_INTENT_KEY + " = 'youtube' AND " +
-                        COL_APP_PACKAGE + " = 'com.google.android.youtube.tv' AND " +
-                        COL_GOAL_INTENT + " = 'apri youtube' AND " +
-                        COL_DESCRIPTION + " = 'Template apertura YouTube TV';");
             } catch (Exception e) {
                 Log.w(TAG, "Schema upgrade v6 notice: " + e.getMessage());
             }
