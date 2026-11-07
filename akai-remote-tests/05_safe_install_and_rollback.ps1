@@ -275,14 +275,14 @@ switch ($Action) {
 
         # Metodo A: exec-out run-as
         & $adb -s $TargetAdb exec-out run-as $PackageName cat files/akai_memory_snapshot.db > $backupDb 2>$null
-        if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+        if ((Test-Path $backupDb) -and ((Get-Item $backupDb).Length -ge 512)) {
             $extracted = $true
         }
 
         # Metodo B: su -c
         if (-not $extracted) {
             & $adb -s $TargetAdb shell "su -c 'cat /data/data/$PackageName/files/akai_memory_snapshot.db'" 2>$null > $backupDb
-            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+            if ((Test-Path $backupDb) -and ((Get-Item $backupDb).Length -ge 512)) {
                 $extracted = $true
             }
         }
@@ -290,7 +290,7 @@ switch ($Action) {
         # Metodo C: database originale
         if (-not $extracted) {
             & $adb -s $TargetAdb exec-out run-as $PackageName cat databases/akai_memory.db > $backupDb 2>$null
-            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+            if ((Test-Path $backupDb) -and ((Get-Item $backupDb).Length -ge 512)) {
                 $extracted = $true
             }
         }
@@ -337,20 +337,20 @@ switch ($Action) {
 
             $dbExtracted = $false
             & $adb -s $TargetAdb exec-out run-as $PackageName cat files/akai_memory_snapshot.db > $backupDb 2>$null
-            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+            if ((Test-Path $backupDb) -and ((Get-Item $backupDb).Length -ge 512)) {
                 $dbExtracted = $true
             }
 
             if (-not $dbExtracted) {
                 & $adb -s $TargetAdb shell "su -c 'cat /data/data/$PackageName/files/akai_memory_snapshot.db'" 2>$null > $backupDb
-                if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+                if ((Test-Path $backupDb) -and ((Get-Item $backupDb).Length -ge 512)) {
                     $dbExtracted = $true
                 }
             }
 
             if (-not $dbExtracted) {
                 & $adb -s $TargetAdb exec-out run-as $PackageName cat databases/akai_memory.db > $backupDb 2>$null
-                if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+                if ((Test-Path $backupDb) -and ((Get-Item $backupDb).Length -ge 512)) {
                     $dbExtracted = $true
                 }
             }
