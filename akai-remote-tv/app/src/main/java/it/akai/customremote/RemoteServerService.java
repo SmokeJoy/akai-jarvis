@@ -479,8 +479,8 @@ public class RemoteServerService extends Service {
             return;
         }
 
-        // Pair Verify
-        if ("/api/auth/pair/verify".equals(path) && "POST".equals(method)) {
+        // Pair Verify (Supports both /api/auth/pair/verify and /api/auth/pair)
+        if (("/api/auth/pair/verify".equals(path) || "/api/auth/pair".equals(path)) && "POST".equals(method)) {
             if (securityManager.isClientLockedOut(clientIp)) {
                 long waitSec = securityManager.getLockoutRemainingSeconds(clientIp);
                 JSONObject err = new JSONObject();
@@ -518,8 +518,8 @@ public class RemoteServerService extends Service {
             return;
         }
 
-        // Control Command
-        if ("/api/control/command".equals(path) && "POST".equals(method)) {
+        // Control Command (Supports both /api/control/command and /api/command)
+        if (("/api/control/command".equals(path) || "/api/command".equals(path)) && "POST".equals(method)) {
             String token = extractBearerToken(headers);
             if (!securityManager.validateToken(token)) {
                 sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token non valido o scaduto"));
@@ -537,7 +537,14 @@ public class RemoteServerService extends Service {
             }
 
             String action = req.optString("action", "");
-            TvController.CommandResult res = tvController.executeCommand(action);
+            TvController.CommandResult res;
+            if ("type_text".equals(action) || "text".equals(action)) {
+                String text = req.optString("text", "");
+                res = tvController.injectText(text);
+            } else {
+                res = tvController.executeCommand(action);
+            }
+
             JSONObject out = new JSONObject();
             out.put("success", res.success);
             out.put("message", res.message);
@@ -736,7 +743,7 @@ public class RemoteServerService extends Service {
             return;
         }
 
-        // AI Memory & Conversations History (/api/ai/memory)
+        // AI Memory, Procedures & Conversations History (/api/ai/memory)
         if ("/api/ai/memory".equals(path) && "GET".equals(method)) {
             String token = extractBearerToken(headers);
             if (!securityManager.validateToken(token)) {
@@ -744,17 +751,20 @@ public class RemoteServerService extends Service {
                 return;
             }
 
-            AkaiAiController ai = AkaiAiController.getInstance(this, tvController);
-            it.akai.customremote.ai.AkaiMemoryEngine mem = ai.getMemoryEngine();
+            AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(this);
 
             JSONObject out = new JSONObject();
-            out.put("conversations", mem.getRecentConversations(20));
+            out.put("procedures", mem.getAllProcedures());
             out.put("preferences", mem.getAllPreferences());
+            out.put("stats", mem.getAllStats());
+            org.json.JSONArray recents = mem.getRecentConversations(20);
+            out.put("conversations", recents);
+            out.put("recent_conversations", recents);
             long dbBytes = mem.getDatabaseSizeBytes();
             out.put("db_size_bytes", dbBytes);
             out.put("db_size_kb", dbBytes / 1024.0);
             out.put("db_limit_bytes", it.akai.customremote.ai.AkaiMemoryEngine.MAX_STORAGE_BYTES);
-            out.put("stats", mem.getAllStats());
+            out.put("guest_mode", mem.isGuestMode());
 
             sendJsonResponse(os, 200, out);
             return;
@@ -943,27 +953,6 @@ public class RemoteServerService extends Service {
             }
 
             sendJsonResponse(os, 200, simRes);
-            return;
-        }
-
-        // Procedural & User Memory Inspection
-        if ("/api/ai/memory".equals(path) && "GET".equals(method)) {
-            String token = extractBearerToken(headers);
-            if (!securityManager.validateToken(token)) {
-                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
-                return;
-            }
-
-            AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(this);
-            JSONObject data = new JSONObject();
-            data.put("procedures", mem.getAllProcedures());
-            data.put("preferences", mem.getAllPreferences());
-            data.put("stats", mem.getAllStats());
-            data.put("recent_conversations", mem.getRecentConversations(15));
-            data.put("db_size_bytes", mem.getDatabaseSizeBytes());
-            data.put("guest_mode", mem.isGuestMode());
-
-            sendJsonResponse(os, 200, data);
             return;
         }
 

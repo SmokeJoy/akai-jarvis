@@ -111,6 +111,36 @@ public class TvController {
                 }
                 return new CommandResult(false, "D-Pad OK non supportato senza driver UInput o Accessibilità");
 
+            // Menu Control
+            case "menu":
+                if (uinputDriver.isAvailable()) {
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_MENU);
+                    return new CommandResult(sent, sent ? "Menu" : "Errore invio Menu");
+                }
+                return new CommandResult(false, "Menu non disponibile senza driver UInput");
+
+            // Channel Navigation
+            case "channel_up":
+                if (uinputDriver.isAvailable()) {
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_CHANNELUP);
+                    return new CommandResult(sent, sent ? "Canale +" : "Errore invio Canale +");
+                }
+                return new CommandResult(false, "Canale + non disponibile senza driver UInput");
+
+            case "channel_down":
+                if (uinputDriver.isAvailable()) {
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_CHANNELDOWN);
+                    return new CommandResult(sent, sent ? "Canale -" : "Errore invio Canale -");
+                }
+                return new CommandResult(false, "Canale - non disponibile senza driver UInput");
+
+            case "channel_prev":
+                if (uinputDriver.isAvailable()) {
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_PREVIOUS_CHANNEL);
+                    return new CommandResult(sent, sent ? "Canale Precedente" : "Errore invio Canale Precedente");
+                }
+                return new CommandResult(false, "Canale Precedente non disponibile senza driver UInput");
+
             // Direct Inputs (DTV, HDMI 1, HDMI 2, Source)
             case "input_tv":
                 sendMediaTekBroadcast("com.mediatek.select.DTV", "Digitale Terrestre");
