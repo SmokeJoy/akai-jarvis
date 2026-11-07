@@ -17,20 +17,14 @@ public class TvController {
     private final AudioManager audioManager;
     private final UInputDriver uinputDriver;
 
-    // Execution result data structure
-    public static class CommandResult {
-        public final boolean success;
-        public final String message;
-        public final boolean unsupported;
-
+    // Execution result data structure (subclasses top-level CommandResult for backward compatibility)
+    public static class CommandResult extends it.akai.customremote.CommandResult {
         public CommandResult(boolean success, String message) {
-            this(success, message, false);
+            super(success, message, false);
         }
 
         public CommandResult(boolean success, String message, boolean unsupported) {
-            this.success = success;
-            this.message = message;
-            this.unsupported = unsupported;
+            super(success, message, unsupported);
         }
     }
 
@@ -136,8 +130,8 @@ public class TvController {
 
             case "channel_prev":
                 if (uinputDriver.isAvailable()) {
-                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_PREVIOUS_CHANNEL);
-                    return new CommandResult(sent, sent ? "Canale Precedente" : "Errore invio Canale Precedente");
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_LAST);
+                    return new CommandResult(sent, sent ? "Canale Precedente (Recall Last KEY_LAST)" : "Errore invio Canale Precedente");
                 }
                 return new CommandResult(false, "Canale Precedente non disponibile senza driver UInput");
 

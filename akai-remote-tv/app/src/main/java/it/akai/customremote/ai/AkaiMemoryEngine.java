@@ -596,6 +596,9 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
 
     public synchronized JSONArray getRecentConversations(int limit) {
         JSONArray arr = new JSONArray();
+        if (isGuestMode()) {
+            return arr; // Privacy: in Guest Mode nessuna cronologia precedente o personale è esposta
+        }
         int max = (limit > 0 && limit <= 20) ? limit : 20;
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;

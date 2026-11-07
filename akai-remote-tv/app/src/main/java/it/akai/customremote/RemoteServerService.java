@@ -68,6 +68,7 @@ public class RemoteServerService extends Service {
 
     private SecurityManager securityManager;
     private TvController tvController;
+    private RestApiRouter restApiRouter;
 
     public static RemoteServerService getInstance() {
         return sInstance;
@@ -87,6 +88,31 @@ public class RemoteServerService extends Service {
         sInstance = this;
         securityManager = new SecurityManager(this);
         tvController = new TvController(this);
+        restApiRouter = new RestApiRouter(
+            securityManager,
+            new RestApiRouter.CommandHandler() {
+                @Override public CommandResult executeCommand(String action) { return tvController.executeCommand(action); }
+                @Override public CommandResult injectText(String text) { return tvController.injectText(text); }
+                @Override public boolean isUInputReady() { return tvController.isUInputReady(); }
+            },
+            new RestApiRouter.MemoryHandler() {
+                @Override public JSONArray getAllProcedures() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getAllProcedures(); }
+                @Override public JSONObject getAllPreferences() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getAllPreferences(); }
+                @Override public JSONObject getAllStats() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getAllStats(); }
+                @Override public JSONArray getRecentConversations(int limit) { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getRecentConversations(limit); }
+                @Override public long getDatabaseSizeBytes() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getDatabaseSizeBytes(); }
+                @Override public boolean isGuestMode() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).isGuestMode(); }
+                @Override public void setGuestMode(boolean enabled) { AkaiMemoryEngine.getInstance(RemoteServerService.this).setGuestMode(enabled); }
+                @Override public void resetProcedures() { AkaiMemoryEngine.getInstance(RemoteServerService.this).resetProcedures(); }
+                @Override public void clearPersonalPreferencesOnly() { AkaiMemoryEngine.getInstance(RemoteServerService.this).clearPersonalPreferencesOnly(); }
+            },
+            new RestApiRouter.PinHandler() {
+                @Override public void showPin(String pin, int remaining, String serverUrl) { PinOverlayDialog.show(RemoteServerService.this, pin, remaining, serverUrl); }
+                @Override public void dismissPin() { PinOverlayDialog.dismiss(); }
+            },
+            getLocalIpAddress(),
+            HTTP_PORT
+        );
         threadPool = Executors.newFixedThreadPool(12);
 
         createNotificationChannel();
@@ -396,6 +422,9 @@ public class RemoteServerService extends Service {
     }
 
     private void routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os) throws Exception {
+        if (restApiRouter != null && restApiRouter.routeRequest(method, path, headers, body, clientIp, os)) {
+            return;
+        }
         // Subnet Verification (rifiuta IP esterni WAN)
         if (!securityManager.isPrivateLanIp(clientIp)) {
             JSONObject err = new JSONObject().put("error", "Access denied: non-private LAN IP");
@@ -753,18 +782,19 @@ public class RemoteServerService extends Service {
 
             AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(this);
 
+            boolean isGuest = mem.isGuestMode();
             JSONObject out = new JSONObject();
             out.put("procedures", mem.getAllProcedures());
-            out.put("preferences", mem.getAllPreferences());
+            out.put("preferences", isGuest ? new JSONObject() : mem.getAllPreferences());
             out.put("stats", mem.getAllStats());
-            org.json.JSONArray recents = mem.getRecentConversations(20);
+            org.json.JSONArray recents = isGuest ? new org.json.JSONArray() : mem.getRecentConversations(20);
             out.put("conversations", recents);
             out.put("recent_conversations", recents);
             long dbBytes = mem.getDatabaseSizeBytes();
             out.put("db_size_bytes", dbBytes);
             out.put("db_size_kb", dbBytes / 1024.0);
             out.put("db_limit_bytes", it.akai.customremote.ai.AkaiMemoryEngine.MAX_STORAGE_BYTES);
-            out.put("guest_mode", mem.isGuestMode());
+            out.put("guest_mode", isGuest);
 
             sendJsonResponse(os, 200, out);
             return;

@@ -2,7 +2,7 @@ name: AKAI JARVIS CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, "fix/*" ]
   pull_request:
     branches: [ main ]
 
@@ -36,7 +36,6 @@ jobs:
       - name: 2. Secrets Leak Detection
         run: |
           echo "=== Scanning for leaked private keys or hardcoded API credentials ==="
-          # Check for forbidden private key files
           FORBIDDEN_FILES=$(find . -type f \( -name "*.p12" -o -name "*.jks" -o -name "*.keystore" \) -not -path "*/.*")
           if [ -n "$FORBIDDEN_FILES" ]; then
             echo "ERROR: Forbidden private keystores detected in repository:"
@@ -44,7 +43,6 @@ jobs:
             exit 1
           fi
 
-          # Check for real api key patterns
           if grep -rn "sk-[a-zA-Z0-9]\{20,\}" --exclude-dir=".git" .; then
             echo "ERROR: Potential real API key detected in source tree!"
             exit 1
@@ -57,9 +55,14 @@ jobs:
           mkdir -p test_bin
           javac -encoding UTF-8 -d test_bin \
             akai-remote-tests/host_mock/android/content/*.java \
+            akai-remote-tests/host_mock/android/graphics/*.java \
             akai-remote-tests/host_mock/android/util/*.java \
+            akai-remote-tests/host_mock/org/json/*.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/qr/*.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/SecurityManager.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/UInputDriver.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/CommandResult.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/RestApiRouter.java \
             akai-remote-tests/UnitTests.java
 
           java -cp test_bin it.akai.customremote.UnitTests

@@ -14,9 +14,11 @@ $mockSources = Get-ChildItem -Recurse -Path (Join-Path $workspace "akai-remote-t
 $qrSources = Get-ChildItem -Path (Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\qr") -Filter "*.java" | Where-Object { $_.Name -ne "QrBitmapUtil.java" } | Select-Object -ExpandProperty FullName
 $securityMgr = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\SecurityManager.java"
 $uinputSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\UInputDriver.java"
+$commandResultSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\CommandResult.java"
+$routerSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\RestApiRouter.java"
 $unitTestSrc = Join-Path $workspace "akai-remote-tests\UnitTests.java"
 
-$allSources = @() + $mockSources + $qrSources + @($securityMgr, $uinputSrc, $unitTestSrc)
+$allSources = @() + $mockSources + $qrSources + @($securityMgr, $uinputSrc, $commandResultSrc, $routerSrc, $unitTestSrc)
 
 Write-Host "Compilazione test unitari per SecurityManager e QR Code..."
 & $javac -encoding UTF-8 -d $testBuildDir $allSources

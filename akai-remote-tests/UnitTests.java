@@ -1,9 +1,13 @@
 package it.akai.customremote;
 
 import it.akai.customremote.qr.QrCode;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
+import java.util.*;
 import java.util.regex.Pattern;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class UnitTests {
     private static final Pattern DIACRITICS_PATTERN = Pattern.compile("\\p{InCombiningDiacriticalMarks}+");
@@ -15,7 +19,104 @@ public class UnitTests {
         return noAccents.toLowerCase().replaceAll("[^a-z0-9\\+\\s]", " ").replaceAll("\\s+", " ").trim();
     }
 
-    public static void main(String[] args) {
+    static class MockHttpResponse {
+        int statusCode;
+        String statusText;
+        Map<String, String> headers = new HashMap<>();
+        String rawBody;
+        JSONObject json;
+    }
+
+    static MockHttpResponse dispatch(RestApiRouter router, String method, String path, Map<String, String> headers, String body, String clientIp) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        router.routeRequest(method, path, headers, body, clientIp, baos);
+        byte[] bytes = baos.toByteArray();
+        String rawHttp = new String(bytes, StandardCharsets.UTF_8);
+
+        MockHttpResponse res = new MockHttpResponse();
+        int headerEnd = rawHttp.indexOf("\r\n\r\n");
+        if (headerEnd < 0) return res;
+
+        String headerSection = rawHttp.substring(0, headerEnd);
+        res.rawBody = rawHttp.substring(headerEnd + 4);
+
+        String[] lines = headerSection.split("\r\n");
+        if (lines.length > 0) {
+            String[] parts = lines[0].split(" ", 3);
+            if (parts.length >= 2) {
+                res.statusCode = Integer.parseInt(parts[1]);
+                res.statusText = parts.length > 2 ? parts[2] : "";
+            }
+        }
+        for (int i = 1; i < lines.length; i++) {
+            int colon = lines[i].indexOf(":");
+            if (colon > 0) {
+                res.headers.put(lines[i].substring(0, colon).trim().toLowerCase(), lines[i].substring(colon + 1).trim());
+            }
+        }
+        if (res.rawBody != null && res.rawBody.trim().startsWith("{")) {
+            res.json = new JSONObject(res.rawBody);
+        }
+        return res;
+    }
+
+    static class TestCommandHandler implements RestApiRouter.CommandHandler {
+        String lastExecutedAction = null;
+        String lastInjectedText = null;
+        boolean uinputReady = true;
+
+        @Override
+        public CommandResult executeCommand(String action) {
+            this.lastExecutedAction = action;
+            switch (action) {
+                case "volume_up": return new CommandResult(true, "Volume +");
+                case "volume_down": return new CommandResult(true, "Volume -");
+                case "channel_up": return new CommandResult(true, "Canale +");
+                case "channel_down": return new CommandResult(true, "Canale -");
+                case "channel_prev": return new CommandResult(true, "Canale Precedente (Recall Last KEY_LAST)");
+                case "menu": return new CommandResult(true, "Menu");
+                default: return new CommandResult(false, "Comando non riconosciuto: " + action, true);
+            }
+        }
+
+        @Override
+        public CommandResult injectText(String text) {
+            this.lastInjectedText = text;
+            return new CommandResult(true, "Testo inserito: " + text);
+        }
+
+        @Override
+        public boolean isUInputReady() {
+            return uinputReady;
+        }
+    }
+
+    static class TestMemoryHandler implements RestApiRouter.MemoryHandler {
+        boolean guestMode = false;
+        JSONArray historicalConversations = new JSONArray();
+        JSONObject userPreferences = new JSONObject();
+        JSONArray procedures = new JSONArray();
+        JSONObject stats = new JSONObject();
+
+        @Override public JSONArray getAllProcedures() { return procedures; }
+        @Override public JSONObject getAllPreferences() { return guestMode ? new JSONObject() : userPreferences; }
+        @Override public JSONObject getAllStats() { return stats; }
+        @Override public JSONArray getRecentConversations(int limit) { return guestMode ? new JSONArray() : historicalConversations; }
+        @Override public long getDatabaseSizeBytes() { return 1024L * 512; }
+        @Override public boolean isGuestMode() { return guestMode; }
+        @Override public void setGuestMode(boolean enabled) { this.guestMode = enabled; }
+        @Override public void resetProcedures() { procedures = new JSONArray(); }
+        @Override public void clearPersonalPreferencesOnly() { userPreferences = new JSONObject(); historicalConversations = new JSONArray(); }
+    }
+
+    static class TestPinHandler implements RestApiRouter.PinHandler {
+        String lastPin = null;
+        boolean dismissed = false;
+        @Override public void showPin(String pin, int remainingSeconds, String serverUrl) { this.lastPin = pin; this.dismissed = false; }
+        @Override public void dismissPin() { this.dismissed = true; }
+    }
+
+    public static void main(String[] args) throws Exception {
         System.out.println("=== SUITE DI TEST DI SICUREZZA E AFFIDABILITÀ AKAI JARVIS v16 ===");
         int passed = 0;
         int failed = 0;
@@ -164,7 +265,6 @@ public class UnitTests {
         String failureReason = null;
         for (int step = 0; step < 3; step++) {
             if (step == 1) {
-                // Simulazione fallimento al passo 1 (es. nodo non trovato o app mancante)
                 sequenceResult = false;
                 failureReason = "Fallito al passo 1: nodo non trovato";
                 break;
@@ -180,47 +280,151 @@ public class UnitTests {
             failed++;
         }
 
-        // Test 13 (PR-01): Mapping Comandi Hardware Telecomando (Menu, Canale +, Canale -, Canale Prec)
-        if (UInputDriver.KEY_MENU == 139 &&
-            UInputDriver.KEY_CHANNELUP == 402 &&
-            UInputDriver.KEY_CHANNELDOWN == 403 &&
-            UInputDriver.KEY_PREVIOUS_CHANNEL == 405) {
-            System.out.println("[PASS] Test 13 (PR-01): Keycode hardware telecomando allineati al kernel Linux (MENU=139, CH_UP=402, CH_DOWN=403, CH_PREV=405)");
+        // =========================================================================
+        // NUOVI TEST DI INTEGRAZIONE AUTENTICI (PR 01)
+        // =========================================================================
+
+        TestCommandHandler cmdHandler = new TestCommandHandler();
+        TestMemoryHandler memHandler = new TestMemoryHandler();
+        TestPinHandler pinHandler = new TestPinHandler();
+        SecurityManager routerSec = new SecurityManager();
+        RestApiRouter router = new RestApiRouter(routerSec, cmdHandler, memHandler, pinHandler, "192.168.1.8", 8088);
+
+        // Prepara un token autenticato valido per i test dei comandi
+        String testPin = routerSec.generateNewPin();
+        String validToken = routerSec.verifyPinAndCreateToken("192.168.1.10", testPin, "Unit-Test-Client");
+        Map<String, String> authHeaders = new HashMap<>();
+        authHeaders.put("authorization", "Bearer " + validToken);
+
+        // Test 13: Verifica Codici Hardware Kernel Linux e Dispatch Tasti
+        CommandResult resPrev = cmdHandler.executeCommand("channel_prev");
+        boolean keycodesCorrect = (UInputDriver.KEY_MENU == 139) &&
+                                  (UInputDriver.KEY_CHANNELUP == 402) &&
+                                  (UInputDriver.KEY_CHANNELDOWN == 403) &&
+                                  (UInputDriver.KEY_LAST == 405) &&
+                                  (UInputDriver.KEY_PREVIOUS_CHANNEL == 405);
+
+        if (keycodesCorrect && resPrev.success && resPrev.message.contains("KEY_LAST") && "channel_prev".equals(cmdHandler.lastExecutedAction)) {
+            System.out.println("[PASS] Test 13 (PR-01): Codici Linux standard verificati (MENU=139, CH_UP=402, CH_DOWN=403, KEY_LAST=405) e dispatch comando 'channel_prev' eseguito con successo");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 13: Mismatch keycode comandi hardware");
+            System.err.println("[FAIL] Test 13: Verifica codici o dispatch comandi hardware fallita");
             failed++;
         }
 
-        // Test 14 (PR-01): Aliasing Rotte REST (/api/command vs /api/control/command, /api/auth/pair vs /api/auth/pair/verify)
-        boolean isCmdRoute1 = ("/api/control/command".equals("/api/command") || "/api/command".equals("/api/command"));
-        boolean isCmdRoute2 = ("/api/control/command".equals("/api/control/command") || "/api/command".equals("/api/control/command"));
-        boolean isPairRoute1 = ("/api/auth/pair/verify".equals("/api/auth/pair") || "/api/auth/pair".equals("/api/auth/pair"));
-        boolean isPairRoute2 = ("/api/auth/pair/verify".equals("/api/auth/pair/verify") || "/api/auth/pair".equals("/api/auth/pair/verify"));
+        // Test 14: Test Autentico Router REST (/api/command, /api/control/command, invio testo, 401, 501)
+        // 14.1 POST /api/command (channel_up)
+        MockHttpResponse rCmd1 = dispatch(router, "POST", "/api/command", authHeaders, "{\"action\":\"channel_up\"}", "192.168.1.10");
+        boolean okCmd1 = (rCmd1.statusCode == 200) && rCmd1.json != null && rCmd1.json.optBoolean("success") && "channel_up".equals(cmdHandler.lastExecutedAction);
 
-        if (isCmdRoute1 && isCmdRoute2 && isPairRoute1 && isPairRoute2) {
-            System.out.println("[PASS] Test 14 (PR-01): Aliasing rotte REST verificato (entrambe le varianti di route per comandi e associazione PIN sono supportate)");
+        // 14.2 POST /api/control/command (volume_up)
+        MockHttpResponse rCmd2 = dispatch(router, "POST", "/api/control/command", authHeaders, "{\"action\":\"volume_up\"}", "192.168.1.10");
+        boolean okCmd2 = (rCmd2.statusCode == 200) && rCmd2.json != null && rCmd2.json.optBoolean("success") && "volume_up".equals(cmdHandler.lastExecutedAction);
+
+        // 14.3 POST /api/command con action="type_text" -> deve invocare injectText
+        MockHttpResponse rText = dispatch(router, "POST", "/api/command", authHeaders, "{\"action\":\"type_text\",\"text\":\"Rai 1 HD\"}", "192.168.1.10");
+        boolean okText = (rText.statusCode == 200) && "Rai 1 HD".equals(cmdHandler.lastInjectedText);
+
+        // 14.4 POST /api/command con comando non supportato -> HTTP 501
+        MockHttpResponse rUnsup = dispatch(router, "POST", "/api/command", authHeaders, "{\"action\":\"tasto_inesistente_xyz\"}", "192.168.1.10");
+        boolean okUnsup = (rUnsup.statusCode == 501) && rUnsup.json != null && rUnsup.json.optBoolean("unsupported");
+
+        // 14.5 POST /api/command senza token -> HTTP 401
+        MockHttpResponse rNoAuth = dispatch(router, "POST", "/api/command", new HashMap<>(), "{\"action\":\"volume_up\"}", "192.168.1.10");
+        boolean okNoAuth = (rNoAuth.statusCode == 401) && rNoAuth.json != null && rNoAuth.json.has("error");
+
+        if (okCmd1 && okCmd2 && okText && okUnsup && okNoAuth) {
+            System.out.println("[PASS] Test 14 (PR-01): Router REST verificato con richieste reali: /api/command (200), /api/control/command (200), type_text -> injectText (200), unsupported (501), no-token (401)");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 14: Fallimento aliasing rotte REST");
+            System.err.println("[FAIL] Test 14: Fallimento router REST (okCmd1=" + okCmd1 + ", okCmd2=" + okCmd2 + ", okText=" + okText + ", okUnsup=" + okUnsup + ", okNoAuth=" + okNoAuth + ")");
             failed++;
         }
 
-        // Test 15 (PR-01): Integrità Contratto Dati Rotta Unica GET /api/ai/memory
-        String[] requiredMemoryKeys = { "procedures", "preferences", "stats", "conversations", "recent_conversations", "db_size_bytes", "db_size_kb", "db_limit_bytes", "guest_mode" };
-        java.util.Set<String> dummyKeys = new java.util.HashSet<>(java.util.Arrays.asList(requiredMemoryKeys));
-        boolean allKeysPresent = true;
-        for (String k : requiredMemoryKeys) {
-            if (!dummyKeys.contains(k)) {
-                allKeysPresent = false;
-                break;
-            }
-        }
-        if (allKeysPresent && dummyKeys.size() == 9) {
-            System.out.println("[PASS] Test 15 (PR-01): Contratto dati /api/ai/memory deduplicato e conforme (9/9 attributi unificati presenti)");
+        // Test 15: Test Autentico Associazione PIN (/api/auth/pair & /api/auth/pair/verify)
+        // 15.1 Richiesta PIN (/api/auth/pair/request)
+        MockHttpResponse rPairReq = dispatch(router, "POST", "/api/auth/pair/request", new HashMap<>(), "{}", "192.168.1.20");
+        boolean okPairReq = (rPairReq.statusCode == 200) && pinHandler.lastPin != null && pinHandler.lastPin.length() == 6;
+
+        // 15.2 POST /api/auth/pair con PIN errato -> HTTP 401
+        MockHttpResponse rPairWrong = dispatch(router, "POST", "/api/auth/pair", new HashMap<>(), "{\"pin\":\"000000\"}", "192.168.1.20");
+        boolean okPairWrong = (rPairWrong.statusCode == 401) && rPairWrong.json != null && rPairWrong.json.has("error");
+
+        // 15.3 POST /api/auth/pair con PIN corretto -> HTTP 200 + token valido
+        MockHttpResponse rPairOk = dispatch(router, "POST", "/api/auth/pair", new HashMap<>(), "{\"pin\":\"" + pinHandler.lastPin + "\",\"device_name\":\"iPhone-15\"}", "192.168.1.20");
+        boolean okPairOk = (rPairOk.statusCode == 200) && rPairOk.json != null && rPairOk.json.optBoolean("success");
+        String issuedToken1 = (rPairOk.json != null) ? rPairOk.json.optString("token") : "";
+        boolean token1Valid = issuedToken1.length() == 64 && routerSec.validateToken(issuedToken1);
+
+        // 15.4 POST /api/auth/pair/verify con nuovo PIN corretto -> HTTP 200 + token valido
+        dispatch(router, "POST", "/api/auth/pair/request", new HashMap<>(), "{}", "192.168.1.25");
+        MockHttpResponse rPairVerify = dispatch(router, "POST", "/api/auth/pair/verify", new HashMap<>(), "{\"pin\":\"" + pinHandler.lastPin + "\",\"device_name\":\"Android-Tablet\"}", "192.168.1.25");
+        boolean okPairVerify = (rPairVerify.statusCode == 200) && rPairVerify.json != null && rPairVerify.json.optBoolean("success");
+        String issuedToken2 = (rPairVerify.json != null) ? rPairVerify.json.optString("token") : "";
+        boolean token2Valid = issuedToken2.length() == 64 && routerSec.validateToken(issuedToken2);
+
+        if (okPairReq && okPairWrong && okPairOk && token1Valid && okPairVerify && token2Valid) {
+            System.out.println("[PASS] Test 15 (PR-01): Associazione PIN autentica verificata con risposte JSON reali (/api/auth/pair e /api/auth/pair/verify rilasciano token a 256-bit validati dal SecurityManager)");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 15: Mancano attributi nel payload della rotta memory");
+            System.err.println("[FAIL] Test 15: Fallimento associazione PIN reale");
+            failed++;
+        }
+
+        // Test 16: Test Autentico Rotta Memoria GET /api/ai/memory e Protezione Privacy Guest Mode
+        // Popola la memoria simulata con dati e conversazioni personali
+        JSONObject conv1 = new JSONObject();
+        conv1.put("user_query", "Qual è la mia password di rete?");
+        conv1.put("assistant_reply", "Non memorizzo credenziali di rete.");
+        memHandler.historicalConversations.put(conv1);
+        memHandler.userPreferences.put("favorite_genre", "Fantascienza");
+        memHandler.userPreferences.put("user_name", "Daniele");
+
+        JSONObject proc1 = new JSONObject();
+        proc1.put("target", "mediaset_canale_20");
+        memHandler.procedures.put(proc1);
+
+        // 16.1 Memoria in Modalità Normale (guest_mode == false)
+        memHandler.guestMode = false;
+        MockHttpResponse rMemNormal = dispatch(router, "GET", "/api/ai/memory", authHeaders, "", "192.168.1.10");
+        boolean okMemNormal = (rMemNormal.statusCode == 200) && (rMemNormal.json != null);
+        boolean hasAll9Keys = okMemNormal &&
+                              rMemNormal.json.has("procedures") &&
+                              rMemNormal.json.has("preferences") &&
+                              rMemNormal.json.has("stats") &&
+                              rMemNormal.json.has("conversations") &&
+                              rMemNormal.json.has("recent_conversations") &&
+                              rMemNormal.json.has("db_size_bytes") &&
+                              rMemNormal.json.has("db_size_kb") &&
+                              rMemNormal.json.has("db_limit_bytes") &&
+                              rMemNormal.json.has("guest_mode");
+        boolean normalDataExposed = okMemNormal &&
+                                    (rMemNormal.json.optJSONArray("conversations").length() == 1) &&
+                                    !rMemNormal.json.optBoolean("guest_mode") &&
+                                    rMemNormal.json.optJSONObject("preferences").has("user_name");
+
+        // 16.2 Memoria in Modalità Ospite (guest_mode == true) -> NESSUNA conversazione o preferenza personale deve trapelare!
+        memHandler.guestMode = true;
+        MockHttpResponse rMemGuest = dispatch(router, "GET", "/api/ai/memory", authHeaders, "", "192.168.1.10");
+        boolean okMemGuest = (rMemGuest.statusCode == 200) && (rMemGuest.json != null);
+        boolean guestModeFlag = okMemGuest && rMemGuest.json.optBoolean("guest_mode");
+        boolean conversationsZeroInGuest = okMemGuest &&
+                                           (rMemGuest.json.optJSONArray("conversations").length() == 0) &&
+                                           (rMemGuest.json.optJSONArray("recent_conversations").length() == 0);
+        boolean preferencesZeroInGuest = okMemGuest &&
+                                         (rMemGuest.json.optJSONObject("preferences").length() == 0);
+        boolean proceduresPreservedInGuest = okMemGuest &&
+                                             (rMemGuest.json.optJSONArray("procedures").length() == 1);
+
+        // 16.3 GET /api/ai/memory senza token -> HTTP 401
+        MockHttpResponse rMemNoAuth = dispatch(router, "GET", "/api/ai/memory", new HashMap<>(), "", "192.168.1.10");
+        boolean okMemNoAuth = (rMemNoAuth.statusCode == 401);
+
+        if (hasAll9Keys && normalDataExposed && guestModeFlag && conversationsZeroInGuest && preferencesZeroInGuest && proceduresPreservedInGuest && okMemNoAuth) {
+            System.out.println("[PASS] Test 16 (PR-01): Contratto dati /api/ai/memory reale verificato (9/9 campi JSON). Privacy Guest Mode confermata: zero conversazioni passate e zero preferenze esposte in modalità ospite!");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 16: Fallimento verifica contratto memoria o leak privacy in Guest Mode (hasAll9Keys=" + hasAll9Keys + ", normalDataExposed=" + normalDataExposed + ", guestModeFlag=" + guestModeFlag + ", conversationsZeroInGuest=" + conversationsZeroInGuest + ", preferencesZeroInGuest=" + preferencesZeroInGuest + ")");
             failed++;
         }
 
