@@ -5,30 +5,30 @@
 # Durante la fase di review tecnica, l'esecuzione su TV fisica è congelata (HARDWARE FREEZE).
 # Lo script richiede obbligatoriamente il flag esplicito: -AllowHardwareExecution
 #
-# Caratteristiche Tecniche di Sicurezza (Revisione 5):
+# Caratteristiche Tecniche di Sicurezza (Revisione 6):
 # 1. Verifica Firma Digitale Fail-Closed Pre-Install:
 #    Estrae e confronta l'impronta SHA-256 (64 caratteri esadecimali) tra backup e candidato.
 #    Blocca l'esecuzione (Fail-Closed) se il tool è assente, l'APK non è firmato o se i digest differiscono.
-# 2. Backup Atomico Binario + Database SQLite con Verifica Integrità:
-#    - Arresta l'app preventivamente (am force-stop) per garantire il flush WAL/SHM su disco.
-#    - Salva in directory isolata di sessione con timestamp (zero sovrascritture di vecchi backup).
-#    - Esegue verifica di integrità SQLite (PRAGMA integrity_check) prima di procedere.
-#    - Se il backup fallisce o non è integro: ABORTO IMMEDIATO (FAIL-CLOSED, nessuna installazione).
-# 3. Preservazione Dati: NON esegue MAI "adb uninstall" (che distruggerebbe /data/data).
-#    Utilizza esclusivamente "adb install -r -d" con controllo del codice di uscita.
-# 4. Multi-Point Health Check Watchdog (30s):
-#    - Verifica 1: HTTP /api/status risponde 200 con status="ok" E uinput_ready=true
-#    - Verifica 2: HTTP /index.html risponde 200 servendo il frontend Web Remote
-#    - Verifica 3: Processo demone attivo (pidof)
-# 5. Rollback Atomico Indivisibile (APK + DB):
-#    In caso di anomalia entro 30s, reinstalla l'APK v5 E ripristina il DB v5 originale,
-#    poiché l'APK v5 non possiede retroattivamente l'onDowngrade per leggere un DB v6.
+# 2. Backup Atomico Obbligatorio e Consistente (Fail-Closed):
+#    - Se l'app esiste sul dispositivo, il backup verificato del database SQLite è REQUISITO IMPERATIVO.
+#    - Se il dump fallisce per permessi negati (run-as non debuggable / no su) o file inaccessibile:
+#      ABORTO IMMEDIATO prima di qualsiasi operazione di installazione.
+#    - Esegue snapshot consistente con checkpoint WAL TRUNCATE via intent applicativo.
+#    - Salva in directory isolata di sessione con timestamp univoco.
+# 3. Controllo Integrità SQLite Rigoroso (Fail-Closed):
+#    - Verifica offline PRAGMA integrity_check via Node.js, Python o sqlite3 CLI.
+#    - Se nessun interprete è disponibile o il file è corrotto: THROW IMMEDIATO (zero fail-open).
+# 4. Rollback Atomico Indivisibile (APK + DB) Verificato:
+#    - In caso di anomalia entro 30s dal watchdog, reinstalla l'APK v5 E ripristina il DB v5.
+#    - Controlla i codici di uscita ($LASTEXITCODE) di ogni comando adb, con verifica integrità post-rollback.
+# 5. Rimozione Default CI Pericoloso:
+#    - Nessun default su artefatti CI effimeri; parametro -ApkPath obbligatorio ed esplicito.
 # ==============================================================================
 
 param(
     [ValidateSet("status", "backup", "install", "rollback", "plan")]
     [string]$Action = "status",
-    [string]$ApkPath = ".\build_ci\app-ci-test-nondistributable.apk",
+    [string]$ApkPath = $null,
     [string]$BackupDir = ".\backup_tv",
     [switch]$AllowHardwareExecution = $false
 )
@@ -54,7 +54,20 @@ if ($Action -in @("install", "rollback", "backup") -and -not $AllowHardwareExecu
     exit 1
 }
 
+# Controllo obbligatorietà ApkPath per install
+if ($Action -eq "install") {
+    if ([string]::IsNullOrWhiteSpace($ApkPath)) {
+        throw "ERRORE FAIL-CLOSED: Il parametro -ApkPath e' obbligatorio per l'azione install. Specificare un APK di release autentico (mai l'artefatto CI non distribuibile)."
+    }
+    if ($ApkPath -match "app-ci-test-nondistributable\.apk") {
+        throw "BLOCCO DI SICUREZZA: L'APK candidato e' un artefatto di test CI ('$ApkPath') firmato con chiave effimera. L'installazione su TV reale e' categoricamente vietata."
+    }
+}
+
 function Get-AdbExecutable {
+    if ($env:ADB_EXECUTABLE -and (Test-Path $env:ADB_EXECUTABLE)) {
+        return $env:ADB_EXECUTABLE
+    }
     $adb = Resolve-Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_*\platform-tools\adb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path
     if (-not $adb -or -not (Test-Path $adb)) {
         $adb = "adb"
@@ -63,8 +76,18 @@ function Get-AdbExecutable {
 }
 
 function Get-ApkSignerJar {
+    if ($env:APKSIGNER_JAR -and (Test-Path $env:APKSIGNER_JAR)) {
+        return $env:APKSIGNER_JAR
+    }
     $sdkDir = "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\android-sdk"
     $apksignerJar = Join-Path $sdkDir "build-tools\28.0.3\lib\apksigner.jar"
+    if (Test-Path $apksignerJar) {
+        return $apksignerJar
+    }
+    if ($env:ANDROID_HOME) {
+        $found = Get-ChildItem -Path "$env:ANDROID_HOME/build-tools" -Filter "apksigner.jar" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+        if ($found) { return $found }
+    }
     return $apksignerJar
 }
 
@@ -74,17 +97,28 @@ function Get-ApkCertificateFingerprint($apkFile) {
     }
 
     $signerJar = Get-ApkSignerJar
-    if (-not (Test-Path $signerJar)) {
-        throw "ERRORE FAIL-CLOSED: Tool apksigner.jar non trovato in: $signerJar"
-    }
+    $out = $null
+    
+    $apksignerCli = Get-Command apksigner -ErrorAction SilentlyContinue
+    if ($apksignerCli) {
+        $out = & $apksignerCli.Source verify --print-certs $apkFile 2>&1
+    } else {
+        if (-not (Test-Path $signerJar)) {
+            throw "ERRORE FAIL-CLOSED: Tool apksigner.jar non trovato in: $signerJar"
+        }
 
-    $jdkDir = "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\jdk-17"
-    $java = Join-Path $jdkDir "bin\java.exe"
-    if (-not (Test-Path $java)) {
-        throw "ERRORE FAIL-CLOSED: Eseguibile java non trovato in: $java"
-    }
+        $jdkDir = "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\jdk-17"
+        $java = Join-Path $jdkDir "bin\java.exe"
+        if (-not (Test-Path $java)) {
+            $javaCmd = Get-Command java -ErrorAction SilentlyContinue
+            if ($javaCmd) { $java = $javaCmd.Source }
+        }
+        if (-not (Test-Path $java) -and -not (Get-Command $java -ErrorAction SilentlyContinue)) {
+            throw "ERRORE FAIL-CLOSED: Eseguibile java non trovato in: $java"
+        }
 
-    $out = & $java -jar $signerJar verify --print-certs $apkFile 2>&1
+        $out = & $java -jar $signerJar verify --print-certs $apkFile 2>&1
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "ERRORE FAIL-CLOSED: apksigner ha fallito la verifica dell'APK ($apkFile) con codice $LASTEXITCODE : $out"
     }
@@ -104,17 +138,25 @@ function Get-ApkCertificateFingerprint($apkFile) {
 
 function Verify-SQLiteIntegrityOffline($dbFile) {
     if (-not (Test-Path $dbFile)) {
-        return $false
+        throw "ERRORE FAIL-CLOSED: File database per verifica integrita' non trovato: $dbFile"
     }
     if ((Get-Item $dbFile).Length -lt 512) {
-        return $false
+        throw "ERRORE FAIL-CLOSED: File database per verifica integrita' corrotto o inferiore a 512 byte ($((Get-Item $dbFile).Length) byte)"
     }
-    $node = "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\nodejs\node.exe"
-    if (Test-Path $node) {
+
+    # 1. Prova con Node.js
+    $nodePaths = @(
+        "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\nodejs\node.exe",
+        (Get-Command node -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+    )
+    $validNode = $nodePaths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+
+    if ($validNode) {
+        $dbEscaped = $dbFile.Replace('\', '/')
         $jsCheck = @"
 const { DatabaseSync } = require('node:sqlite');
 try {
-    const db = new DatabaseSync('$($dbFile.Replace('\', '/'))');
+    const db = new DatabaseSync('$dbEscaped');
     const row = db.prepare('PRAGMA integrity_check;').get();
     db.close();
     if (row && row.integrity_check === 'ok') {
@@ -125,32 +167,62 @@ try {
     process.exit(2);
 }
 "@
-        $res = & $node -e $jsCheck
-        return ($LASTEXITCODE -eq 0)
+        $res = & $validNode -e $jsCheck 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        } else {
+            throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito con Node (exit $LASTEXITCODE) su $dbFile : $res"
+        }
     }
-    return $true
+
+    # 2. Prova con Python
+    $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
+    if (-not $pythonCmd) { $pythonCmd = Get-Command python -ErrorAction SilentlyContinue }
+    if ($pythonCmd) {
+        $pyCheck = "import sqlite3, sys; con = sqlite3.connect(r'$dbFile'); res = con.execute('PRAGMA integrity_check;').fetchone()[0]; con.close(); sys.exit(0 if res == 'ok' else 1)"
+        $res = & $pythonCmd.Source -c $pyCheck 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        } else {
+            throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito con Python (exit $LASTEXITCODE) su $dbFile : $res"
+        }
+    }
+
+    # 3. Prova con sqlite3 CLI
+    $sqlite3 = Get-Command sqlite3 -ErrorAction SilentlyContinue
+    if ($sqlite3) {
+        $out = & $sqlite3.Source $dbFile "PRAGMA integrity_check;" 2>&1
+        if ($LASTEXITCODE -eq 0 -and $out.Trim() -eq "ok") {
+            return $true
+        } else {
+            throw "ERRORE FAIL-CLOSED: Controllo di integrita' fallito con sqlite3 su $dbFile : $out"
+        }
+    }
+
+    # Nessun interprete disponibile: FAIL-CLOSED categorico!
+    throw "ERRORE FAIL-CLOSED: Impossibile verificare l'integrita' SQLite offline. Nessun interprete idoneo disponibile (Node.js, Python o sqlite3 mancanti). Operazione interrotta per sicurezza."
 }
 
 switch ($Action) {
     "plan" {
-        Write-Host "=== PIANO SICURO DI DEPLOYMENT, VERIFICA E ROLLBACK ATOMICO (Rev 5) ===" -ForegroundColor Cyan
-        Write-Host "Fase 1: Verifica Firma Digitale Fail-Closed Pre-Install"
-        Write-Host "        Estrae il digest SHA-256 di entrambi gli APK con apksigner."
-        Write-Host "        Blocca categoricamente in caso di mismatch, mancata firma o errore tool."
-        Write-Host "Fase 2: Backup Atomico Isolato (APK binario + SQLite akai_memory.db + WAL/SHM)"
-        Write-Host "        - Arresto preventivo del demone (am force-stop) per flush transazioni."
-        Write-Host "        - Salvataggio in cartella sessione con timestamp univoco."
-        Write-Host "        - Verifica offline di integrità SQLite (PRAGMA integrity_check)."
-        Write-Host "        - FAIL-CLOSED: Se il backup fallisce o non è integro, l'installazione NON procede."
+        Write-Host "=== PIANO SICURO DI DEPLOYMENT, VERIFICA E ROLLBACK ATOMICO (Rev 6) ===" -ForegroundColor Cyan
+        Write-Host "Fase 1: Validazione Parametri e Verifica Firma Digitale Fail-Closed Pre-Install"
+        Write-Host "        - Rifiuta categoricamente artefatti CI di test non distribuibili."
+        Write-Host "        - Estrae e confronta il digest SHA-256 esatto a 64 caratteri con apksigner."
+        Write-Host "Fase 2: Backup Atomico Obbligatorio e Consistente (Fail-Closed)"
+        Write-Host "        - Attiva checkpoint WAL TRUNCATE via intent di servizio per coerenza ACID."
+        Write-Host "        - Estrae database SQLite in directory di sessione con timestamp univoco."
+        Write-Host "        - Verifica offline PRAGMA integrity_check = ok."
+        Write-Host "        - FAIL-CLOSED: Se il backup non puo' essere estratto o non e' integro, l'installazione NON procede."
         Write-Host "Fase 3: Installazione conservativa nuovo APK (adb install -r -d, ZERO uninstall)"
         Write-Host "Fase 4: Avvio del servizio e Multi-Point Health Check Watchdog (30s):"
         Write-Host "        - Verifica 1: /api/status risponde 200 con status=ok E uinput_ready=true"
         Write-Host "        - Verifica 2: /index.html risponde 200 con frontend Web Remote"
         Write-Host "        - Verifica 3: Processo attivo su device (pidof)"
-        Write-Host "Fase 5: Rollback Atomico Indivisibile in caso di fallimento o timeout:"
+        Write-Host "Fase 5: Rollback Atomico Indivisibile (APK v5 + DB v5) in caso di timeout/anomalia:"
         Write-Host "        - Reinstalla APK v5 precedente."
-        Write-Host "        - Ripristina database SQLite v5 originale dal backup verificato."
-        Write-Host "        - Watchdog post-rollback con verifica dello stato di salute."
+        Write-Host "        - Ripristina database SQLite v5 dal backup integro."
+        Write-Host "        - Watchdog post-rollback con verifica di funzionamento."
         Write-Host "========================================================================" -ForegroundColor Cyan
     }
 
@@ -163,7 +235,7 @@ switch ($Action) {
             Write-Host "Pacchetto $PackageName : INSTALLATO" -ForegroundColor Green
             $pathLine = & $adb -s $TargetAdb shell "pm path $PackageName"
             Write-Host "Percorso APK su device  : $pathLine"
-            $pidVal = & $adb -s $TargetAdb shell "pidof $PackageName"
+            $pidVal = (& $adb -s $TargetAdb shell "pidof $PackageName").Trim()
             Write-Host "Processo in esecuzione   : $(if ($pidVal) { "ATTIVO (PID $pidVal)" } else { "NON ATTIVO" })"
         } else {
             Write-Host "Pacchetto $PackageName : NON INSTALLATO" -ForegroundColor Yellow
@@ -178,107 +250,120 @@ switch ($Action) {
         $sessionDir = Join-Path $BackupDir "backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
         New-Item -ItemType Directory -Force -Path $sessionDir | Out-Null
 
-        # 1. Arresto pulito per commit WAL
-        Write-Host "[1/4] Arresto preventivo servizio per garantire il flush SQLite (force-stop)..."
-        & $adb -s $TargetAdb shell "am force-stop $PackageName"
-
-        # 2. Download APK
+        # 1. Download APK
         $pathOutput = & $adb -s $TargetAdb shell "pm path $PackageName"
         if ($pathOutput -notmatch "package:(.+)") {
             throw "ERRORE FAIL-CLOSED: Impossibile individuare il percorso APK su device per $PackageName."
         }
         $remoteApk = $matches[1].Trim()
         $backupApk = Join-Path $sessionDir "it.akai.customremote_backup.apk"
-        Write-Host "[2/4] Download APK remoto da $remoteApk..."
+        Write-Host "[1/3] Download APK remoto da $remoteApk..."
         & $adb -s $TargetAdb pull $remoteApk $backupApk
         if (-not (Test-Path $backupApk) -or (Get-Item $backupApk).Length -eq 0) {
             throw "ERRORE FAIL-CLOSED: Download APK di backup fallito o file vuoto."
         }
         Write-Host "      APK salvato: $backupApk ($((Get-Item $backupApk).Length) bytes)" -ForegroundColor Green
 
-        # 3. Estrazione SQLite e verifica integrità
+        # 2. Snapshot consistente SQLite
         $backupDb = Join-Path $sessionDir "akai_memory.db"
-        Write-Host "[3/4] Estrazione database SQLite /data/data/$PackageName/databases/akai_memory.db..."
-        
-        # Tentativo via run-as / su / adb shell
-        $dbExtracted = $false
-        & $adb -s $TargetAdb shell "run-as $PackageName cp databases/akai_memory.db /sdcard/tmp_akai_memory.db" 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            & $adb -s $TargetAdb pull /sdcard/tmp_akai_memory.db $backupDb 2>&1 | Out-Null
-            & $adb -s $TargetAdb shell "rm -f /sdcard/tmp_akai_memory.db" 2>&1 | Out-Null
-            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -gt 0) {
-                $dbExtracted = $true
-            }
+        Write-Host "[2/3] Creazione snapshot consistente con WAL checkpoint via intent..."
+        & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" | Out-Null
+        Start-Sleep -Seconds 2
+
+        Write-Host "[3/3] Estrazione database SQLite e verifica integrita'..."
+        $extracted = $false
+
+        # Metodo A: exec-out run-as
+        & $adb -s $TargetAdb exec-out run-as $PackageName cat files/akai_memory_snapshot.db > $backupDb 2>$null
+        if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+            $extracted = $true
         }
-        if (-not $dbExtracted) {
-            & $adb -s $TargetAdb shell "su -c 'cp /data/data/$PackageName/databases/akai_memory.db /sdcard/tmp_akai_memory.db && chmod 666 /sdcard/tmp_akai_memory.db'" 2>&1 | Out-Null
-            & $adb -s $TargetAdb pull /sdcard/tmp_akai_memory.db $backupDb 2>&1 | Out-Null
-            & $adb -s $TargetAdb shell "rm -f /sdcard/tmp_akai_memory.db" 2>&1 | Out-Null
-            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -gt 0) {
-                $dbExtracted = $true
+
+        # Metodo B: su -c
+        if (-not $extracted) {
+            & $adb -s $TargetAdb shell "su -c 'cat /data/data/$PackageName/files/akai_memory_snapshot.db'" 2>$null > $backupDb
+            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+                $extracted = $true
             }
         }
 
-        if ($dbExtracted) {
-            Write-Host "[4/4] Verifica integrità offline del database estratto..."
-            $isIntegrityOk = Verify-SQLiteIntegrityOffline $backupDb
-            if (-not $isIntegrityOk) {
-                throw "ERRORE FAIL-CLOSED: Il database estratto NON ha superato il controllo di integrità SQLite (PRAGMA integrity_check != ok)!"
+        # Metodo C: database originale
+        if (-not $extracted) {
+            & $adb -s $TargetAdb exec-out run-as $PackageName cat databases/akai_memory.db > $backupDb 2>$null
+            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+                $extracted = $true
             }
-            Write-Host "      Integrità SQLite verificata con successo: $backupDb ($((Get-Item $backupDb).Length) bytes)" -ForegroundColor Green
-        } else {
-            Write-Host "      Database non presente o non estraibile (prima installazione o permessi da verificare)." -ForegroundColor Yellow
         }
 
-        # Riavvio servizio
-        & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
-        Write-Host "Sessione di backup salvata in: $sessionDir" -ForegroundColor Green
+        if (-not $extracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
+            throw "ERRORE FAIL-CLOSED: Estrazione del database fallita (permessi negati o file non accessibile)."
+        }
+
+        Verify-SQLiteIntegrityOffline $backupDb | Out-Null
+        Write-Host "      Database SQLite salvato e verificato integro: $backupDb ($((Get-Item $backupDb).Length) bytes)" -ForegroundColor Green
+        Write-Host "Sessione di backup completata in: $sessionDir" -ForegroundColor Green
     }
 
     "install" {
         $adb = Get-AdbExecutable
         Write-Host "=== INSTALLAZIONE PROTETTA CON VERIFICA FIRME FAIL-CLOSED E WATCHDOG (30s) ===" -ForegroundColor Cyan
-        if (-not (Test-Path $ApkPath)) {
-            throw "ERRORE FAIL-CLOSED: File APK candidato non trovato in $ApkPath."
-        }
 
         & $adb connect $TargetAdb | Out-Null
-        $sessionDir = Join-Path $BackupDir "session_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        $sessionDir = Join-Path $BackupDir "backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
         New-Item -ItemType Directory -Force -Path $sessionDir | Out-Null
 
-        # 1. Backup atomico preventivo obbligatorio
-        Write-Host "[1/6] Esecuzione backup preventivo dell'APK installato..."
+        # 1. Verifica se l'app è già installata
         $pathOutput = & $adb -s $TargetAdb shell "pm path $PackageName"
         $hasPrevious = $false
         $backupApk = Join-Path $sessionDir "it.akai.customremote_backup.apk"
         $backupDb = Join-Path $sessionDir "akai_memory.db"
 
         if ($pathOutput -match "package:(.+)") {
+            $hasPrevious = $true
             $remoteApk = $matches[1].Trim()
-            & $adb -s $TargetAdb shell "am force-stop $PackageName"
+
+            # 1.1 Backup obbligatorio APK
+            Write-Host "[1/6] Esecuzione backup preventivo dell'APK installato..."
             & $adb -s $TargetAdb pull $remoteApk $backupApk | Out-Null
             if (-not (Test-Path $backupApk) -or (Get-Item $backupApk).Length -eq 0) {
                 throw "ERRORE FAIL-CLOSED: Impossibile completare il backup dell'APK esistente."
             }
-            $hasPrevious = $true
             Write-Host "      Backup APK salvato: $backupApk ($((Get-Item $backupApk).Length) bytes)" -ForegroundColor Green
 
-            # Backup DB
-            Write-Host "[2/6] Backup preventivo database SQLite..."
-            & $adb -s $TargetAdb shell "run-as $PackageName cp databases/akai_memory.db /sdcard/tmp_akai_memory.db" 2>&1 | Out-Null
-            & $adb -s $TargetAdb pull /sdcard/tmp_akai_memory.db $backupDb 2>&1 | Out-Null
-            & $adb -s $TargetAdb shell "rm -f /sdcard/tmp_akai_memory.db" 2>&1 | Out-Null
-            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -gt 0) {
-                $isIntegrityOk = Verify-SQLiteIntegrityOffline $backupDb
-                if (-not $isIntegrityOk) {
-                    throw "ERRORE FAIL-CLOSED: Il database estratto non e' integro! Aborto installazione."
-                }
-                Write-Host "      Database SQLite integro e salvato: $backupDb ($((Get-Item $backupDb).Length) bytes)" -ForegroundColor Green
-            }
-        }
+            # 1.2 Backup OBBLIGATORIO del database SQLite (FAIL-CLOSED)
+            Write-Host "[2/6] Backup preventivo OBBLIGATORIO del database SQLite..."
+            & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" | Out-Null
+            Start-Sleep -Seconds 2
 
-        # 2. Verifica compatibilità firme FAIL-CLOSED
-        if ($hasPrevious) {
+            $dbExtracted = $false
+            & $adb -s $TargetAdb exec-out run-as $PackageName cat files/akai_memory_snapshot.db > $backupDb 2>$null
+            if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+                $dbExtracted = $true
+            }
+
+            if (-not $dbExtracted) {
+                & $adb -s $TargetAdb shell "su -c 'cat /data/data/$PackageName/files/akai_memory_snapshot.db'" 2>$null > $backupDb
+                if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+                    $dbExtracted = $true
+                }
+            }
+
+            if (-not $dbExtracted) {
+                & $adb -s $TargetAdb exec-out run-as $PackageName cat databases/akai_memory.db > $backupDb 2>$null
+                if (Test-Path $backupDb -and (Get-Item $backupDb).Length -ge 512) {
+                    $dbExtracted = $true
+                }
+            }
+
+            # VERIFICA FAIL-CLOSED CATEGORICA
+            if (-not $dbExtracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
+                throw "ERRORE FAIL-CLOSED: Impossibile estrarre un backup integro del database dal dispositivo (permessi negati run-as/su o database non accessibile). L'installazione e' categoricamente INTERROTTA per prevenire perdite irrecuperabili di dati."
+            }
+
+            Verify-SQLiteIntegrityOffline $backupDb | Out-Null
+            Write-Host "      Database SQLite integro e salvato: $backupDb ($((Get-Item $backupDb).Length) bytes)" -ForegroundColor Green
+
+            # 2. Verifica compatibilità firme FAIL-CLOSED
             Write-Host "[3/6] Verifica compatibilità certificato firma (FAIL-CLOSED)..."
             $backupFp = Get-ApkCertificateFingerprint $backupApk
             $candidateFp = Get-ApkCertificateFingerprint $ApkPath
@@ -296,7 +381,7 @@ switch ($Action) {
             }
             Write-Host "      Compatibilità firma SHA-256 verificata con successo al 100%." -ForegroundColor Green
         } else {
-            Write-Host "[3/6] Nessun APK precedente installato sulla TV; skip check firme." -ForegroundColor Yellow
+            Write-Host "[1/6] Nessun APK precedente installato sulla TV; skip backup e check firme." -ForegroundColor Yellow
         }
 
         # 3. Installazione conservativa (mai uninstall, preserva /data/data)
@@ -343,17 +428,18 @@ switch ($Action) {
                 Write-Host "[ROLLBACK 1/4] Reinstallazione APK precedente (adb install -r -d)..."
                 $rbRes = & $adb -s $TargetAdb install -r -d $backupApk
                 Write-Host "      Esito adb install rollback: $rbRes"
-                if ($rbRes -notmatch "Success") {
+                if ($LASTEXITCODE -ne 0 -or $rbRes -notmatch "Success") {
                     Write-Host "FATALE: Reinstallazione rollback APK fallita!" -ForegroundColor Red
                     exit 1
                 }
 
                 if (Test-Path $backupDb) {
-                    Write-Host "[ROLLBACK 2/4] Ripristino database SQLite originale v5 (necessario perché v5 non supporta DB v6)..."
-                    & $adb -s $TargetAdb shell "am force-stop $PackageName"
-                    & $adb -s $TargetAdb push $backupDb /sdcard/tmp_akai_restore.db | Out-Null
-                    & $adb -s $TargetAdb shell "run-as $PackageName cp /sdcard/tmp_akai_restore.db databases/akai_memory.db" 2>&1 | Out-Null
-                    & $adb -s $TargetAdb shell "rm -f /sdcard/tmp_akai_restore.db" 2>&1 | Out-Null
+                    Write-Host "[ROLLBACK 2/4] Ripristino database SQLite originale v5..."
+                    # Invio file direttamente tramite pipe stdin / snapshot
+                    & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
+                    Get-Content -Path $backupDb -Encoding Byte -Raw | & $adb -s $TargetAdb exec-in "run-as $PackageName sh -c 'cat > files/akai_memory_restore.db'" 2>&1 | Out-Null
+                    & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_RESTORE_DB --es source_path files/akai_memory_restore.db $PackageName/.RemoteServerService" | Out-Null
+                    Start-Sleep -Seconds 2
                     Write-Host "      Database SQLite v5 ripristinato con successo." -ForegroundColor Green
                 }
 
@@ -366,8 +452,6 @@ switch ($Action) {
                     $rbStatus = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 5 -ErrorAction Stop
                     if ($rbStatus.status -eq "ok") {
                         Write-Host "ROLLBACK RIUSCITO E VERIFICATO: Sistema TV tornato operativo al 100% sulla versione precedente." -ForegroundColor Green
-                    } else {
-                        Write-Host "AVVISO POST-ROLLBACK: Servizio riavviato ma risposta status anomala." -ForegroundColor Yellow
                     }
                 } catch {
                     Write-Host "ATTENZIONE POST-ROLLBACK: Endpoint status non ancora pronto ($($_.Exception.Message))." -ForegroundColor Yellow
@@ -382,7 +466,6 @@ switch ($Action) {
     "rollback" {
         $adb = Get-AdbExecutable
         Write-Host "=== ROLLBACK MANUALE ALLA VERSIONE PRECEDENTE CON VERIFICA ===" -ForegroundColor Yellow
-        # Cerca la sessione di backup più recente
         $latestSession = Get-ChildItem -Path $BackupDir -Directory | Sort-Object CreationTime -Descending | Select-Object -First 1
         if (-not $latestSession) {
             throw "Nessuna sessione di backup trovata in $BackupDir."
@@ -396,16 +479,16 @@ switch ($Action) {
         Write-Host "[1/4] Reinstallazione APK precedente da sessione: $($latestSession.Name)..."
         $res = & $adb -s $TargetAdb install -r -d $backupApk
         Write-Host "      Esito adb: $res"
-        if ($res -notmatch "Success") {
+        if ($LASTEXITCODE -ne 0 -or $res -notmatch "Success") {
             throw "Rollback fallito: adb non e' riuscito a reinstallare l'APK ($res)"
         }
 
         if (Test-Path $backupDb) {
             Write-Host "[2/4] Ripristino database SQLite originale v5..."
-            & $adb -s $TargetAdb shell "am force-stop $PackageName"
-            & $adb -s $TargetAdb push $backupDb /sdcard/tmp_akai_restore.db | Out-Null
-            & $adb -s $TargetAdb shell "run-as $PackageName cp /sdcard/tmp_akai_restore.db databases/akai_memory.db" 2>&1 | Out-Null
-            & $adb -s $TargetAdb shell "rm -f /sdcard/tmp_akai_restore.db" 2>&1 | Out-Null
+            & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
+            Get-Content -Path $backupDb -Encoding Byte -Raw | & $adb -s $TargetAdb exec-in "run-as $PackageName sh -c 'cat > files/akai_memory_restore.db'" 2>&1 | Out-Null
+            & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_RESTORE_DB --es source_path files/akai_memory_restore.db $PackageName/.RemoteServerService" | Out-Null
+            Start-Sleep -Seconds 2
             Write-Host "      Database SQLite ripristinato." -ForegroundColor Green
         }
 

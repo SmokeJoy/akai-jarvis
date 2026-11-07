@@ -153,10 +153,37 @@ public class RemoteServerService extends Service {
         Log.i(TAG, "AKAI Remote HTTP Service running in foreground on port " + HTTP_PORT);
     }
 
+    public static final String ACTION_BACKUP_DB = "it.akai.customremote.ACTION_BACKUP_DB";
+    public static final String ACTION_RESTORE_DB = "it.akai.customremote.ACTION_RESTORE_DB";
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null) {
+            String action = intent.getAction();
+            if (ACTION_BACKUP_DB.equals(action)) {
+                handleBackupDbIntent(intent);
+                return START_NOT_STICKY;
+            } else if (ACTION_RESTORE_DB.equals(action)) {
+                handleRestoreDbIntent(intent);
+                return START_NOT_STICKY;
+            }
+        }
         ensureServerRunning();
         return START_STICKY;
+    }
+
+    private void handleBackupDbIntent(Intent intent) {
+        String targetPath = intent.getStringExtra("target_path");
+        File dest = (targetPath != null) ? new File(targetPath) : new File(getFilesDir(), "akai_memory_snapshot.db");
+        boolean ok = AkaiMemoryEngine.getInstance(this).performConsistentSnapshot(dest);
+        Log.i(TAG, "Consistent DB backup intent completed. Success=" + ok + " Destination=" + dest.getAbsolutePath());
+    }
+
+    private void handleRestoreDbIntent(Intent intent) {
+        String sourcePath = intent.getStringExtra("source_path");
+        File src = (sourcePath != null) ? new File(sourcePath) : new File(getFilesDir(), "akai_memory_snapshot.db");
+        boolean ok = AkaiMemoryEngine.getInstance(this).restoreConsistentSnapshot(src);
+        Log.i(TAG, "Consistent DB restore intent completed. Success=" + ok + " Source=" + src.getAbsolutePath());
     }
 
     public synchronized void ensureServerRunning() {
@@ -205,32 +232,39 @@ public class RemoteServerService extends Service {
             KeyStore keyStore = KeyStore.getInstance("PKCS12");
             InputStream is = null;
 
-            // 1. Password resolution: cerca server_keystore.pass in internal storage privato o usa default di collaudo
-            char[] keyPassword = "akai1234".toCharArray();
+            // 1. Priorità a Keystore TLS esterno provisionato in storage privato locale (/data/data/.../files)
+            File localKeystore = new File(getFilesDir(), "server_keystore.p12");
             File passFile = new File(getFilesDir(), "server_keystore.pass");
-            if (passFile.exists() && passFile.length() > 0) {
+            char[] keyPassword = null;
+
+            if (localKeystore.exists() && localKeystore.length() > 0) {
+                // Per un keystore provisionato per-dispositivo, la password personalizzata è OBBLIGATORIA (fail-closed)
+                if (!passFile.exists() || passFile.length() == 0) {
+                    Log.e(TAG, "Provisioned TLS keystore present but password file (server_keystore.pass) is missing. Refusing to load with default credentials.");
+                    return null;
+                }
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(passFile), StandardCharsets.UTF_8))) {
                     String p = reader.readLine();
                     if (p != null && !p.trim().isEmpty()) {
                         keyPassword = p.trim().toCharArray();
-                        Log.i(TAG, "Custom TLS keystore password loaded from provisioned storage.");
+                        Log.i(TAG, "Secure TLS keystore password loaded from provisioned storage.");
+                    } else {
+                        Log.e(TAG, "Provisioned TLS password file is empty. Refusing load.");
+                        return null;
                     }
                 } catch (Exception e) {
-                    Log.w(TAG, "Error reading TLS password file: " + e.getMessage());
+                    Log.e(TAG, "Failed reading provisioned TLS password file: " + e.getMessage());
+                    return null;
                 }
-            }
-
-            // 2. Priorità a Keystore TLS esterno provisionato in storage privato locale (/data/data/.../files)
-            File localKeystore = new File(getFilesDir(), "server_keystore.p12");
-            if (localKeystore.exists() && localKeystore.length() > 0) {
-                Log.i(TAG, "Loading provisioned TLS keystore from internal files: " + localKeystore.getAbsolutePath());
                 is = new FileInputStream(localKeystore);
             } else {
-                // 3. Fallback su asset pacchettizzato nell'APK
+                // 2. Fallback su asset di test CI effimero (ammesso unicamente nell'ambiente isolato di CI)
                 try {
                     is = getAssets().open("server_keystore.p12");
+                    keyPassword = "akai1234".toCharArray();
+                    Log.i(TAG, "Loading ephemeral CI test TLS fixture from assets (non-distributable).");
                 } catch (FileNotFoundException fnf) {
-                    Log.w(TAG, "TLS keystore (server_keystore.p12) not found in internal storage or assets; HTTPS listener skipped.");
+                    Log.i(TAG, "No TLS keystore found in storage or assets. HTTPS disabled (safe release profile).");
                     return null;
                 }
             }

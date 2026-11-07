@@ -10,6 +10,11 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.util.Locale;
 
 /**
@@ -35,6 +40,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     private static final int DB_VERSION = 6;
 
     private static AkaiMemoryEngine sInstance = null;
+    private final Context mContext;
 
     // Tabella procedural_memory
     public static final String TABLE_PROCEDURES = "procedural_memory";
@@ -88,6 +94,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
 
     private AkaiMemoryEngine(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
+        this.mContext = context;
     }
 
     @Override
@@ -754,5 +761,78 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             if (c != null) c.close();
         }
         return obj;
+    }
+
+    // =========================================================================
+    // METODI BACKUP & RESTORE ATOMICO CONSISTENTE (CON CHECKPOINT WAL)
+    // =========================================================================
+
+    public synchronized boolean performConsistentSnapshot(File destination) {
+        if (destination == null) return false;
+        SQLiteDatabase db = getWritableDatabase();
+        Cursor c = null;
+        try {
+            // Esegui checkpoint TRUNCATE per svuotare il file WAL e committare tutte le pagine sul DB principale
+            c = db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE);", null);
+            if (c != null && c.moveToFirst()) {
+                Log.d(TAG, "WAL checkpoint completed prior to snapshot: code=" + c.getInt(0));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "WAL checkpoint warning: " + e.getMessage());
+        } finally {
+            if (c != null) c.close();
+        }
+
+        try {
+            File currentDb = new File(db.getPath());
+            if (!currentDb.exists() || currentDb.length() == 0) return false;
+            if (destination.getParentFile() != null && !destination.getParentFile().exists()) {
+                destination.getParentFile().mkdirs();
+            }
+            copyFile(currentDb, destination);
+            Log.i(TAG, "Consistent database snapshot created at: " + destination.getAbsolutePath() + " (" + destination.length() + " bytes)");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed creating consistent snapshot: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+    public synchronized boolean restoreConsistentSnapshot(File source) {
+        if (source == null || !source.exists() || source.length() < 512) return false;
+        try {
+            close();
+            File currentDb = mContext.getDatabasePath(DB_NAME);
+            copyFile(source, currentDb);
+
+            // Elimina file di transazione WAL/SHM obsoleti per prevenire conflitti di replay
+            File wal = new File(currentDb.getAbsolutePath() + "-wal");
+            if (wal.exists()) wal.delete();
+            File shm = new File(currentDb.getAbsolutePath() + "-shm");
+            if (shm.exists()) shm.delete();
+
+            // Riapre il database e valida l'integrità
+            SQLiteDatabase db = getWritableDatabase();
+            Cursor c = db.rawQuery("PRAGMA integrity_check;", null);
+            boolean ok = false;
+            if (c != null && c.moveToFirst()) {
+                ok = "ok".equalsIgnoreCase(c.getString(0));
+                c.close();
+            }
+            Log.i(TAG, "Consistent database snapshot restored with integrity check result: " + ok);
+            return ok;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed restoring consistent snapshot: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+    private static void copyFile(File src, File dst) throws IOException {
+        try (FileInputStream in = new FileInputStream(src);
+             FileOutputStream out = new FileOutputStream(dst);
+             FileChannel inChannel = in.getChannel();
+             FileChannel outChannel = out.getChannel()) {
+            inChannel.transferTo(0, inChannel.size(), outChannel);
+        }
     }
 }
