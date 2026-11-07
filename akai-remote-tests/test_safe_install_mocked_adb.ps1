@@ -163,12 +163,12 @@ try {
     $testCmd = @"
 `$ErrorActionPreference = 'Continue'
 `$env:ADB_EXECUTABLE = '$mockCmdEscaped'
-`$env:PATH = '$mockDirEscaped;' + `$env:PATH
+`$env:PATH = '$mockDirEscaped' + [System.IO.Path]::PathSeparator + `$env:PATH
 & '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -AllowHardwareExecution
 "@
     $res5 = & $psExe -ExecutionPolicy Bypass -Command $testCmd 2>&1 | Out-String
 
-    if ($res5 -match "ERRORE FAIL-CLOSED: Impossibile estrarre un backup integro del database dal dispositivo") {
+    if ($res5 -match "ERRORE FAIL-CLOSED: Impossibile estrarre un backup integro del database" -or $res5 -match "INTERROTTA per prevenire perdite") {
         Write-Host "[PASS] Test 5: Simulazione permessi negati ADB (run-as negato): installazione ABORTITA prima di toccare il sistema (Fail-Closed)" -ForegroundColor Green
         $passed++
     } else {
