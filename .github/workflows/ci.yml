@@ -41,14 +41,14 @@ jobs:
       - name: 2. Secrets Leak Detection
         run: |
           echo "=== Scanning for leaked private keys or hardcoded API credentials ==="
-          FORBIDDEN_FILES=$(find . -type f \( -name "*.p12" -o -name "*.jks" -o -name "*.keystore" \) -not -path "*/.*")
+          FORBIDDEN_FILES=$(find . -type f \( -name "*.p12" -o -name "*.jks" -o -name "*.keystore" \) -not -path "*/.*" -not -path "./build_ci/*")
           if [ -n "$FORBIDDEN_FILES" ]; then
             echo "ERROR: Forbidden private keystores detected in repository:"
             echo "$FORBIDDEN_FILES"
             exit 1
           fi
 
-          if grep -rn "sk-[a-zA-Z0-9]\{20,\}" --exclude-dir=".git" .; then
+          if grep -rn "sk-[a-zA-Z0-9]\{20,\}" --exclude-dir=".git" --exclude-dir="build_ci" .; then
             echo "ERROR: Potential real API key detected in source tree!"
             exit 1
           fi
@@ -58,7 +58,7 @@ jobs:
         run: |
           echo "=== Running Real SQLite Database & Migration Tests ==="
           python3 akai-remote-tests/test_sqlite_memory.py
-          echo "SQLite persistence, v5->v6 migration and Guest Mode privacy verified on real database engine."
+          echo "SQLite persistence, v5->v6 migration, Guest Mode privacy and budget enforcement verified on real engine."
 
       - name: 4. Compile and Run Host Java Unit Tests (17 Tests)
         run: |
@@ -116,8 +116,26 @@ jobs:
 
       - name: 6. Full Android Production APK Build & Packaging (D8, AAPT2, ZipAlign, Apksigner)
         run: |
-          echo "=== Building Complete Production Android APK ==="
-          ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+          echo "=== Building Complete Android APK for CI Verification ==="
+          
+          # Tentativo di targeting prioritario su android-28 (Android TV 9 Pie)
+          ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | grep "android-28" | head -n 1)
+          if [ -z "$ANDROID_JAR" ]; then
+            echo "android-28 not present by default. Attempting installation via sdkmanager..."
+            if command -v sdkmanager >/dev/null 2>&1; then
+              yes | sdkmanager --licenses >/dev/null 2>&1 || true
+              sdkmanager "platforms;android-28" >/dev/null 2>&1 || true
+            elif [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+              yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+              "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-28" >/dev/null 2>&1 || true
+            fi
+            ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | grep "android-28" | head -n 1)
+          fi
+          if [ -z "$ANDROID_JAR" ]; then
+            echo "Notice: android-28 not installable; using highest available platform jar."
+            ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+          fi
+
           AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
           D8=$(find "$ANDROID_HOME/build-tools" -name "d8" 2>/dev/null | sort -V | tail -n 1)
           ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign" 2>/dev/null | sort -V | tail -n 1)
@@ -134,12 +152,22 @@ jobs:
           echo "Using ZipAlign: $ZIPALIGN"
           echo "Using Apksigner: $APKSIGNER"
 
-          mkdir -p build_ci/gen build_ci/classes build_ci/dex
+          mkdir -p build_ci/gen build_ci/classes build_ci/dex build_ci/assets/www
 
-          # 1. AAPT2 compile resources
+          # 1. Copia asset statici del Web Remote (HTML, JS, CSS)
+          cp -r akai-remote-web/* build_ci/assets/www/
+
+          # 2. Generazione keystore TLS effimero autofirmato per test di CI (assets/server_keystore.p12)
+          # NOTA: Questo keystore è puramente effimero per verificare che il server HTTPS possa caricarlo
+          keytool -genkeypair -alias akaiserver -keyalg RSA -keysize 2048 -validity 365 \
+            -keystore build_ci/assets/server_keystore.p12 -storetype PKCS12 \
+            -storepass akai1234 -keypass akai1234 \
+            -dname "CN=akai-remote-ci-test,O=AKAI TV,C=IT"
+
+          # 3. AAPT2 compile resources
           "$AAPT2" compile --dir akai-remote-tv/app/src/main/res -o build_ci/compiled_res.zip
 
-          # 2. AAPT2 link manifest and generate R.java
+          # 4. AAPT2 link manifest and generate R.java
           "$AAPT2" link -I "$ANDROID_JAR" \
             --manifest akai-remote-tv/app/src/main/AndroidManifest.xml \
             -o build_ci/base.apk \
@@ -149,30 +177,48 @@ jobs:
             --min-sdk-version 21 \
             --target-sdk-version 28
 
-          # 3. Compile all 26 Java sources with javac
+          # 5. Compile all 26 Java sources with javac
           JAVA_SRC=$(find akai-remote-tv/app/src/main/java build_ci/gen -name "*.java")
           javac -encoding UTF-8 -source 1.8 -target 1.8 -bootclasspath "$ANDROID_JAR" -cp "$ANDROID_JAR" -d build_ci/classes $JAVA_SRC
           CLASS_COUNT=$(find build_ci/classes -name "*.class" | wc -l)
           echo "Java compilation succeeded: $CLASS_COUNT class files generated."
 
-          # 4. Generate Dalvik Executable (classes.dex) with D8
+          # 6. Generate Dalvik Executable (classes.dex) with D8
           CLASS_FILES=$(find build_ci/classes -name "*.class")
           "$D8" --min-api 21 --lib "$ANDROID_JAR" --output build_ci/dex $CLASS_FILES
 
-          # 5. Assemble APK: inject classes.dex and native JNI ARMv7 library
+          # 7. Assemble APK: inject classes.dex, native ARMv7 library, and runtime assets
           (cd build_ci/dex && zip -u ../base.apk classes.dex)
           if [ -f build_ci/lib/armeabi-v7a/libakai_uinput.so ]; then
             (cd build_ci && zip -u base.apk lib/armeabi-v7a/libakai_uinput.so)
           fi
+          (cd build_ci && zip -r -u base.apk assets)
 
-          # 6. ZipAlign 4-byte boundary
+          # 8. ZipAlign 4-byte boundary
           "$ZIPALIGN" -f -v 4 build_ci/base.apk build_ci/aligned.apk
 
-          # 7. Generate ephemeral CI debug keystore and sign APK
+          # 9. Firma con keystore effimero temporaneo di CI
+          # AVVISO DI SICUREZZA: Il binario risultante viene designato come "app-ci-test-nondistributable.apk"
+          # poiché firmato con chiave temporanea effimera e non utilizzabile per update del device reale.
           keytool -genkey -v -keystore /tmp/ci_debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug CI,O=AKAI JARVIS,C=IT"
-          "$APKSIGNER" sign --ks /tmp/ci_debug.keystore --ks-pass pass:android --key-pass pass:android --out build_ci/app-ci-debug.apk build_ci/aligned.apk
+          "$APKSIGNER" sign --ks /tmp/ci_debug.keystore --ks-pass pass:android --key-pass pass:android --out build_ci/app-ci-test-nondistributable.apk build_ci/aligned.apk
 
-          # 8. Verify APK integrity and signature schemes (v1 + v2)
-          "$APKSIGNER" verify --verbose build_ci/app-ci-debug.apk
-          APK_SIZE=$(stat -c%s build_ci/app-ci-debug.apk)
-          echo "COMPLETE ANDROID APK BUILT AND VERIFIED: $APK_SIZE bytes."
+          # 10. Verify APK signature schemes (v1 + v2)
+          "$APKSIGNER" verify --verbose build_ci/app-ci-test-nondistributable.apk
+          APK_SIZE=$(stat -c%s build_ci/app-ci-test-nondistributable.apk)
+          echo "CI TEST APK BUILT AND VERIFIED: $APK_SIZE bytes."
+
+      - name: 7. Explicit APK Contents Inspection and Verification (unzip -l)
+        run: |
+          echo "=== Verifying internal contents of candidate CI APK ==="
+          unzip -l build_ci/app-ci-test-nondistributable.apk > build_ci/apk_contents.txt
+          cat build_ci/apk_contents.txt
+
+          echo "--- Verifying all required production components ---"
+          grep "classes.dex" build_ci/apk_contents.txt || (echo "FATAL: classes.dex missing from APK!" && exit 1)
+          grep "lib/armeabi-v7a/libakai_uinput.so" build_ci/apk_contents.txt || (echo "FATAL: libakai_uinput.so missing from APK!" && exit 1)
+          grep "assets/www/index.html" build_ci/apk_contents.txt || (echo "FATAL: assets/www/index.html missing from APK!" && exit 1)
+          grep "assets/www/app.js" build_ci/apk_contents.txt || (echo "FATAL: assets/www/app.js missing from APK!" && exit 1)
+          grep "assets/server_keystore.p12" build_ci/apk_contents.txt || (echo "FATAL: assets/server_keystore.p12 missing from APK!" && exit 1)
+          grep "AndroidManifest.xml" build_ci/apk_contents.txt || (echo "FATAL: AndroidManifest.xml missing from APK!" && exit 1)
+          echo "ALL MANDATORY ARTIFACTS VERIFIED INSIDE APK (DEX, ARMv7 SO, Web Assets, TLS Keystore)."

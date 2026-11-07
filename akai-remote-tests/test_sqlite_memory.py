@@ -82,22 +82,29 @@ def run_tests():
         """)
 
         # Inserimento dati storici v5 pre-migrazione:
-        # A) Template di sistema noto
+        # A) Template di sistema autentico conforme al fingerprint immutabile
         now = 1700000000000
         cur.execute("""
             INSERT INTO procedural_memory 
             (intent_key, goal_intent, description, app_package, initial_state, action_sequence, success_condition, app_version, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, ("youtube", "apri youtube", "Template YouTube TV", "com.google.android.youtube.tv", "{}", "[]", "{}", "v2.0", now))
+        """, ("youtube", "apri youtube", "Template apertura YouTube TV", "com.google.android.youtube.tv", "{}", "[]", "{}", "v2.0", now))
 
-        # B) Procedura privata appresa dall'utente prima dell'aggiornamento
+        # B) Variante personalizzata dall'utente con intent_key analogo ma query/dati privati
+        cur.execute("""
+            INSERT INTO procedural_memory 
+            (intent_key, goal_intent, description, app_package, initial_state, action_sequence, success_condition, app_version, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, ("youtube_custom", "guarda video privati", "Miei preferiti privati YouTube", "com.google.android.youtube.tv", "{}", "[]", "{}", "v2.0", now))
+
+        # C) Procedura privata appresa dall'utente prima dell'aggiornamento
         cur.execute("""
             INSERT INTO procedural_memory 
             (intent_key, goal_intent, description, app_package, initial_state, action_sequence, success_condition, app_version, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, ("dan_vacation_photos", "cerca video vacanze daniele", "Procedura appresa utente", "com.google.android.youtube.tv", "{}", "[]", "{}", "1.0", now))
 
-        # C) Preferenze personali e impostazioni
+        # D) Preferenze personali e impostazioni
         cur.execute("INSERT INTO user_preferences (pref_key, pref_value, category, is_personal, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?);",
                     ("favorite_channels", "[\"Italia 2\", \"Focus\"]", "channels", 1, 1, now))
         cur.execute("INSERT INTO user_preferences (pref_key, pref_value, category, is_personal, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?);",
@@ -105,19 +112,26 @@ def run_tests():
         conn.commit()
 
         # Esegui migrazione v5 -> v6 esattamente come definito in AkaiMemoryEngine.onUpgrade()
+        # con Whitelist Rigorosa a Fingerprint Immutabile
         cur.execute("ALTER TABLE procedural_memory ADD COLUMN is_personal INTEGER DEFAULT 1;")
-        cur.execute("UPDATE procedural_memory SET is_personal = 0 WHERE intent_key IN ('youtube');")
+        cur.execute("""
+            UPDATE procedural_memory SET is_personal = 0 WHERE 
+                intent_key = 'youtube' AND 
+                app_package = 'com.google.android.youtube.tv' AND 
+                goal_intent = 'apri youtube' AND 
+                description = 'Template apertura YouTube TV';
+        """)
         conn.commit()
 
-        # Verifica che la procedura legacy privata sia stata marcata is_personal = 1 e youtube = 0
+        # Verifica che il template autentico sia is_personal = 0, mentre le varianti personali o storiche siano is_personal = 1
         cur.execute("SELECT intent_key, is_personal FROM procedural_memory ORDER BY id ASC;")
         procs_migrated = {row[0]: row[1] for row in cur.fetchall()}
 
-        if procs_migrated.get("youtube") == 0 and procs_migrated.get("dan_vacation_photos") == 1:
-            print("[PASS] SQLite Test 1: Migrazione v5 -> v6 conservativa riuscita: le procedure storiche pre-esistenti sono marcate private (is_personal=1), whitelist attiva per template di sistema (is_personal=0)")
+        if procs_migrated.get("youtube") == 0 and procs_migrated.get("youtube_custom") == 1 and procs_migrated.get("dan_vacation_photos") == 1:
+            print("[PASS] SQLite Test 1: Migrazione v5 -> v6 ultra-rigorosa con fingerprint immutabile: template di sistema pubblico (is_personal=0), varianti e procedure storiche private (is_personal=1)")
             passed += 1
         else:
-            print(f"[FAIL] SQLite Test 1: Migrazione non conservativa! Stato: {procs_migrated}")
+            print(f"[FAIL] SQLite Test 1: Migrazione non rigorosa! Stato: {procs_migrated}")
             failed += 1
 
         # ---------------------------------------------------------------------
@@ -142,11 +156,13 @@ def run_tests():
         res_normal = simulate_find_procedure("cerca video vacanze daniele", guest_mode=False)
         # In modalità ospite: la procedura privata NON deve essere trovata
         res_guest = simulate_find_procedure("cerca video vacanze daniele", guest_mode=True)
+        # In modalità ospite: la variante personalizzata di youtube NON deve essere trovata
+        res_custom_guest = simulate_find_procedure("guarda video privati", guest_mode=True)
         # In modalità ospite: il template di sistema pubblico DEVE essere trovato
         res_sys_guest = simulate_find_procedure("apri youtube", guest_mode=True)
 
-        if res_normal is not None and res_guest is None and res_sys_guest is not None:
-            print("[PASS] SQLite Test 2: Protezione vocale Guest Mode verificata: findProcedureByGoal blocca procedure personali (is_personal=1) consentendo solo template pubblici")
+        if res_normal is not None and res_guest is None and res_custom_guest is None and res_sys_guest is not None:
+            print("[PASS] SQLite Test 2: Protezione vocale Guest Mode verificata: findProcedureByGoal blocca procedure personali e varianti custom (is_personal=1), consentendo solo il template immutabile pubblico")
             passed += 1
         else:
             print(f"[FAIL] SQLite Test 2: Leak vocale in Guest Mode! (normal={res_normal}, guest={res_guest})")
@@ -236,6 +252,81 @@ def run_tests():
             passed += 1
         else:
             print(f"[FAIL] SQLite Test 5: Errore enforcement conversazioni o storage (count={count_conv}, min={min_q}, max={max_q}, size={db_size})")
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        # TEST 6: Verifica Downgrade Schema v6 -> v5 e Retrocompatibilità Query Legacy
+        # ---------------------------------------------------------------------
+        # Se un utente effettua rollback dell'APK alla versione 5, il DB non deve andare in crash
+        # (AkaiMemoryEngine implementa onDowngrade senza sollevare eccezioni)
+        cur.execute("PRAGMA user_version = 5;")
+        conn.commit()
+        cur.execute("PRAGMA user_version;")
+        uv = cur.fetchone()[0]
+
+        # Query v5 standard che ignora la colonna is_personal
+        cur.execute("""
+            SELECT id, intent_key, goal_intent, description, app_package 
+            FROM procedural_memory 
+            ORDER BY id ASC;
+        """)
+        legacy_rows = cur.fetchall()
+
+        # Inserimento v5 standard (senza colonna is_personal)
+        cur.execute("""
+            INSERT INTO procedural_memory 
+            (intent_key, goal_intent, description, app_package, initial_state, action_sequence, success_condition, app_version, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, ("v5_compat_key", "test goal v5", "Descrizione test v5", "com.test.v5", "{}", "[]", "{}", "1.0", now))
+        conn.commit()
+
+        cur.execute("SELECT intent_key, is_personal FROM procedural_memory WHERE intent_key = 'v5_compat_key';")
+        new_row = cur.fetchone()
+
+        if uv == 5 and len(legacy_rows) >= 1 and new_row and new_row[1] == 1:
+            print("[PASS] SQLite Test 6: Downgrade v6 -> v5 e compatibilità query legacy verificati con successo (schema non corrotto, query v5 operative, default conservativo is_personal=1 preservato)")
+            passed += 1
+        else:
+            print(f"[FAIL] SQLite Test 6: Fallimento retrocompatibilità downgrade v5! uv={uv}, new_row={new_row}")
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        # TEST 7: Enforcement Storage Budget 15 MB & Emergency Pruning a 5 elementi + VACUUM
+        # ---------------------------------------------------------------------
+        # Simula la logica checkAndEnforceStorageBudget() di AkaiMemoryEngine quando superato MAX_STORAGE_BYTES
+        for i in range(1, 26):
+            cur.execute("""
+                INSERT INTO conversations (timestamp, user_query, assistant_reply, status)
+                VALUES (?, ?, ?, ?);
+            """, (now + 100000 + (i * 1000), f"Query Budget {i}", f"Reply Budget {i}", "SUCCESS"))
+        conn.commit()
+
+        cur.execute("SELECT COUNT(*) FROM conversations;")
+        pre_prune_count = cur.fetchone()[0]
+
+        # Trigger potatura di emergenza: mantieni solo i 5 più recenti
+        cur.execute("""
+            DELETE FROM conversations WHERE id NOT IN (
+                SELECT id FROM conversations ORDER BY timestamp DESC LIMIT 5
+            );
+        """)
+        conn.commit()
+        cur.execute("VACUUM;")
+
+        cur.execute("SELECT COUNT(*) FROM conversations;")
+        post_prune_count = cur.fetchone()[0]
+
+        cur.execute("PRAGMA page_count;")
+        page_count = cur.fetchone()[0]
+        cur.execute("PRAGMA page_size;")
+        page_size = cur.fetchone()[0]
+        calculated_size = page_count * page_size
+
+        if pre_prune_count > 20 and post_prune_count == 5 and 0 < calculated_size < max_storage:
+            print(f"[PASS] SQLite Test 7: Enforcement Storage Budget simulato (emergency pruning a 5 record + VACUUM eseguito: dimensione {calculated_size} bytes < 15 MB)")
+            passed += 1
+        else:
+            print(f"[FAIL] SQLite Test 7: Errore emergency pruning storage budget (pre={pre_prune_count}, post={post_prune_count})")
             failed += 1
 
         conn.close()

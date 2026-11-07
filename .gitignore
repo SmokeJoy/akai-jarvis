@@ -60,6 +60,7 @@ scratch/
 *.env
 *.local
 local.properties
+scripts/*.md
 
 # File temporanei di sistema ed editor
 .DS_Store

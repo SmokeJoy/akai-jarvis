@@ -194,12 +194,24 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                 // Politica conservativa: le procedure pregresse create dall'utente
                 // vengono marcate di default come personali (is_personal = 1) per prevenire leak in Guest Mode
                 db.execSQL("ALTER TABLE " + TABLE_PROCEDURES + " ADD COLUMN " + COL_IS_PERSONAL + " INTEGER DEFAULT 1;");
-                // Whitelist rigorosa per i template di sistema tecnici verificabili
-                db.execSQL("UPDATE " + TABLE_PROCEDURES + " SET " + COL_IS_PERSONAL + " = 0 WHERE " + COL_INTENT_KEY + " IN ('youtube');");
+                // Whitelist rigorosa basata su fingerprint esatto del template immutabile di sistema
+                // Se l'utente ha modificato la query, la descrizione o il pacchetto, la procedura rimane is_personal = 1
+                db.execSQL("UPDATE " + TABLE_PROCEDURES + " SET " + COL_IS_PERSONAL + " = 0 WHERE " +
+                        COL_INTENT_KEY + " = 'youtube' AND " +
+                        COL_APP_PACKAGE + " = 'com.google.android.youtube.tv' AND " +
+                        COL_GOAL_INTENT + " = 'apri youtube' AND " +
+                        COL_DESCRIPTION + " = 'Template apertura YouTube TV';");
             } catch (Exception e) {
                 Log.w(TAG, "Schema upgrade v6 notice: " + e.getMessage());
             }
         }
+    }
+
+    @Override
+    public void onDowngrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        Log.w(TAG, "Database downgrade requested from v" + oldVersion + " to v" + newVersion);
+        // SQLite supporta nativamente tabelle con colonne addizionali; 
+        // non distruggere i dati e consenti al vecchio codice v5 di operare in sicurezza.
     }
 
     private void seedInitialData(SQLiteDatabase db) {

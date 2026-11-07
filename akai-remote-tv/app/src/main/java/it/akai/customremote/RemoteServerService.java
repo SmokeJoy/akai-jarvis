@@ -24,6 +24,7 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -202,9 +203,31 @@ public class RemoteServerService extends Service {
     private SSLContext createSSLContext() {
         try {
             KeyStore keyStore = KeyStore.getInstance("PKCS12");
-            try (InputStream is = getAssets().open("server_keystore.p12")) {
-                keyStore.load(is, "akai1234".toCharArray());
+            InputStream is = null;
+
+            // 1. Priorità a Keystore TLS esterno provisionato in storage privato locale (/data/data/.../files)
+            File localKeystore = new File(getFilesDir(), "server_keystore.p12");
+            if (localKeystore.exists() && localKeystore.length() > 0) {
+                Log.i(TAG, "Loading provisioned TLS keystore from internal files: " + localKeystore.getAbsolutePath());
+                is = new FileInputStream(localKeystore);
+            } else {
+                // 2. Fallback su asset pacchettizzato nell'APK
+                try {
+                    is = getAssets().open("server_keystore.p12");
+                } catch (FileNotFoundException fnf) {
+                    Log.w(TAG, "TLS keystore (server_keystore.p12) not found in internal storage or assets; HTTPS listener skipped.");
+                    return null;
+                }
             }
+
+            try {
+                keyStore.load(is, "akai1234".toCharArray());
+            } finally {
+                if (is != null) {
+                    try { is.close(); } catch (Exception ignored) {}
+                }
+            }
+
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
             kmf.init(keyStore, "akai1234".toCharArray());
             SSLContext sslContext = SSLContext.getInstance("TLS");
