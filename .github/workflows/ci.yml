@@ -8,7 +8,7 @@ on:
 
 jobs:
   audit-and-tests:
-    name: Code Quality, Unit Tests & Security Audit
+    name: Code Quality, Unit Tests, SQLite, Android & JNI Verification
     runs-on: ubuntu-latest
 
     steps:
@@ -20,6 +20,11 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -49,7 +54,13 @@ jobs:
           fi
           echo "Secrets scan passed: zero private keystores or unmasked API keys detected."
 
-      - name: 3. Compile and Run Host Java Unit Tests
+      - name: 3. Real SQLite Database Integrity & Privacy Test
+        run: |
+          echo "=== Running Real SQLite Database & Migration Tests ==="
+          python3 akai-remote-tests/test_sqlite_memory.py
+          echo "SQLite persistence and Guest Mode privacy verified on real database engine."
+
+      - name: 4. Compile and Run Host Java Unit Tests (17 Tests)
         run: |
           echo "=== Compiling and Running Java UnitTests ==="
           mkdir -p test_bin
@@ -66,4 +77,59 @@ jobs:
             akai-remote-tests/UnitTests.java
 
           java -cp test_bin it.akai.customremote.UnitTests
-          echo "All Java unit tests passed with 100% success."
+          echo "All 17 Java unit tests passed with 100% success."
+
+      - name: 5. Android Application Compilation & Verification
+        run: |
+          echo "=== Compiling Full Production Android Application ==="
+          ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
+
+          if [ -z "$ANDROID_JAR" ] || [ -z "$AAPT2" ]; then
+            echo "ERROR: Android SDK platform or aapt2 not found in $ANDROID_HOME"
+            exit 1
+          fi
+
+          echo "Using Android platform: $ANDROID_JAR"
+          echo "Using AAPT2: $AAPT2"
+
+          mkdir -p build_ci/gen build_ci/classes
+          "$AAPT2" compile --dir akai-remote-tv/app/src/main/res -o build_ci/compiled_res.zip
+          "$AAPT2" link -I "$ANDROID_JAR" \
+            --manifest akai-remote-tv/app/src/main/AndroidManifest.xml \
+            -o build_ci/base.apk \
+            --java build_ci/gen \
+            build_ci/compiled_res.zip \
+            --auto-add-overlay \
+            --min-sdk-version 21 \
+            --target-sdk-version 28
+
+          JAVA_SRC=$(find akai-remote-tv/app/src/main/java build_ci/gen -name "*.java")
+          echo "Compiling all Java source files..."
+          javac -encoding UTF-8 -source 1.8 -target 1.8 -bootclasspath "$ANDROID_JAR" -cp "$ANDROID_JAR" -d build_ci/classes $JAVA_SRC
+          CLASS_COUNT=$(find build_ci/classes -name "*.class" | wc -l)
+          echo "Android Java compilation SUCCEEDED: $CLASS_COUNT class files generated."
+
+      - name: 6. Native JNI C Driver Compilation & Verification
+        run: |
+          echo "=== Compiling Native JNI Driver (uinput_jni.c) ==="
+          mkdir -p /tmp/jni_include/android
+          cat << 'EOF' > /tmp/jni_include/android/log.h
+          #pragma once
+          #define ANDROID_LOG_INFO 4
+          #define ANDROID_LOG_ERROR 6
+          static inline int __android_log_print(int prio, const char* tag, const char* fmt, ...) { (void)prio; (void)tag; (void)fmt; return 0; }
+          EOF
+
+          gcc -shared -fPIC -O2 \
+            -I"$JAVA_HOME/include" \
+            -I"$JAVA_HOME/include/linux" \
+            -I/tmp/jni_include \
+            akai-remote-tv/app/src/main/jni/uinput_jni.c \
+            -o /tmp/libakai_uinput.so
+
+          if [ ! -f /tmp/libakai_uinput.so ]; then
+            echo "ERROR: Native JNI compilation failed."
+            exit 1
+          fi
+          echo "Native JNI Driver successfully compiled: $(stat -c%s /tmp/libakai_uinput.so) bytes."

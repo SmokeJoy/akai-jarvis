@@ -296,7 +296,7 @@ public class UnitTests {
         Map<String, String> authHeaders = new HashMap<>();
         authHeaders.put("authorization", "Bearer " + validToken);
 
-        // Test 13: Verifica Codici Hardware Kernel Linux e Dispatch Tasti
+        // Test 13: Verifica Contratto Nominale Codici Hardware Linux e Mapping Dispatch Tasti
         CommandResult resPrev = cmdHandler.executeCommand("channel_prev");
         boolean keycodesCorrect = (UInputDriver.KEY_MENU == 139) &&
                                   (UInputDriver.KEY_CHANNELUP == 402) &&
@@ -305,10 +305,10 @@ public class UnitTests {
                                   (UInputDriver.KEY_PREVIOUS_CHANNEL == 405);
 
         if (keycodesCorrect && resPrev.success && resPrev.message.contains("KEY_LAST") && "channel_prev".equals(cmdHandler.lastExecutedAction)) {
-            System.out.println("[PASS] Test 13 (PR-01): Codici Linux standard verificati (MENU=139, CH_UP=402, CH_DOWN=403, KEY_LAST=405) e dispatch comando 'channel_prev' eseguito con successo");
+            System.out.println("[PASS] Test 13 (PR-01): Contratto nominale e codici Linux verificati (MENU=139, CH_UP=402, CH_DOWN=403, KEY_LAST=405) e dispatch 'channel_prev' OK [Nota: smoke test fisico uinput/JNI su TV demandato a post-merge]");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 13: Verifica codici o dispatch comandi hardware fallita");
+            System.err.println("[FAIL] Test 13: Verifica contratto o codici comandi nominali fallita");
             failed++;
         }
 
@@ -421,10 +421,49 @@ public class UnitTests {
         boolean okMemNoAuth = (rMemNoAuth.statusCode == 401);
 
         if (hasAll9Keys && normalDataExposed && guestModeFlag && conversationsZeroInGuest && preferencesZeroInGuest && proceduresPreservedInGuest && okMemNoAuth) {
-            System.out.println("[PASS] Test 16 (PR-01): Contratto dati /api/ai/memory reale verificato (9/9 campi JSON). Privacy Guest Mode confermata: zero conversazioni passate e zero preferenze esposte in modalità ospite!");
+            System.out.println("[PASS] Test 16 (PR-01): Boundary REST /api/ai/memory verificato (in-memory mock, 9/9 campi JSON). Privacy Guest Mode confermata su preferenze e conversazioni [Nota: test SQLite reale eseguito da test_sqlite_memory]");
             passed++;
         } else {
             System.err.println("[FAIL] Test 16: Fallimento verifica contratto memoria o leak privacy in Guest Mode (hasAll9Keys=" + hasAll9Keys + ", normalDataExposed=" + normalDataExposed + ", guestModeFlag=" + guestModeFlag + ", conversationsZeroInGuest=" + conversationsZeroInGuest + ", preferencesZeroInGuest=" + preferencesZeroInGuest + ")");
+            failed++;
+        }
+
+        // Test 17: Protezione Privacy Guest Mode su Procedure con Dati Personali (is_personal == 1)
+        memHandler.resetProcedures();
+        JSONObject procSys = new JSONObject();
+        procSys.put("intent_key", "system_template_yt");
+        procSys.put("goal_intent", "apri youtube");
+        procSys.put("description", "Template di sistema pubblico");
+        procSys.put("is_personal", 0);
+        memHandler.procedures.put(procSys);
+
+        JSONObject procUser = new JSONObject();
+        procUser.put("intent_key", "user_learned_private_search");
+        procUser.put("goal_intent", "cerca video vacanze daniele");
+        procUser.put("description", "Procedura appresa contenente dettagli personali utente");
+        procUser.put("is_personal", 1);
+        memHandler.procedures.put(procUser);
+
+        // In modalità normale (guest_mode = false): entrambe le procedure sono visibili
+        memHandler.guestMode = false;
+        MockHttpResponse rProcNormal = dispatch(router, "GET", "/api/ai/memory", authHeaders, "", "192.168.1.10");
+        boolean okProcNormal = (rProcNormal.statusCode == 200) && (rProcNormal.json != null);
+        JSONArray procsNormal = okProcNormal ? rProcNormal.json.optJSONArray("procedures") : new JSONArray();
+        boolean normalSeesBoth = (procsNormal != null && procsNormal.length() == 2);
+
+        // In modalità ospite (guest_mode = true): la procedura personale DEVE ESSERE ESCLUSA!
+        memHandler.guestMode = true;
+        MockHttpResponse rProcGuest = dispatch(router, "GET", "/api/ai/memory", authHeaders, "", "192.168.1.10");
+        boolean okProcGuest = (rProcGuest.statusCode == 200) && (rProcGuest.json != null);
+        JSONArray procsGuest = okProcGuest ? rProcGuest.json.optJSONArray("procedures") : new JSONArray();
+        boolean guestSeesOnlySystem = (procsGuest != null && procsGuest.length() == 1);
+        boolean guestNoPersonalLeak = guestSeesOnlySystem && "system_template_yt".equals(procsGuest.optJSONObject(0).optString("intent_key"));
+
+        if (normalSeesBoth && guestSeesOnlySystem && guestNoPersonalLeak) {
+            System.out.println("[PASS] Test 17 (PR-01): Protezione Procedure Personali in Guest Mode verificata: procedure con is_personal=1 filtrate ed escluse, visibili solo procedure di sistema (is_personal=0)");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 17: Leak procedura personale in Guest Mode! (normalSeesBoth=" + normalSeesBoth + ", guestSeesOnlySystem=" + guestSeesOnlySystem + ", guestNoPersonalLeak=" + guestNoPersonalLeak + ")");
             failed++;
         }
 

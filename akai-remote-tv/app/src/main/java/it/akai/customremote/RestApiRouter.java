@@ -230,7 +230,20 @@ public class RestApiRouter {
 
             boolean isGuest = memoryHandler.isGuestMode();
             JSONObject out = new JSONObject();
-            out.put("procedures", memoryHandler.getAllProcedures());
+            JSONArray allProcs = memoryHandler.getAllProcedures();
+            JSONArray safeProcs = new JSONArray();
+            if (allProcs != null) {
+                for (int i = 0; i < allProcs.length(); i++) {
+                    JSONObject p = allProcs.optJSONObject(i);
+                    if (p != null) {
+                        if (isGuest && (p.optInt("is_personal", 0) == 1 || p.optBoolean("is_personal", false))) {
+                            continue; // Escludi procedure personali in modalità Guest/Ospite
+                        }
+                        safeProcs.put(p);
+                    }
+                }
+            }
+            out.put("procedures", safeProcs);
             out.put("preferences", isGuest ? new JSONObject() : memoryHandler.getAllPreferences());
             out.put("stats", memoryHandler.getAllStats());
             JSONArray recents = isGuest ? new JSONArray() : memoryHandler.getRecentConversations(20);

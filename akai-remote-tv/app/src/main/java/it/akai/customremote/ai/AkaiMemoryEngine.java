@@ -32,7 +32,7 @@ import java.util.Locale;
 public class AkaiMemoryEngine extends SQLiteOpenHelper {
     private static final String TAG = "AKAI_MemoryEngine";
     private static final String DB_NAME = "akai_memory.db";
-    private static final int DB_VERSION = 5;
+    private static final int DB_VERSION = 6;
 
     private static AkaiMemoryEngine sInstance = null;
 
@@ -94,7 +94,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     public void onCreate(SQLiteDatabase db) {
         Log.i(TAG, "Creating AKAI Memory SQLite database schemas v2...");
 
-        // 1. procedural_memory (v2)
+        // 1. procedural_memory (v2/v6)
         String sqlProcedures = "CREATE TABLE " + TABLE_PROCEDURES + " (" +
                 COL_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 COL_INTENT_KEY + " TEXT UNIQUE NOT NULL, " +
@@ -110,6 +110,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                 COL_LAST_USED + " INTEGER, " +
                 COL_LAST_VERIFIED + " INTEGER, " +
                 COL_FALLBACK_STRATEGY + " TEXT, " +
+                COL_IS_PERSONAL + " INTEGER DEFAULT 0, " +
                 COL_CREATED_AT + " INTEGER);";
         db.execSQL(sqlProcedures);
 
@@ -188,6 +189,13 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                 Log.w(TAG, "Schema upgrade v5 notice: " + e.getMessage());
             }
         }
+        if (oldVersion < 6) {
+            try {
+                db.execSQL("ALTER TABLE " + TABLE_PROCEDURES + " ADD COLUMN " + COL_IS_PERSONAL + " INTEGER DEFAULT 0;");
+            } catch (Exception e) {
+                Log.w(TAG, "Schema upgrade v6 notice: " + e.getMessage());
+            }
+        }
     }
 
     private void seedInitialData(SQLiteDatabase db) {
@@ -231,6 +239,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             cvYt.put(COL_FAILURE_COUNT, 0);
             cvYt.put(COL_LAST_USED, 0);
             cvYt.put(COL_LAST_VERIFIED, 0); // 0 = mai verificato a runtime
+            cvYt.put(COL_IS_PERSONAL, 0); // Template di sistema pubblico (non personale)
             cvYt.put(COL_CREATED_AT, now);
             db.insertWithOnConflict(TABLE_PROCEDURES, null, cvYt, SQLiteDatabase.CONFLICT_IGNORE);
 
@@ -353,6 +362,8 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
         obj.put("last_used", c.getLong(c.getColumnIndex(COL_LAST_USED)));
         obj.put("last_verified_at", c.getLong(c.getColumnIndex(COL_LAST_VERIFIED)));
         obj.put("fallback_strategy", c.getString(c.getColumnIndex(COL_FALLBACK_STRATEGY)));
+        int isPersonalIdx = c.getColumnIndex(COL_IS_PERSONAL);
+        obj.put("is_personal", isPersonalIdx >= 0 ? c.getInt(isPersonalIdx) : 0);
         return obj;
     }
 
@@ -386,6 +397,13 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     public synchronized boolean saveVerifiedProcedure(String intentKey, String goalIntent, String description,
                                                        String appPackage, String initialState, JSONArray actions,
                                                        String successCondition, String appVersion) {
+        // Le procedure registrate dall'assistente su richiesta dell'utente sono per default personali
+        return saveVerifiedProcedure(intentKey, goalIntent, description, appPackage, initialState, actions, successCondition, appVersion, true);
+    }
+
+    public synchronized boolean saveVerifiedProcedure(String intentKey, String goalIntent, String description,
+                                                       String appPackage, String initialState, JSONArray actions,
+                                                       String successCondition, String appVersion, boolean isPersonal) {
         if (intentKey == null || actions == null || actions.length() == 0) return false;
         SQLiteDatabase db = getWritableDatabase();
         long now = System.currentTimeMillis();
@@ -403,10 +421,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             cv.put(COL_FAILURE_COUNT, 0);
             cv.put(COL_LAST_USED, now);
             cv.put(COL_LAST_VERIFIED, now);
+            cv.put(COL_IS_PERSONAL, isPersonal ? 1 : 0);
             cv.put(COL_CREATED_AT, now);
 
             long row = db.insertWithOnConflict(TABLE_PROCEDURES, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
-            Log.i(TAG, "New procedure saved to SQLite: " + intentKey + " (row=" + row + ")");
+            Log.i(TAG, "New procedure saved to SQLite: " + intentKey + " (personal=" + isPersonal + ", row=" + row + ")");
             return row != -1;
         } catch (Exception e) {
             Log.e(TAG, "Error saving verified procedure " + intentKey + ": " + e.getMessage());
@@ -415,11 +434,16 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     }
 
     public synchronized JSONArray getAllProcedures() {
+        return getAllProcedures(isGuestMode());
+    }
+
+    public synchronized JSONArray getAllProcedures(boolean filterPersonal) {
         JSONArray list = new JSONArray();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
-            c = db.query(TABLE_PROCEDURES, null, null, null, null, null, COL_LAST_USED + " DESC");
+            String selection = filterPersonal ? (COL_IS_PERSONAL + " = 0") : null;
+            c = db.query(TABLE_PROCEDURES, null, selection, null, null, null, COL_LAST_USED + " DESC");
             if (c != null && c.moveToFirst()) {
                 do {
                     list.put(parseProcedureCursor(c));
@@ -550,10 +574,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     public synchronized void clearPersonalPreferencesOnly() {
         SQLiteDatabase db = getWritableDatabase();
         try {
-            // Elimina i record contrassegnati come personali E l'intera cronologia conversazioni
+            // Elimina i record contrassegnati come personali, le procedure personali E l'intera cronologia conversazioni
             int delPrefs = db.delete(TABLE_PREFERENCES, COL_IS_PERSONAL + "=1", null);
+            int delProcs = db.delete(TABLE_PROCEDURES, COL_IS_PERSONAL + "=1", null);
             int delConv = db.delete(TABLE_CONVERSATIONS, null, null);
-            Log.i(TAG, "Cleared " + delPrefs + " personal preferences and " + delConv + " conversation exchanges. Technical settings preserved.");
+            Log.i(TAG, "Cleared " + delPrefs + " personal preferences, " + delProcs + " personal procedures, and " + delConv + " conversation exchanges. Technical settings preserved.");
         } catch (Exception e) {
             Log.e(TAG, "Error clearing personal data: " + e.getMessage());
         }
