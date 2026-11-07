@@ -227,4 +227,8 @@ Verify-SQLiteIntegrityOffline '$dbEscaped6'
 
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
-if ($failed -gt 0) { exit 1 }
+if ($failed -gt 0) { 
+    exit 1 
+} else { 
+    exit 0 
+}
