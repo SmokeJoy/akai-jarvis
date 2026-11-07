@@ -1,0 +1,1930 @@
+﻿{
+    "unit_tests":  {
+                       "suite_path":  "akai-remote-tests/UnitTests.java",
+                       "success_rate":  "100%",
+                       "passed_tests":  12,
+                       "total_tests":  12,
+                       "failed_tests":  0
+                   },
+    "compilation_specs":  {
+                              "jdk_version":  "OpenJDK 17.0.2 (target -source 1.8 -target 1.8)",
+                              "apk_signatures":  "v1 (JAR) + v2 (APK Signature Scheme v2)",
+                              "android_target_api":  28,
+                              "ndk_version":  "NDK r21e (Clang armv7a-linux-androideabi21)",
+                              "build_tools_version":  "28.0.3"
+                          },
+    "target_hardware":  {
+                            "kernel":  "Linux 4.19.79",
+                            "os_version":  "Android TV 9.0 Pie (API 28)",
+                            "swap_zram_mb":  499,
+                            "ports":  [
+                                          8088,
+                                          8443
+                                      ],
+                            "available_ram_mb":  382,
+                            "soc":  "MediaTek MT9632 (Quad-core ARM Cortex-A53, Mali-G52 GPU)",
+                            "model":  "AKAI AKTV5037N 50\" UHD 4K (m7332_eu)",
+                            "cpu_arch":  "armeabi-v7a (32-bit ARMv7-a)",
+                            "total_ram_mb":  1331,
+                            "lan_ip":  "192.168.1.8"
+                        },
+    "version":  "16.0.0",
+    "zip_archives":  [
+                         {
+                             "size_kb":  143.58,
+                             "size_bytes":  147026,
+                             "sha256":  "a88f172f4a64734213bbb46112ccd681127013a16224c5cb1e4b55c5b4ab1146",
+                             "name":  "01_AKAI_ANDROID_SOURCES.zip",
+                             "size_mb":  0.14
+                         },
+                         {
+                             "size_kb":  31.47,
+                             "size_bytes":  32223,
+                             "sha256":  "59efb5a1e984c2766b7322fd100a394e9c9a6f443b960c4a56b13c56292eb7d5",
+                             "name":  "02_AKAI_WEB_REMOTE.zip",
+                             "size_mb":  0.03
+                         },
+                         {
+                             "size_kb":  151.35,
+                             "size_bytes":  154983,
+                             "sha256":  "c4e4942da2cdddbda61b821c8dd0cad5f70a946602532102c9c30fae80869296",
+                             "name":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                             "size_mb":  0.15
+                         },
+                         {
+                             "size_kb":  23.71,
+                             "size_bytes":  24277,
+                             "sha256":  "18fc8cfdc1672f5283d007e84ff78451573b3864f76c1585c1d95554185d15b9",
+                             "name":  "04_AKAI_TESTS_REPORTS.zip",
+                             "size_mb":  0.02
+                         },
+                         {
+                             "size_kb":  19.02,
+                             "size_bytes":  19480,
+                             "sha256":  "f44fb78bea231ec413e973ee9e953560840e77d872193382bdafb64c265cfcda",
+                             "name":  "05_AKAI_HISTORY_BASELINES.zip",
+                             "size_mb":  0.02
+                         },
+                         {
+                             "size_kb":  160.14,
+                             "size_bytes":  163984,
+                             "sha256":  "0a75020cd1b0bf974f18af092194f953ed42a655aeca44b84549529d5b4c36e7",
+                             "name":  "06_AKAI_BINARIES_RELEASE.zip",
+                             "size_mb":  0.16
+                         },
+                         {
+                             "size_kb":  1618.42,
+                             "size_bytes":  1657266,
+                             "sha256":  "8b13bdd5d3985f57e174522b46fa9ceedbdb0b490d2571a060120a91a8b03853",
+                             "name":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                             "size_mb":  1.58
+                         }
+                     ],
+    "snapshot_date":  "2026-11-07T22:15:00Z",
+    "file_inventory":  [
+                           {
+                               "size_bytes":  1743,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\AndroidManifest.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "4d5f4dc8d58ef854c8db49896b4e2f38aaf1c93a856f3526f71a853432dbca6e"
+                           },
+                           {
+                               "size_bytes":  38602,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\java\\it\\akai\\customhome\\MainActivity.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "e2b13195a20c5756859caaf8d8b84315d548c2a3b6199e9f8bf0c15a116bbd45"
+                           },
+                           {
+                               "size_bytes":  356,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\drawable\\badge_akai.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "7f55b40ceab637f7b8bf9cfa057d4ec01a8523819b55602f6445de233643c6b4"
+                           },
+                           {
+                               "size_bytes":  845,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\drawable\\card_fav_selector.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "61948e16a41e4e656004185d5bfaa92d2848edfa9b42dc6a3730955b00148d7e"
+                           },
+                           {
+                               "size_bytes":  845,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\drawable\\card_focus_selector.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "4541097ba9f64af7484763eaf7dfe795802eedc861805f30a9076dbaa3f9cf2f"
+                           },
+                           {
+                               "size_bytes":  845,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\drawable\\header_btn_selector.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "58127535d28f0648a072dddaad46a9667c63d319f03c2d167851060615a9f736"
+                           },
+                           {
+                               "size_bytes":  845,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\drawable\\source_chip_selector.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "9e84da098cf2c43afcfd4fa8448904eb818254611d220f964b00e4449f39f768"
+                           },
+                           {
+                               "size_bytes":  12407,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\layout\\activity_main.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "7ed940b94d31ab80832189e4815a727c41c794a1e90282bd9bea5d431feee5eb"
+                           },
+                           {
+                               "size_bytes":  973,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\layout\\item_app_card.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "edacd28c0a9f6dc87076edb1d49c6c81eb07056c76608f40470ba0bf05a959dc"
+                           },
+                           {
+                               "size_bytes":  1000,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\layout\\item_fav_card.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "ba4bfeb1c70ec644982d4b937a10c4c670be6e1053f8c9ecb6b4b4f37e43b509"
+                           },
+                           {
+                               "size_bytes":  602,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\values\\colors.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "464cd7045477d6d94912ff64b7767f5c3d3d6c1cd5f18307dde2cb8bdaac54bc"
+                           },
+                           {
+                               "size_bytes":  1005,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\values\\strings.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "54f691847591202508af6d680ff1620cc031db016316377589986db289cd87ce"
+                           },
+                           {
+                               "size_bytes":  490,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-custom-home\\app\\src\\main\\res\\values\\styles.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "4e05ccd27fd078b7c4808682b67fdefc78f2e18ff441a93665c5892791a819cb"
+                           },
+                           {
+                               "size_bytes":  4129,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\AndroidManifest.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "534befe0ce54de10f83acbe8632759e0745dfafb51cee58f416ac72c18f9ca17"
+                           },
+                           {
+                               "size_bytes":  1192,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\assets\\www\\AkaiRootCA.crt",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "dc176536531563c40ac9a0355c2c1e983c02c7abc89a8d7e80c958835569d32e"
+                           },
+                           {
+                               "size_bytes":  70041,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\assets\\www\\app.js",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "e62a8c7710ac8fd378cb71d74b0bf166f0e839b38f19e123d42a5364c5458bda"
+                           },
+                           {
+                               "size_bytes":  1855,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\assets\\www\\icon.svg",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "e575f2934c7915b29a88f3fdc183d38e9546e9ff67bedcfae1d9f024acb2c696"
+                           },
+                           {
+                               "size_bytes":  40409,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\assets\\www\\index.html",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "3c5ae307fba26b44b291275daa073f454a686693b588545e96a3b582c7c33a1f"
+                           },
+                           {
+                               "size_bytes":  664,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\assets\\www\\manifest.json",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "1c5546c4faad5cdde50bda64dfeb6824ea9e848d112a9ac8b49aef4b77be9aa8"
+                           },
+                           {
+                               "size_bytes":  34204,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\assets\\www\\style.css",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "57dc1813ad0432955ce26ab18691b9e24531dec94529cf714c25a4754afdf0b7"
+                           },
+                           {
+                               "size_bytes":  1636,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\assets\\www\\sw.js",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "9edf6b072167499d0286c01f10b444b5912721071fe28f1592d0bdbc8fc6e2ae"
+                           },
+                           {
+                               "size_bytes":  14463,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\AkaiAccessibilityService.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "c4e30971712eabac0ef74dfd961c26d02b67cc1029059bf14408757f6cb08d25"
+                           },
+                           {
+                               "size_bytes":  1433,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\BootReceiver.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "f96cec78bf6a595b41751a420cfe83dce9d1ee933906aa484dd71b9dab10f3ee"
+                           },
+                           {
+                               "size_bytes":  15911,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\LocalDiagnosticsManager.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "9dede692c83f800be5fc892c574799f66f54513539d3a8b388982fb8ecd4282e"
+                           },
+                           {
+                               "size_bytes":  5534,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\MainActivity.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "12f95004a7d5d78b5503b59053bab2cfc1aa810b3db227149e38f0d99dc13ebf"
+                           },
+                           {
+                               "size_bytes":  5658,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\PinActivity.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "ede76b7b6af1a8a352f8943c5a6d0b5166f86c1efc513013179563eeb3f17d18"
+                           },
+                           {
+                               "size_bytes":  504,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\PinOverlayDialog.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "b46e8efc14a722883e95936bf0d8d0fc253ba8685040eee328114506cb2e7864"
+                           },
+                           {
+                               "size_bytes":  49966,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\RemoteServerService.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "2931e53d31f19d469e3ae353f486a84f8e5b30e99e73d2c00da447e1bee5e742"
+                           },
+                           {
+                               "size_bytes":  11833,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\SecurityManager.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "cd786cc0375ee9dd691e851e9929728326bde6b1c29f27da61961baf1291fb12"
+                           },
+                           {
+                               "size_bytes":  19264,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\TvController.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "2ecbe8919a07a0143054343f9cd4ea8a3b01b74ace19be1b68ce929d448bd7ed"
+                           },
+                           {
+                               "size_bytes":  5472,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\UInputDriver.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "3f151243f383fd609d7cb5b2dae94fc740d33a6c52e20b47fcd4c7520bf7b11e"
+                           },
+                           {
+                               "size_bytes":  29721,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\ai\\AiProviderAdapter.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "d04e4538d1e3878573275e787543c53c9016d559967da2db653a0bcdde07f3da"
+                           },
+                           {
+                               "size_bytes":  24552,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\ai\\AkaiAiController.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "e5cc0fbf90cd6ebf0bd5ccb8304b262e159424c2d41036decda17c21b87bb8ea"
+                           },
+                           {
+                               "size_bytes":  33845,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\ai\\AkaiMemoryEngine.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "01a25ac324587caf651ef44c8d29f924df5ed9aa152f03400d52302ad72076e2"
+                           },
+                           {
+                               "size_bytes":  14091,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\ai\\AkaiSpeechEngine.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "ff74dd8074525c392a6bc0542b3550d3e8033816317ba36cfba7b1928c284394"
+                           },
+                           {
+                               "size_bytes":  16740,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\ai\\CloudSpeechAdapter.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "2ec9ff6e241dad2360f040330a8c38302830320eafc706d22c4bb09cd69d4816"
+                           },
+                           {
+                               "size_bytes":  8374,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\ai\\KeystoreSecurityHelper.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "0e6ce07295c858f9f0322c55a58c12e5120f6d2e747f68538c4f3efb61793105"
+                           },
+                           {
+                               "size_bytes":  13469,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\ai\\LocalIntentParser.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "393684d2cf2ffde54c721195d8f74606ffc4cc75d782352ebd68146e2247bf26"
+                           },
+                           {
+                               "size_bytes":  13069,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\ai\\ScreenPerceptionEngine.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "b2655cb3c07fa53be95cf530048222a7657f2a96e26c15790a817672d1207791"
+                           },
+                           {
+                               "size_bytes":  4165,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\qr\\BitBuffer.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "195fe361e49afaf9af854e005350767aa280b42fdcbe8a6d1a9761f59494b218"
+                           },
+                           {
+                               "size_bytes":  2896,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\qr\\DataTooLongException.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "d930e46b3b9989edcaabfbcf4b887931e7bb4cc278fc0ab2ca3b9b3baf2135d5"
+                           },
+                           {
+                               "size_bytes":  975,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\qr\\QrBitmapUtil.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "8f422bc04cbc8a78700cb0503284bd35fbc13114e4327b848531d1a1bacbc6ac"
+                           },
+                           {
+                               "size_bytes":  35244,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\qr\\QrCode.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "41ed296942447319bfd5c43d3f6964600fa4ecf2e52d03f8191223e8c78074c8"
+                           },
+                           {
+                               "size_bytes":  12240,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\java\\it\\akai\\customremote\\qr\\QrSegment.java",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "2dfb4df12414d40fcadb6bec34529fe0827e8bc10bd62114cd7fe95a5200476a"
+                           },
+                           {
+                               "size_bytes":  166,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\jni\\Android.mk",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "1f9bbc58e2845a09c4eec99f577ae86cbceabf4e8a5053cf66868379aadd16da"
+                           },
+                           {
+                               "size_bytes":  66,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\jni\\Application.mk",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "509224a622a97b0cb0bc1a3e0fa0fc7ed5289b1a94b873012bc7c90d5c603e0d"
+                           },
+                           {
+                               "size_bytes":  3728,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\jni\\uinput_jni.c",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "8eab0e031a0092f4ee471797eae625a52f441234bae5a2e6b30b6043ec31b8ef"
+                           },
+                           {
+                               "size_bytes":  6948,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\jniLibs\\armeabi-v7a\\libakai_uinput.so",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "3b0ba6e55efeb2acc38114466b6672092b755fccc1c2c79bc7078b612817f4be"
+                           },
+                           {
+                               "size_bytes":  903,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\res\\drawable\\card_focus_selector.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "a6076cf93fe0fba566850a334506588f54290c5bc35107eb3679f81909b513e6"
+                           },
+                           {
+                               "size_bytes":  632,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\res\\drawable\\source_chip_selector.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "15570554766f5f44befa71e5874d3171144ce212ac623f0332e8addf56c7b207"
+                           },
+                           {
+                               "size_bytes":  4527,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\res\\layout\\activity_main.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "689b2fe23995f64c7398f1dc9c8915bb758ba22107ad015ac5f5d81c18f6a2fc"
+                           },
+                           {
+                               "size_bytes":  6824,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\res\\layout\\dialog_pin.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "36bc92fd4c45292f604bca37ecec445900218f9ec3a77f039789dfe53a0ccd48"
+                           },
+                           {
+                               "size_bytes":  207,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\res\\values\\colors.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "f54bcd3ab26cd80811ef5761174030ca14180498e88fcbb5d5670f5084d0afa3"
+                           },
+                           {
+                               "size_bytes":  233,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\res\\values\\strings.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "9968ada87090d894ab445f917661439419582872f06a4859e82ceeb8c5440927"
+                           },
+                           {
+                               "size_bytes":  732,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\res\\values\\styles.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "00f7a853b3161db3de93f9f6ed3a28b638823660b5c9ff52429e0792cdec3708"
+                           },
+                           {
+                               "size_bytes":  530,
+                               "relative_path":  "01_AKAI_ANDROID_SOURCES\\akai-remote-tv\\app\\src\\main\\res\\xml\\accessibility_service_config.xml",
+                               "archive":  "01_AKAI_ANDROID_SOURCES.zip",
+                               "sha256":  "cc7d6c90cb91bbbcf48af62e65d6956d61a3926ed482e2512ef9999693473bdd"
+                           },
+                           {
+                               "size_bytes":  1192,
+                               "relative_path":  "02_AKAI_WEB_REMOTE\\AkaiRootCA.crt",
+                               "archive":  "02_AKAI_WEB_REMOTE.zip",
+                               "sha256":  "dc176536531563c40ac9a0355c2c1e983c02c7abc89a8d7e80c958835569d32e"
+                           },
+                           {
+                               "size_bytes":  70041,
+                               "relative_path":  "02_AKAI_WEB_REMOTE\\app.js",
+                               "archive":  "02_AKAI_WEB_REMOTE.zip",
+                               "sha256":  "e62a8c7710ac8fd378cb71d74b0bf166f0e839b38f19e123d42a5364c5458bda"
+                           },
+                           {
+                               "size_bytes":  1855,
+                               "relative_path":  "02_AKAI_WEB_REMOTE\\icon.svg",
+                               "archive":  "02_AKAI_WEB_REMOTE.zip",
+                               "sha256":  "e575f2934c7915b29a88f3fdc183d38e9546e9ff67bedcfae1d9f024acb2c696"
+                           },
+                           {
+                               "size_bytes":  40409,
+                               "relative_path":  "02_AKAI_WEB_REMOTE\\index.html",
+                               "archive":  "02_AKAI_WEB_REMOTE.zip",
+                               "sha256":  "3c5ae307fba26b44b291275daa073f454a686693b588545e96a3b582c7c33a1f"
+                           },
+                           {
+                               "size_bytes":  664,
+                               "relative_path":  "02_AKAI_WEB_REMOTE\\manifest.json",
+                               "archive":  "02_AKAI_WEB_REMOTE.zip",
+                               "sha256":  "1c5546c4faad5cdde50bda64dfeb6824ea9e848d112a9ac8b49aef4b77be9aa8"
+                           },
+                           {
+                               "size_bytes":  34204,
+                               "relative_path":  "02_AKAI_WEB_REMOTE\\style.css",
+                               "archive":  "02_AKAI_WEB_REMOTE.zip",
+                               "sha256":  "57dc1813ad0432955ce26ab18691b9e24531dec94529cf714c25a4754afdf0b7"
+                           },
+                           {
+                               "size_bytes":  1636,
+                               "relative_path":  "02_AKAI_WEB_REMOTE\\sw.js",
+                               "archive":  "02_AKAI_WEB_REMOTE.zip",
+                               "sha256":  "9edf6b072167499d0286c01f10b444b5912721071fe28f1592d0bdbc8fc6e2ae"
+                           },
+                           {
+                               "size_bytes":  1417,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\TOOLCHAIN_SPECS.md",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "3f46f1ca9063c8099cd6f8e19dfbe80999891711f03fda18ce69c6222f2a4d0c"
+                           },
+                           {
+                               "size_bytes":  1803,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\01_check_tools.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "cc16d171d304e8a05c5d653c7f63d9e02a0e5a31dd7b2c41eb6f956cce320f06"
+                           },
+                           {
+                               "size_bytes":  1559,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\02_connect_tv.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5ded3c91275ecb9cc374565f6cfe79aabd4b962b789e1ee00525edfa7ed079eb"
+                           },
+                           {
+                               "size_bytes":  3401,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\03_read_only_audit.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "75da5fef45b53a34562494c5081988b0326c67e4a081fcda86a0bddc84d23873"
+                           },
+                           {
+                               "size_bytes":  4291,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\04_diagnose_eco_popup.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "cd10423b1dfdb37dd4d0f50185be5f67d65f4fadd032cf392c160473e1959570"
+                           },
+                           {
+                               "size_bytes":  17512,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\05_monitor_performance.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "da825e65acf4ca3a3644d68656aabe7d2aa9289a029629044e52dec5ab0526af"
+                           },
+                           {
+                               "size_bytes":  9534,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\06_diagnose_cpu_load.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "1633e13c4cd0ff52aa374b60dcd76fec9e21d87e5d479a00cc6ab8507145add3"
+                           },
+                           {
+                               "size_bytes":  4812,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\07_test_ltvlauncher.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "66ca5ff52d3e2cb9edc747af779b152d504a33dec29ccc5be4e5aa83288029a6"
+                           },
+                           {
+                               "size_bytes":  6726,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\08_compile_akai_remote_apk.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "ad3ac38f22249672750454bd9955232719c646ee36a3997ecdb05173d5133a44"
+                           },
+                           {
+                               "size_bytes":  4947,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\09_compile_akai_home_apk.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "621abae0a9b89538d325b2e4d6b1535129d4a2700ffef55c6cdf18c0cfb6e8b9"
+                           },
+                           {
+                               "size_bytes":  6538,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\10_pull_diagnostics.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "7e557ddf562f284e8b999522b63c7ef061e65e50590e815c38213dccce36749b"
+                           },
+                           {
+                               "size_bytes":  326,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_analyze_rai1_log.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "24be358b116debf11bf0ec80688c16b5a42ea7e4e6cd9538bfbcce30a6885d55"
+                           },
+                           {
+                               "size_bytes":  154,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_analyze_raiplay_log.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "068197d4761631e76d49bbb6534432e6d3fcfe8463810ee778785eb78648793b"
+                           },
+                           {
+                               "size_bytes":  1843,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_audit_env.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "65765102fb8bc73b7334027043b19f1f6e8518e586e8ad12f536d6b6dc1c8b82"
+                           },
+                           {
+                               "size_bytes":  974,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_audit_system.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5d937c63a5eecbf882d8694a75f6eb75fa746b93409049e108165ebafe82d2d2"
+                           },
+                           {
+                               "size_bytes":  2695,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_cdp_eval.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "82bbb7cb50e606953bf6403f7ffae7360e24e6add88331cf777f5a62ff759a9c"
+                           },
+                           {
+                               "size_bytes":  222,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_acodec_log.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "1f473908def2586c6c5442bd5ba5114680274e7733b4f4e45a3b04aafb51e6c0"
+                           },
+                           {
+                               "size_bytes":  488,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_audio.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "84d0b2c5faf50fb8c29afcd4e88d1fd568075e92f1dfdaf1342ba3af54ced2c8"
+                           },
+                           {
+                               "size_bytes":  719,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_codecs.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "839f65c157a8a040591447129a5398042bd26b51a1e7ae3b47b4547e475c4f18"
+                           },
+                           {
+                               "size_bytes":  318,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_devtools.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "aca56f488e7368ba0cb5702b634c1cfe863163b911ba54642be1e90d7011adee"
+                           },
+                           {
+                               "size_bytes":  754,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_drm.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "7b641b727c8b63db4fc245944b376db102eed71dc2cb15decbc0006ff224638b"
+                           },
+                           {
+                               "size_bytes":  363,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_framework_sig.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "f3d744e3df636e49981df558450f690ea079e46a6aa2f6465529ffc1d5472a8d"
+                           },
+                           {
+                               "size_bytes":  719,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_salvadori.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "35df2b4666bc5cc30ffd039e6c8823e7cf4b1b5ab9289cd94f4f5f98f95eb398"
+                           },
+                           {
+                               "size_bytes":  806,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_tv_webview.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "caa714741271bb1aef3957062643b56401f648feb5606ca370fa207a119ed98a"
+                           },
+                           {
+                               "size_bytes":  381,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_webview_sig.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "09f7ab2eda24bb4b81224d3a0a1dfab344d9572ee37883882a007969c72ccb90"
+                           },
+                           {
+                               "size_bytes":  529,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_check_webview_whitelist.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "e04f0a33e95f4dfb972828f59bd14bbab88d90c2a3049124c2e78f4a6eac8320"
+                           },
+                           {
+                               "size_bytes":  433,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dexdump_bridge_awk.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "7e4de793f364f26e7189b2b12391bb939e4f0bfdf534060c7726589cadeea449"
+                           },
+                           {
+                               "size_bytes":  434,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dexdump_classes.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "86b304284b33864483b54f6e152b8680e8a6d90d63f46d754047a4ef9b30a18e"
+                           },
+                           {
+                               "size_bytes":  566,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dexdump_classes3.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2b1a19012fcfe3a2c9a53878ac6be528e9430f0ea846b9fb9a4ec8f318bdf9ab"
+                           },
+                           {
+                               "size_bytes":  336,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dexdump_install_detail.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2f031635d553a0248a290ae381f9966091002c76248b28bfe5dd591600660605"
+                           },
+                           {
+                               "size_bytes":  602,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dexdump_methods.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "8b35e11982bfe2d4bbb4abd8a6757e980450a2ba7c1f4fdf179c01708c5777f1"
+                           },
+                           {
+                               "size_bytes":  390,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dexdump_webmessage.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "763728b773bbddc9ad923294817cb31c6bfde32d3aa4093f6aa9e1966c99c40f"
+                           },
+                           {
+                               "size_bytes":  428,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dump_availability_class.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "4a2fc29386730cffad60de17b7a87fdc443c2cb73b4d9688840166e461f43aa8"
+                           },
+                           {
+                               "size_bytes":  358,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dump_bridge_install.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "c33ecca485488b4e7fc2262422127f9ce77828691bcd8d7bd7385e205cede076"
+                           },
+                           {
+                               "size_bytes":  387,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dump_bridge_installer_install.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "1087dc89899bdeefc322c5f3d2ed0a1aa748518ac3f705133ac4c6f0ab0c9b25"
+                           },
+                           {
+                               "size_bytes":  993,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dump_dex_strings.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "3c2281086abd9d8fae495abeef8a6edb48cfb65c4037ccf2e2830cac71e6c067"
+                           },
+                           {
+                               "size_bytes":  348,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dump_install_bridge.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "d1df125ff9c73e56c318b2e8e7233319262d998efa23aa068f544f4e36e17cd6"
+                           },
+                           {
+                               "size_bytes":  344,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dump_isavailable_code.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "a80f81d517fa49385a18fdead940e3189a73ee2969c113af3c29adbf6b4e3637"
+                           },
+                           {
+                               "size_bytes":  647,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_dump_mediaset_ui.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "0ac6e819de3769eedc659340bdf13e26e1a3b8606f6b2f0256da83811a254581"
+                           },
+                           {
+                               "size_bytes":  507,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_find_androidtvbridge.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "8b3a09a03dc46791f59304d85fb8adec875a89baa82e250117216dee87b5a87b"
+                           },
+                           {
+                               "size_bytes":  740,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_find_androidtvhost.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "b45c6cce3201fac12a2bc3c460dcc8f243b4e1a8b57ea036cc8d1d63ea47db4d"
+                           },
+                           {
+                               "size_bytes":  351,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_find_callers_availability.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "27fd64b7732ed3f8178c9947554b9bb26582e5f791441b724964bb69076e1336"
+                           },
+                           {
+                               "size_bytes":  1256,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_find_italia2.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "1227d37b32cb2b54e9c92b53041e59eed6d3fe597dd54640ac8c8185597dc1f7"
+                           },
+                           {
+                               "size_bytes":  802,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_find_main_activity.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "9f39add24f49b2cd4a62edbeb21eda59246ab4f5d3bdc4a3a424bcde4444275a"
+                           },
+                           {
+                               "size_bytes":  448,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_find_playback_logic.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "4bd23f1ee623f3b5b051a930ea595a14bc3d7c3299fb6a78931b5f9d6a3783c3"
+                           },
+                           {
+                               "size_bytes":  671,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_find_raiplay_pid_logs.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "97b67ad3cd4ebebb93316f5c90ca9a39702721d4489f8535e4737149da397994"
+                           },
+                           {
+                               "size_bytes":  359,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_find_transport_writes.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "d9c57bcdc4f0f0542b059343f3dd9d15120d9b15f12a182d1df0e1413c75f6bc"
+                           },
+                           {
+                               "size_bytes":  985,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_goto_dirette.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "f79e69a7bdd095c0fe748f364388f7f73919164931f8bfd5ff8720e3142510df"
+                           },
+                           {
+                               "size_bytes":  3556,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_hook_raiplay_errors.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "39a2ef7209359da44d46edee8386ec683493579361e46be03a8a4014a2450088"
+                           },
+                           {
+                               "size_bytes":  2130,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_adapter_load.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "4e21810eff7ab66820fb0e95e98774c129f73569434467e5547e4b369dc42dda"
+                           },
+                           {
+                               "size_bytes":  534,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_availability_dex.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "6b3c3b3562d78aa8423909b84f549986a3f0da80324e14fe2def2c3cc5ba3d3f"
+                           },
+                           {
+                               "size_bytes":  1641,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_capabilities_json.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "83ec88113581868cd0fda7e4b08b8306b24cb90bfcd14beda36bc194d96c82e5"
+                           },
+                           {
+                               "size_bytes":  2100,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_contract.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2f2a81bf585b3e309b784c7b2225251a5650b84eeb32b865a92528084ae698ee"
+                           },
+                           {
+                               "size_bytes":  530,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_decision.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "431bc9c78d3b1b919549b122536061089c6b663702aa835d9a56b7ae9b5c69f5"
+                           },
+                           {
+                               "size_bytes":  1868,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_detect.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "17c2177871701213d0f79f3ceff1d5b849f43e57e9ef0315302cbf9dcc35df4b"
+                           },
+                           {
+                               "size_bytes":  778,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_dex_snippet.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "99933eddfb18d9e67186137ed44655bddd0f95d267e8e3ef210d62034018d481"
+                           },
+                           {
+                               "size_bytes":  2589,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_globals.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "7e4dfdca82ed5e864a0d2bd4570e8ec0ff4c3668dee2c1455e8c7326f8b3fbe5"
+                           },
+                           {
+                               "size_bytes":  808,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_mediaset.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "c488f26a407bf05b4a3fa447050e14c93874ab5e25d35c45eb132958da89e560"
+                           },
+                           {
+                               "size_bytes":  2413,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_nativehostbridge.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "936b55a6db2be05209bf3ff6caeac26ddb87635a387b4e69cc1f8aaff1756f0e"
+                           },
+                           {
+                               "size_bytes":  2387,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_native_host.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "b7f845943fefd929e475a4a3932133c7e68eb27c4e0fb6c961f8de7be9d7f770"
+                           },
+                           {
+                               "size_bytes":  628,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_native_player_enabled.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "e8bff618f2635d0de9f7d5073e27482048aa34df28338e8998f07def06e535b4"
+                           },
+                           {
+                               "size_bytes":  2424,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_player_bridge.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "76d7f128b36d48cd3ca487f79b7b94f8c1bcb2d5df1b69e66f510233ea9c2772"
+                           },
+                           {
+                               "size_bytes":  2140,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_player_config.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "6d6a50ad70348e5a743d8564f456062742229138fbeef123dfedff527b283d3f"
+                           },
+                           {
+                               "size_bytes":  1629,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_player_config_detail.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "f29cfcd1fe33c28c76c00404e41e174401d2ef262fa8ef9425344a1b8e2a0234"
+                           },
+                           {
+                               "size_bytes":  1779,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_player_error.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "c7a89bc1faf986baa9c13aef5516f4a0e6bf5a15c18ca8c3830213b02bf2d876"
+                           },
+                           {
+                               "size_bytes":  1928,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_provider.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "0315338e3b59aedb7754e937ce8a2e00804321d7fcba642ffc8ce954ea0dec23"
+                           },
+                           {
+                               "size_bytes":  2028,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_providers_detail.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "277013cab8cf49e6ed845ddae54deffac55dbdf6811a6cf796eb79f8b154d59e"
+                           },
+                           {
+                               "size_bytes":  347,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_raiplay.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "374d643fdd3ce45cc0c9cb35c8a875dbc603f61808da4a9e340bac75a1dadfc6"
+                           },
+                           {
+                               "size_bytes":  469,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_raiplay_apk.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "dc04bd065cb6e203ecb37fa18b4e926050904d568e839408b882f507c0ac9dc4"
+                           },
+                           {
+                               "size_bytes":  384,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_raiplay_deep.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "63122c86a6ea554bef72dca8931eced061ac2702bef1d41be4f2d6e81cdb4286"
+                           },
+                           {
+                               "size_bytes":  634,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_raiplay_storage.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5227adc6df1660d4e491045bfe1f5a89be8950d8f19770e0255c0376eaa8db1a"
+                           },
+                           {
+                               "size_bytes":  605,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_raiplay_webview.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "7e2ed878fb5824cb82ef1966dd2e3369f1744f9e84450f8475a290ec8632ceed"
+                           },
+                           {
+                               "size_bytes":  1211,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_remote_config.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5d4b523137559e85f2891a0c041c7fcb9dc269e9e78da00473b5447a51439855"
+                           },
+                           {
+                               "size_bytes":  2274,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_remote_config_cdp.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "c707ce3c14b70b8ef0ebf7b1e1357459cad5376a4232d69483bbe48d01894b3e"
+                           },
+                           {
+                               "size_bytes":  2220,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_requirements.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "0002e5ed33b11dd402464d8035acf022e424ef160bcf9b3a5cc32ebd69bc61dc"
+                           },
+                           {
+                               "size_bytes":  2104,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_requirements_detail.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "74f87b2fe234804c436755b07d7a9670b2295d701da057d7aaa34a3b84366a2e"
+                           },
+                           {
+                               "size_bytes":  1844,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_rpconfig.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "00375944331c9916f90c3d65768483ef1cb2cfbab36e6434a27d6fc83209847c"
+                           },
+                           {
+                               "size_bytes":  486,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_salvadori_files.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "85f2caf5058eb31c46d34408a40ff5cce7aad04359ac06a1cb2ecbaa6dfecbce"
+                           },
+                           {
+                               "size_bytes":  634,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_startup_config.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "b15503d59f0de3beb23621e16aa5a8b58ec44185bc534e7994cdceccfb1b2bd1"
+                           },
+                           {
+                               "size_bytes":  638,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_startup_config_detail.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "13ef26288bdc5478e7882212443e02f03a05c46be69c6121e768dc13f4b67c99"
+                           },
+                           {
+                               "size_bytes":  634,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_store.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "582ab8b47e96a35c196d593f383d35f77d194c6cedee60ab5315cca45f16c17b"
+                           },
+                           {
+                               "size_bytes":  536,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_inspect_store_code.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "527751b2713c4151ab752d0dbeffab87048ee297faba6c6145e66527a2ffe855"
+                           },
+                           {
+                               "size_bytes":  295,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_list_nativeplayer_classes.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "01010738247b776d55b6cbcfbb1f41f8ec888c9066f22a733a3ca1c34586fdf1"
+                           },
+                           {
+                               "size_bytes":  443,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_list_raiplay_classes.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "1e58284a58821b7a54a2e3e35d310f8c39396b4783b99ec57defed6a0104a4ee"
+                           },
+                           {
+                               "size_bytes":  707,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_open_channels.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5db74b719f5ec9f4c748d67a105d90c0eabd6b04a1a71f83dfcceaa154059d0e"
+                           },
+                           {
+                               "size_bytes":  648,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_press_cookie.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2daad15292e6314c23422b63a20b906f3ba53f909b628ef2209841a0ddaee2b2"
+                           },
+                           {
+                               "size_bytes":  553,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_pull_raiplay_apk.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "176e6dfa4663b8f66d774533597fdcb292883ab55b695c468b2a3f8d9dbb4c13"
+                           },
+                           {
+                               "size_bytes":  455,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_pull_screen.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "6d2e8d10f957db819f970c9fcd03ce5c3f4f75cc73efde68a6e4af8f74257893"
+                           },
+                           {
+                               "size_bytes":  783,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_query_devtools.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "dafa78766bfedf50d1818716fe0214a8176df5f5b1369d3a4ae9e8240389091e"
+                           },
+                           {
+                               "size_bytes":  1326,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_scan_dex.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "e846a5c8531f8b714f53b7540881dc8a9b143182ec1cc9c115d2402678544fc6"
+                           },
+                           {
+                               "size_bytes":  2032,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_search_availability.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "a3283e218c22a07346f9dec78fa88eebbd5469a9bc098cd3b1a6dcd82ef47e0b"
+                           },
+                           {
+                               "size_bytes":  915,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_search_italia2.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "e01a015b03796a9f35f5a246cd22d048e86c980361b0e66e60d07d3bd7e3bbd2"
+                           },
+                           {
+                               "size_bytes":  2205,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_search_js_error.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "18fac796e81b7b9ec616125b8f5017b36e9e32635ab181176f68fd42caac003c"
+                           },
+                           {
+                               "size_bytes":  626,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_select_raiplay_profile.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "4a65f04a324f2669e479e1579748308c1d5728b53f98a458732aa57c56222b11"
+                           },
+                           {
+                               "size_bytes":  564,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_switch_channel.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "25fa7ac9efcfd72db6bf9a4bff4ad9906249262bb96796e5d2995977bfe032e9"
+                           },
+                           {
+                               "size_bytes":  614,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_tap_dirette.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "455911142e68360ddf0408b96f91cbc80b1d28c932933127a2734bd5946acbf7"
+                           },
+                           {
+                               "size_bytes":  885,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_click_cookie.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "591289ebef43f0a7e634ce6b2c81a0580bc917fc2e9b01f1ed4665f6e29fc62e"
+                           },
+                           {
+                               "size_bytes":  841,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_dpad.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "287bb71c91b271b0356b33cc184d75318e7e28f5ac24c65709ee19c1ed881590"
+                           },
+                           {
+                               "size_bytes":  1093,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_mediaset.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "1f7e28daa797b07ab4a05fcd0b04e7a74f871d1c923ecee8db1e5bc6dd27ced4"
+                           },
+                           {
+                               "size_bytes":  740,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_nav.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "4b08b2cc0fb726c58d7221aa48897ae4d1984bba75967788052fa7a74ee0e7c1"
+                           },
+                           {
+                               "size_bytes":  842,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_play_mediaset.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "b464b45b175da5f7059df8f94bf32b15ff6c4dcdb61e2e7da57092146273783b"
+                           },
+                           {
+                               "size_bytes":  900,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_raiplay_dirette.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "086c0bc2b246da0ffdcbee45cb321e1bcb40b41105bbd1d28a1da2a147b0814d"
+                           },
+                           {
+                               "size_bytes":  892,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_raiplay_playback.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "86e7165d78f729d2271b746e214c0d00076061f8d725b10074e70d2d0ddf77ee"
+                           },
+                           {
+                               "size_bytes":  742,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_raiplay_video.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "9f43a48d71988efd0ac5d69f468c10621c1eb66bee84c55b046cb62a1d713688"
+                           },
+                           {
+                               "size_bytes":  967,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\11_test_rai_live.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "b54a472b9d2067eb293c3b8fb813ad45c0a81e95d465ff178786e5fab34eda04"
+                           },
+                           {
+                               "size_bytes":  1859,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\99_emergency_restore.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "cfd2a3711f2e5ff331f673db682d179aba313b520205371173116bce295f0953"
+                           },
+                           {
+                               "size_bytes":  4442,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\analyze_androidtv_v4_jadx_mcp.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "e1b15c8cfadc1d7d0c2dc69f9fb2bf9045be73b4454c34d63898daf1e5ead253"
+                           },
+                           {
+                               "size_bytes":  10358,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\assemble_full_audit.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "d88c4f3801dce9f263a25f374873019fd08e58a1afe0b67f448cf9b1055abdc7"
+                           },
+                           {
+                               "size_bytes":  2156,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\call_rea_mcp_operational.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "96ef377094fd7ded1a86784e4d0390e4e9d81d0514c430a4e3cde0d923ec7f62"
+                           },
+                           {
+                               "size_bytes":  1060,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\check_aptoide.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "60216029a73b1de4252d5870ece8470cb6ef498a3828e6e0429cce7fc987d3a1"
+                           },
+                           {
+                               "size_bytes":  1059,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\check_aptoide_single.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "42cf95c814b50a2268450f85f2822e8b8aa7c5a17210d8dc0562bc73c9f8e060"
+                           },
+                           {
+                               "size_bytes":  1417,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\check_download_links.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "3496d3d718308f91fd23dba5f3a1cf85eb373f915659c6b3b55548bf9a4c931b"
+                           },
+                           {
+                               "size_bytes":  181,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\check_jadx_flags.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "8881385c8fc0aa990c5e7f1f860491b03bd9cd39a32fd5c1d09600f617f7d4e9"
+                           },
+                           {
+                               "size_bytes":  482,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\check_uptodown.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "527a3bdff8718afedf991144b39664151a241e5201ade6ac261aee5d5997b3f6"
+                           },
+                           {
+                               "size_bytes":  958,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\check_uptodown_download.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5f3c57f745889ba9aade5d4ea9256d57c2ece8bffe6b54084e1e1ec2f2951829"
+                           },
+                           {
+                               "size_bytes":  6967,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\create_audit_package.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "1a979879856d6d771a6c1ef30d9e9f0711256a03e44e63a072e1ba270d61b6b0"
+                           },
+                           {
+                               "size_bytes":  4930,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\download_androidtv_v4.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "30f76d50bf8ad2564edba0da88b9615a0ca7b1228e08bc1b1a53e99e41e57843"
+                           },
+                           {
+                               "size_bytes":  3201,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\download_disney.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "da09a32d63bba76b4bd32ba7ac11d5ecf4271d8f5b163882d128b491eca3adbd"
+                           },
+                           {
+                               "size_bytes":  2549,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\download_disney_direct.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "55ecc34dcc3fca226d07dc36b970305c4caf03b3ed7c7ec1b6c3be08c6a7ccdd"
+                           },
+                           {
+                               "size_bytes":  3339,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\download_raiplay.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "588f6af52d3ef9e24aae3916f32414af64a42f4a795772b319778afea11ec203"
+                           },
+                           {
+                               "size_bytes":  603,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\download_raiplay_4211.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2183faf1c07a66cd0fca899336947178b89fba37b7f4f8d4d5c555162294adcf"
+                           },
+                           {
+                               "size_bytes":  656,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\dump_uptodown_versions.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "6fb492b45fb447e9e44d727acfa8ab16067b82194daa12ce68c697421d418e83"
+                           },
+                           {
+                               "size_bytes":  333,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\exec_sql.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "b452d4bb13f626f1b8c76b48e8462506d481012f27959fc03a84f839b63475fb"
+                           },
+                           {
+                               "size_bytes":  1018,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\extract_and_inspect_disney.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2cea41d35614b72b62f553f6dbb5350aaf71f1d22873228bb9fb81c53d800f36"
+                           },
+                           {
+                               "size_bytes":  3681,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\fase11_4_preliminary_checks.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "ab3afab0aaf0193858ca304716b913dd3534950b601056c447163dda0dabd7ee"
+                           },
+                           {
+                               "size_bytes":  2936,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\fase12_hardware_benchmark.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "68b1d507145adbe7cafd76bded423183817911601b4eea1b3157580bb8eabca2"
+                           },
+                           {
+                               "size_bytes":  1291,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\fetch_apkmirror.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "b116b33db6ed3a93bd8d2e3cce87354eb1bf4f6494ea588080346ce3d3452c99"
+                           },
+                           {
+                               "size_bytes":  419,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\find_node_zip.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "752a2b814d244f2c80b5391a43bae653076bc461ae8db7dd27366e4f6d179fc5"
+                           },
+                           {
+                               "size_bytes":  2351,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\find_player_v4.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "7c38ab156b454bf706193cb3aefab21464e5f5d9d0ffca8353f4c1cc1b180da4"
+                           },
+                           {
+                               "size_bytes":  3375,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\generate_tv_tls_keystore.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "d6dce56211c3169f421195fe1e5f51d1fb88f5b34d295899512a1cd6ffb4cf1c"
+                           },
+                           {
+                               "size_bytes":  2038,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\get_player_fragment.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "c8ab170a941bff1b64a4f17dade11803514cbb6e09ed4fdbc93e6087b21b602d"
+                           },
+                           {
+                               "size_bytes":  2244,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\get_player_source.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2e9ae0d234dac518216d3d7d44f4a51f688effaea64f8653d0bb000fdff73dfa"
+                           },
+                           {
+                               "size_bytes":  1970,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\get_player_status.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "a555df297709fd89a6ce404f45112f34815b89467b34a5a498f89c6b6e985c2d"
+                           },
+                           {
+                               "size_bytes":  654,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\get_uptodown_en.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "ca481dcdc79c7618a191e3949bc29ce9e869a0fa3b0c7821fc5d04e6e570e4c4"
+                           },
+                           {
+                               "size_bytes":  458,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\get_uptodown_js.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "bcaf7ba7bc7b9a38cde5580c62433913bf6f4244794a413b778fc3de644a9515"
+                           },
+                           {
+                               "size_bytes":  547,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\get_uptodown_urls.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "06306e609374206a753f8d65ae305be9c63c3fc0537c8934255ef138c8918ce0"
+                           },
+                           {
+                               "size_bytes":  492,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\get_uptodown_versions.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "a3cb82412a3221303670d87afc5bc1b0a2912b536c5c9e746c5e4dd88ab6b003"
+                           },
+                           {
+                               "size_bytes":  910,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\inspect_apkpure_net.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2c6502f82c0f67e4d3edd6d1ce33cde157e99e37111564778bafb7fdc263a846"
+                           },
+                           {
+                               "size_bytes":  1511,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\inspect_disney_release.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "d44995a2f9a5b204bbbe475679b5ca531eb58e38e7d48b0c2335cf39d513c31c"
+                           },
+                           {
+                               "size_bytes":  1121,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\inspect_hardware_details.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "f2aeb0dcca980695b48f0b5a0a88401a71a582be0404d00ffd1e874a7822d5f4"
+                           },
+                           {
+                               "size_bytes":  570,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\inspect_results.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "f3bbbfa5ae8ce532f501bb6262f0abeafe0881d88a8df93611f21364eebc20a5"
+                           },
+                           {
+                               "size_bytes":  646,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\inspect_uptodown_button.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "3c7f4793bf12ba6e13aaf1328449667d3ef884ed095566873957b2b2f62e8946"
+                           },
+                           {
+                               "size_bytes":  459,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\inspect_uptodown_buttons.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "4b9d79affdcf4296abee3fc8b224166368ff140dd8ec0e5ce867b75a24fd7512"
+                           },
+                           {
+                               "size_bytes":  463,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\inspect_uptodown_card.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "a7c8c59c56c3b81558ffeb4bbbe272d35b0b6088433ddd662017457d8ef3a6bf"
+                           },
+                           {
+                               "size_bytes":  643,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\inspect_uptodown_script.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "12967918dc8db420b4b5cdbd9135172a0bc3e90652feecab4b3d6e18748f13e4"
+                           },
+                           {
+                               "size_bytes":  304,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\jadx_availability.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "3a6cdd54c35cd18388ecf0df0366e37674140c9fadac1c81777d1cee8fafcb1c"
+                           },
+                           {
+                               "size_bytes":  292,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\jadx_single_class.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "4fcafc88201f5c1a4ef3c66a26bc33f5734323bc7f906d4b308aba968122c81a"
+                           },
+                           {
+                               "size_bytes":  10152,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\package_release.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "271739c19e8c6ed3fad61080ab3ffbe1592abd0f300c4b36a0d58e6452e675cf"
+                           },
+                           {
+                               "size_bytes":  420,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\parse_uptodown.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "d5a2c9463fa3e1ed42a8423c17c60ed6da2bf8952db8fd838ead9ac6eaa5d9d8"
+                           },
+                           {
+                               "size_bytes":  91,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\preview_payload.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "598203ab250eb57a9aa2ebe897d47faf2c01798fefbebd8981827f0ad2ccd425"
+                           },
+                           {
+                               "size_bytes":  203,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\query_aptoide.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "8983c5f57793cb4f59876dbe854ee9302270948ff375f13b84d7cf652fda18e9"
+                           },
+                           {
+                               "size_bytes":  256,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\query_db.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "cfad0934b19cfffa6425606c21dd8421b917bfbcc9a23ddf5096cfcbc525ffd1"
+                           },
+                           {
+                               "size_bytes":  46,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\query_payload.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "ff3066de1edd4d0b4182bc405f3f235842f7ebbd3b3746c831371fe17a50a336"
+                           },
+                           {
+                               "size_bytes":  400,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\read_step.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "78d09977267ca4ab919d8d4c9fc43f57d135655297e92e47f02617317ae91331"
+                           },
+                           {
+                               "size_bytes":  423,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\run_jadx_raiplay.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5f14a410d5598f31564c1677afa25fb7286de681d2801c07c5b11c4299860489"
+                           },
+                           {
+                               "size_bytes":  726,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\search_aptoide.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "c9ddda346020952add9c48c08d4832c5d12487d472528fe69488d5e2ea030e89"
+                           },
+                           {
+                               "size_bytes":  1579,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\search_disney_apk.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2af48c71b15552f262167fe4063493615f726ce65922b3076f5dfb522a698529"
+                           },
+                           {
+                               "size_bytes":  1504,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\search_prime_armv7.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5fa7766968d93b6ab883d9270b752fc0609c460975aa7359a09950b9035f58bf"
+                           },
+                           {
+                               "size_bytes":  1489,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\search_prime_video.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "be95f1fbc16d192f1377feb790508e49b71b53219a76cfdba8f58c5d115d81fa"
+                           },
+                           {
+                               "size_bytes":  778,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\setup_jadx.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "fb239903473c8536ec5a64efcfa66570aa19683dadacade501d7ebddc65ac1aa"
+                           },
+                           {
+                               "size_bytes":  523,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\setup_mcp.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "03ce2344d07ea145f170604a2f68ba467d0c7d2fd380c40abb47579638501862"
+                           },
+                           {
+                               "size_bytes":  984,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\setup_node.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "9dfd3ef4e163246a4a3d985089bb99e79ac0bc3c4727d4484606f2471fbe50b3"
+                           },
+                           {
+                               "size_bytes":  517,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\set_env.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "1f0b53fd8d7f6d7119e53a102c7a40dd30a2e9aac99d80bdb1cf21cef2bf4ee7"
+                           },
+                           {
+                               "size_bytes":  112,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\speak_payload.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "6d95d1da9e5c295fa381ecbba63a43ac482736469849c7bdd164623d457328a5"
+                           },
+                           {
+                               "size_bytes":  57,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\step1.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "d3191c247812cdc7bc280bc4073de0bc6cf2a60ff86e47a6d0006daa19e42d3a"
+                           },
+                           {
+                               "size_bytes":  59,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\step2_pref.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "8ec88b3c0d9b576149eb9c61666700241f3c9bcf663fab69c84c2ca5ef98368e"
+                           },
+                           {
+                               "size_bytes":  57,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\step3_last.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "e8ccce62d9a225be2d413ed6b22818435a8f4616a65ef74c883e0272aebca5b3"
+                           },
+                           {
+                               "size_bytes":  675,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_ai_ask_italia2.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "12102c19c6ff3a4483af320545631d3d6f673186dfe954f57d00fff0093fa065"
+                           },
+                           {
+                               "size_bytes":  757,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_apkpure_net.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "dab611f1d3aca2de1b1a21ecbbb536deec500e7a0b60dc980638e0015a118294"
+                           },
+                           {
+                               "size_bytes":  922,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_budget_simulation.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "7432068e00d774cbd82b0a5b63abab3045d35f7e2b1b067d9e0796f84325ed21"
+                           },
+                           {
+                               "size_bytes":  1444,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_customhome_launch_raiplay.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "c154a2feb42647336395dc4a39281a17fb7d48c42a0fcf5f04f14202e2ca1411"
+                           },
+                           {
+                               "size_bytes":  700,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_disney_favorite_click.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "3b11806ed290b2d6518d89a621a83fa0d9d0126e6636973d0b913b42a7c22d50"
+                           },
+                           {
+                               "size_bytes":  1519,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_disney_startup.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "fb6ded43b3b669e18a381e211c7d929f962bf1a08914c0a916395d28bef0c3b9"
+                           },
+                           {
+                               "size_bytes":  921,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_home_dpad.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "c64b4e8ce9876a7adefec09eea21b2b2a78a172eff3747d0ff3ec70738dedece"
+                           },
+                           {
+                               "size_bytes":  49,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_italia2.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "5c9d1c9f2cf492dc6b5629294481af9d49322112d1e38dd13cc6f755a9e18ee7"
+                           },
+                           {
+                               "size_bytes":  136,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_jadx.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "697476f3eac0392864a65ecec33cf7718f0eb996ee25375620eb1042002705a7"
+                           },
+                           {
+                               "size_bytes":  2416,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_jadx_mcp_call.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "56499ca0b38e0aee8aa6eea085231fd553f48252ea8599b1045bdfe2a91bceac"
+                           },
+                           {
+                               "size_bytes":  2437,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_jadx_mcp_rpc.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "6a24dc210695a03ed012d5015cee6bca3fdf2757614eba20863b2fe921e895f2"
+                           },
+                           {
+                               "size_bytes":  2283,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_jadx_mcp_xrefs.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "898bc3637af5e90064bf392ac7b87eff77b46d61e17c907e455a0de24df0b796"
+                           },
+                           {
+                               "size_bytes":  4321,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_jadx_v4.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "214c904ef3ef3219712e1d72d4f37b1f329f6e089ae4986032ddc67ed685d801"
+                           },
+                           {
+                               "size_bytes":  438,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_mcp_servers.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "08ff645f68b23a44c949417dbcfbd42dbea1073397df17963cff7d5fb0d34aec"
+                           },
+                           {
+                               "size_bytes":  718,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_post_download.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "daf512d6b54e34aa968f1bc0fb363acbe53f66eae6f1638a5d80a28f6ceb666d"
+                           },
+                           {
+                               "size_bytes":  71,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_query.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "f3e93defc3f9c911cdc36e7dd99ec67cff0a9c762c94b61dd75076a6f6968ef2"
+                           },
+                           {
+                               "size_bytes":  717,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_query.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "741410b19b02db00d70fc22dda134c4f08e4020df8ce9fad1ff3c84677d1aa44"
+                           },
+                           {
+                               "size_bytes":  69,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_query2.json",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "fd1e9c849db99024403793c80c1273d2d8b20d66f0e49f8e536578b6ba78b90c"
+                           },
+                           {
+                               "size_bytes":  1487,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_rai1_live.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "4628e1ab2058c1c69ada628f205b3e6e6e0d53413dc917fa38c8aa121b13756a"
+                           },
+                           {
+                               "size_bytes":  1354,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_raiplay4_playback.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "b1429ffd4a151e56efec0398ed8bb44c4b46076f7e683bb5494fe5afbd233ffe"
+                           },
+                           {
+                               "size_bytes":  1347,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_raiplay4_startup.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "e4635a99af7978605ff86993db1c52fb4e31795609f5c16e7e5f4979e9f823ed"
+                           },
+                           {
+                               "size_bytes":  2072,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_rea_mcp.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "8f20a05eb92fceae7b7568fa3fd13845ff49efe558fa78066e31432f8df9cacf"
+                           },
+                           {
+                               "size_bytes":  1894,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_rea_tools.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "d5e1a11207ea5b5d1c678b8d52b5d1981a2a6fc19a5eb7c426763f14d55a4401"
+                           },
+                           {
+                               "size_bytes":  576,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_speech.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "ab4065d564523bd220a9459ef12b3e7c8ac5ac33ae195f3bb23310f9b5b822f9"
+                           },
+                           {
+                               "size_bytes":  774,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_uptodown_direct.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "192853f1da07157d8fdd622f8ac5d2b9ee7ad7bfb6c7bceb4735d17b8ecd4acf"
+                           },
+                           {
+                               "size_bytes":  513,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_uptodown_urls.js",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "33d46a3bc6b22661cb1b3b4e72cd1e899c1a113edb6c430cf8ea0cdbc53c83ec"
+                           },
+                           {
+                               "size_bytes":  796,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\test_utf8_ask.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "2a211e39872ba69b24baeca9a11c8ef54bf0f50b963c2a45f8b0060ee0c82143"
+                           },
+                           {
+                               "size_bytes":  690,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\tv.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "535788fd44af2e6159c38c6c48babd1ce2ee56c7d5f74c2fa2c742a5732cf66c"
+                           },
+                           {
+                               "size_bytes":  1022,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\update_mcp_config.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "e0e13525ecdd802485a610886a7680e4deb99d8fabdfa9f0ccf063c58cfc80df"
+                           },
+                           {
+                               "size_bytes":  641,
+                               "relative_path":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES\\scripts\\verify_signatures.ps1",
+                               "archive":  "03_AKAI_BUILD_SCRIPTS_DEPENDENCIES.zip",
+                               "sha256":  "8c8fcf27f115189f8977f41b0b51035d2e9d761f8de3f08b770d195f5e3428f0"
+                           },
+                           {
+                               "size_bytes":  1856,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\01_test_uinput_driver.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "121ab992386d6ca6bd1e25df99af43efe4626cccecfe63c7254b0febff5d622d"
+                           },
+                           {
+                               "size_bytes":  2698,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\02_test_rest_api.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "3f9835fdfdcac134d1431da9fe64826663ca78ae47a098a3f883696af11fa62d"
+                           },
+                           {
+                               "size_bytes":  3114,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\03_test_key_feasibility.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "3cac3272f570ae6d04069d4b09c7f3125d3d4951f5cc7aa1df170cca34f525da"
+                           },
+                           {
+                               "size_bytes":  1932,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\04_measure_resources.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "7147b7c028314ee58b4a0ac2383e1e577c2673a7c4f42287f32560b89e0fcda0"
+                           },
+                           {
+                               "size_bytes":  3052,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\05_safe_install_and_rollback.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "d630e975ae5fdf2d20598c6b0bc95c106810cde46c07a05e3959a2375b3398a3"
+                           },
+                           {
+                               "size_bytes":  5174,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\06_verify_apk_integrity.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "7eee797220f52d30a1cc0ddccb573ced847d95dae2f23640c9888e180566cdb9"
+                           },
+                           {
+                               "size_bytes":  4403,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\07_run_tv_diagnostic_test.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "b439e396355b85a11f106bdf23c90a8c094e43fe9817555d0d390a61bb3c3c04"
+                           },
+                           {
+                               "size_bytes":  5098,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\09_deploy_and_test_remote.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "e3e5b3fbbe0d92e4416af9aab7ad91ef23e49983e49ea25ddb794966d0090deb"
+                           },
+                           {
+                               "size_bytes":  6881,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\10_test_permanent_remote_lifecycle.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "031bd9f086b0ac58fc5fb5e8f7b2876f1ff23ed569433eaf7cfce20ffc58af1a"
+                           },
+                           {
+                               "size_bytes":  4872,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\11_test_real_tv_reboot.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "a80b3c5865e1cb5ace7371a12e2b899b90b5a959e9b0ec2a1f980c733fcca7c5"
+                           },
+                           {
+                               "size_bytes":  660,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\check_online.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "cf3d4bef5fa552ccc594bbc4f9938cd1b7f7a2d7d33e680937cc369fb5b8acc2"
+                           },
+                           {
+                               "size_bytes":  6959,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\dump.xml",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "2548d51f4af9a0f6f227f8f804c8ff3c2fe04b7853ba5179e075e8e7b9b4cd11"
+                           },
+                           {
+                               "size_bytes":  1333,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\run_unit_tests.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "cc405cd3bf42588723c0231686a0529d4323ca52eefc3c3779adde9d5e0d142d"
+                           },
+                           {
+                               "size_bytes":  430,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\scan_lan.ps1",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "9211d20e8095c74dc50b423f12358d20b1aa74f31d3688a97aebcda4b86a4a30"
+                           },
+                           {
+                               "size_bytes":  9233,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\UnitTests.java",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "d174194a5a163467457c52762daa8a0936405d84e880be275ebe783066463ae8"
+                           },
+                           {
+                               "size_bytes":  1549,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\diagnostics\\telemetry_20261107_145353.jsonl",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "d0ffcc09d0379e981ca56e60ecf09711adb4c1f122d40c7b490d2a6071a0ed5f"
+                           },
+                           {
+                               "size_bytes":  1549,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\diagnostics\\telemetry_latest.jsonl",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "d0ffcc09d0379e981ca56e60ecf09711adb4c1f122d40c7b490d2a6071a0ed5f"
+                           },
+                           {
+                               "size_bytes":  189,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\host_mock\\android\\content\\Context.java",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "889a3153cfcf8a44f871fd7ed8e14b11c06f4a713d3c36d80d46263a1e560e72"
+                           },
+                           {
+                               "size_bytes":  398,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\host_mock\\android\\content\\SharedPreferences.java",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "5b1d335008d70d271f69465edeec17bf7d77259c7c0198df18c79079d4917779"
+                           },
+                           {
+                               "size_bytes":  292,
+                               "relative_path":  "04_AKAI_TESTS_REPORTS\\host_mock\\android\\util\\Log.java",
+                               "archive":  "04_AKAI_TESTS_REPORTS.zip",
+                               "sha256":  "7c248f174d2ecea86b264d4210f1657378f2be1d6d8841983a50c2beb668a581"
+                           },
+                           {
+                               "size_bytes":  20966,
+                               "relative_path":  "05_AKAI_HISTORY_BASELINES\\AKAI_JARVIS_AUDIT_COMPLETO_v15_3.md",
+                               "archive":  "05_AKAI_HISTORY_BASELINES.zip",
+                               "sha256":  "1a2f3d4984e0901e810e15a34900d82e13be11eaef3900d8b63d74044986f8e1"
+                           },
+                           {
+                               "size_bytes":  11120,
+                               "relative_path":  "05_AKAI_HISTORY_BASELINES\\AKAI_JARVIS_Revisione_Tecnica.md",
+                               "archive":  "05_AKAI_HISTORY_BASELINES.zip",
+                               "sha256":  "d34ed7fe52b5f9164bba2ed1af1fc95bfb37f9057ef78ba7e17d747f441baecf"
+                           },
+                           {
+                               "size_bytes":  4598,
+                               "relative_path":  "05_AKAI_HISTORY_BASELINES\\PROJECT_PLAN.md",
+                               "archive":  "05_AKAI_HISTORY_BASELINES.zip",
+                               "sha256":  "6f217a10f1460813a51e3c4ebb2544cb3dc9008ac023e375901b2bea688f1ea3"
+                           },
+                           {
+                               "size_bytes":  1376,
+                               "relative_path":  "05_AKAI_HISTORY_BASELINES\\PROJECT_PLAN_REVISIONE.md",
+                               "archive":  "05_AKAI_HISTORY_BASELINES.zip",
+                               "sha256":  "d353eea62e06170905a43535024ee1bd1102334e22037b3bc078b6af410c9812"
+                           },
+                           {
+                               "size_bytes":  1972,
+                               "relative_path":  "05_AKAI_HISTORY_BASELINES\\README_VERIFICA.md",
+                               "archive":  "05_AKAI_HISTORY_BASELINES.zip",
+                               "sha256":  "de41bf8b6c3c5bac6b74cb046762c6bec2ec28b693a930f3ad1c913a14a8a852"
+                           },
+                           {
+                               "size_bytes":  1192,
+                               "relative_path":  "06_AKAI_BINARIES_RELEASE\\AkaiRootCA.crt",
+                               "archive":  "06_AKAI_BINARIES_RELEASE.zip",
+                               "sha256":  "dc176536531563c40ac9a0355c2c1e983c02c7abc89a8d7e80c958835569d32e"
+                           },
+                           {
+                               "size_bytes":  37894,
+                               "relative_path":  "06_AKAI_BINARIES_RELEASE\\AKAI_Custom_Home_v8.apk",
+                               "archive":  "06_AKAI_BINARIES_RELEASE.zip",
+                               "sha256":  "fc2fd59bdbd2f43226a5de5a8a95df679fd68900543988dbf4087e7df7c2a2b8"
+                           },
+                           {
+                               "size_bytes":  144871,
+                               "relative_path":  "06_AKAI_BINARIES_RELEASE\\AKAI_JARVIS_Remote_v16.apk",
+                               "archive":  "06_AKAI_BINARIES_RELEASE.zip",
+                               "sha256":  "111c38ecaf51d8a81b066ba420b592b862260e846a7be58a0cda9bdd64504843"
+                           },
+                           {
+                               "size_bytes":  21383,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\AKAI_ARCHITETTURA_COMPLETA.md",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "cb767aabcf1233bb36c6c6d2876596f535012dae2256b637667a5a0216d02561"
+                           },
+                           {
+                               "size_bytes":  15031,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\AKAI_JARVIS_v16_anteprima_interfaccia.html",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "98d7885263f1e8baf50778e5e37560448b6c9cc52d042a88fe274f3c395ae1db"
+                           },
+                           {
+                               "size_bytes":  206012,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\AKAI_JARVIS_v16_anteprima_mobile.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "d2bd0095d99d7d8545111fa5e4e94599ba591e43c117182d8a2dd77bcbaf4cc3"
+                           },
+                           {
+                               "size_bytes":  134738,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\AKAI_JARVIS_v16_anteprima_telecomando.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "e459f9fd7fcc32fc421b85bf44e3cc27d58b4226f399e85f043763d531206393"
+                           },
+                           {
+                               "size_bytes":  199547,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\clean_home.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "0dde2d223dd667b4400be3480a473908c2484920cc362575ac4941f535f3da1d"
+                           },
+                           {
+                               "size_bytes":  76219,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\clean_home_scaled.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "143e35e1675305219630e367159413275e51dcb9ebea601cc0273a9670dd9153"
+                           },
+                           {
+                               "size_bytes":  17920,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\dump_pin.xml",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "2763ab4d631df67195668ac9d7bace00361008a7dc72c1f189721812685ce735"
+                           },
+                           {
+                               "size_bytes":  203436,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\fixed_screen_v2.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "8aad1cb35932b0cd127cda2915ae95a51c1d220a542d9390833d46c8971ab183"
+                           },
+                           {
+                               "size_bytes":  173509,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\fixed_screen_v3.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "c7726f93836cf95dd0c36d6c798d797a28fe8159feaf7c985cd348b818d40991"
+                           },
+                           {
+                               "size_bytes":  5222,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\main_dump.xml",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "0b7ac99f1b5b5afe84bf1e4109e5ed6fa4c0771fbef8e83d8b47fa40691b4021"
+                           },
+                           {
+                               "size_bytes":  272293,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\main_screen.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "602ec035c9f05fdf81f47246bfcedce44bb77dfe4c8427c87c2a5e2dcb4a7e14"
+                           },
+                           {
+                               "size_bytes":  272072,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\pairing_screen.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "f8102fb329934bdc12d8be751f6a88a998101610493507e114e778126f13f5b5"
+                           },
+                           {
+                               "size_bytes":  6405,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\pin_card_dump.xml",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "d946af3708a6db951af39f55eb66b88f89d2221cef9c87d35e36aced890bffa8"
+                           },
+                           {
+                               "size_bytes":  186407,
+                               "relative_path":  "07_AKAI_ARCHITECTURE_EVIDENCE\\pin_screen.png",
+                               "archive":  "07_AKAI_ARCHITECTURE_EVIDENCE.zip",
+                               "sha256":  "672ef5c874e376c130b3a6c12c2b00c6c7dcfd982a071c71c119e2695659424a"
+                           }
+                       ],
+    "known_open_issues":  [
+                              "P1-11: L\u0027indirizzo IP 192.168.1.8 e il certificato TLS sono al momento legati all\u0027assegnazione DHCP corrente; una futura versione potra introdurre mDNS discovery.",
+                              "OODA Loop: L\u0027assistente esegue macro con verifica semantica a schermo (Accessibility/Perception); la visione continua a frame ad anello chiuso non e implementata."
+                          ],
+    "exclusions":  [
+                       {
+                           "path":  "tools/android-sdk/*",
+                           "reason":  "Toolchain SDK Android completa (\u003e1.5 GB di binari Google standard). I requisiti minimi e i tool usati (build-tools 28.0.3, aapt2, d8, apksigner) sono descritti in TOOLCHAIN_SPECS.md."
+                       },
+                       {
+                           "path":  "tools/jdk-17/*",
+                           "reason":  "Distribuzione binaria OpenJDK 17 (\u003e300 MB). I requisiti di compilazione sono documentati in TOOLCHAIN_SPECS.md."
+                       },
+                       {
+                           "path":  "tools/nodejs/*",
+                           "reason":  "Binario runtime Node.js esterno (\u003e80 MB). Non indispensabile per il runtime TV nÃ© per la compilazione."
+                       },
+                       {
+                           "path":  "tools/*.p12, tools/*.keystore (server_keystore.p12, debug.keystore, akai_ca.p12, test_legacy.p12)",
+                           "reason":  "ConformitÃ  rigorosa P0-04: le chiavi private e i keystore TLS/APK non devono mai essere condivisi in archivi di audit esterni. Sono inclusi esclusivamente gli script di generazione locale (generate_tv_tls_keystore.ps1) e il certificato pubblico AkaiRootCA.crt."
+                       },
+                       {
+                           "path":  "downloads/*",
+                           "reason":  "Archivi zip di snapshot temporanei giÃ  inclusi o ridondanti."
+                       },
+                       {
+                           "path":  ".git",
+                           "reason":  "La repository locale non Ã¨ versionata con Git. La cronologia completa dello sviluppo dalle Fasi 1 a 16 Ã¨ documentata in 05_AKAI_HISTORY_BASELINES."
+                       }
+                   ],
+    "file_inventory_count":  302,
+    "project_name":  "AKAI JARVIS TV Assistant \u0026 Remote"
+}

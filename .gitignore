@@ -1,0 +1,71 @@
+# ==============================================================================
+# AKAI JARVIS .gitignore - Protezione Segreti e Sanitizzazione Repository
+# ==============================================================================
+
+# Keystores, chiavi private e certificati privati (P0-04)
+*.p12
+*.jks
+*.keystore
+*.key
+*.pem
+*.pkcs12
+*.csr
+tools/server_keystore.p12
+tools/akai_ca.p12
+tools/debug.keystore
+tools/test_legacy.p12
+akai-remote-tv/app/src/main/assets/server_keystore.p12
+
+# Cartelle di build e binari compilati
+build/
+**/build/
+bin/
+**/bin/
+gen/
+**/gen/
+*.apk
+*.aab
+*.dex
+*.class
+*.so
+
+# Toolchain esterne e SDK voluminosi (>400 MB)
+tools/android-sdk/
+tools/jdk-17/
+tools/nodejs/
+tools/jadx/
+tools/framework/
+tools/livetv/
+tools/ltvlauncher/
+tools/systemui/
+tools/mcp/
+node_modules/
+
+# File di archivio compressi e staging temporanei
+staging*/
+AKAI_AUDIT_COMPLETO/
+*.zip
+*.tar
+*.gz
+
+# Log, crash dump e diagnostica con telemetria privata
+*.log
+diagnostics/
+backups/
+downloads/
+scratch/
+
+# File di configurazione locali e credenziali
+.env
+*.env
+*.local
+local.properties
+
+# File temporanei di sistema ed editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.bak
+*~

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AKAI Custom Remote</string>
+    <string name="accessibility_service_description">Servizio di accessibilità per il supporto comandi Home e Indietro di AKAI Custom Remote.</string>
+</resources>

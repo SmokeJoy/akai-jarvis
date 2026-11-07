@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/pin_backdrop"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#CC0A0D14"
+    android:clickable="true"
+    android:focusable="false">
+
+    <!-- Centered Dialog Card (16:9 optimized TV box) -->
+    <LinearLayout
+        android:id="@+id/pin_card"
+        android:layout_width="840dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:background="#1E2230"
+        android:padding="24dp"
+        android:clickable="true"
+        android:focusable="false"
+        android:elevation="24dp">
+
+        <!-- Header Title Bar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="18dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="AKAI Custom Remote — Associazione Telefono"
+                android:textColor="#38BDF8"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.04" />
+
+            <TextView
+                android:id="@+id/tv_countdown"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Scade tra 120s"
+                android:textColor="#F59E0B"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Two-column Body: Left = QR Code, Right = PIN Code & Actions -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <!-- Left Column: QR Code & URL -->
+            <LinearLayout
+                android:layout_width="260dp"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center_horizontal"
+                android:background="#141722"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="#FFFFFF"
+                    android:padding="8dp">
+
+                    <ImageView
+                        android:id="@+id/iv_qr_code"
+                        android:layout_width="160dp"
+                        android:layout_height="160dp"
+                        android:scaleType="fitCenter"
+                        android:contentDescription="QR Code Telecomando" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tv_dialog_url"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="http://192.168.1.8:8088"
+                    android:textColor="#38BDF8"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="10dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Inquadra con la fotocamera"
+                    android:textColor="#94A3B8"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Spacer -->
+            <View
+                android:layout_width="24dp"
+                android:layout_height="1dp" />
+
+            <!-- Right Column: PIN Code & Close Button -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center_horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="CODICE PIN TEMPORANEO"
+                    android:textColor="#94A3B8"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1" />
+
+                <!-- PIN Box Container -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="#0F1015"
+                    android:paddingTop="12dp"
+                    android:paddingBottom="12dp"
+                    android:layout_marginTop="10dp"
+                    android:layout_marginBottom="12dp"
+                    android:gravity="center">
+
+                    <TextView
+                        android:id="@+id/tv_pin_code"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--- ---"
+                        android:textColor="#38BDF8"
+                        android:textSize="40sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.25" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Inserisci questo codice su Safari / Chrome dello smartphone per associare il telecomando."
+                    android:textColor="#CBD5E1"
+                    android:textSize="13sp"
+                    android:gravity="center"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- Close Button -->
+                <Button
+                    android:id="@+id/btn_close_dialog"
+                    android:layout_width="220dp"
+                    android:layout_height="48dp"
+                    android:text="Chiudi Schermata"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:background="#334155"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true" />
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</FrameLayout>

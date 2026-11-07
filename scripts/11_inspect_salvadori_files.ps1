@@ -1,0 +1,2 @@
+$raw = 'https://s2salvadorigroup.it/ftp/AKAI/AGGIORNAMENTI%20TV%20AKAI/AKTV5037N%20copiare%20i%20file%20contenuti%20nella%20cartella%20in%20una%20chiavetta%20USB%20vuota%20%2C%20staccare%20la%20corrente%20del%20tv%2C%20tenere%20premuto%20il%20polsante%20accensione%20sul%20tv%20senza%20lasciarlo%20e%20riattaccare%20la%20spina%20della%20corrente./ANYU_AY20092303_CV9632H_A50_1p5g_AKAI_CC495PU1L-1_4Kx2K_HW900_560MA_NoPVR_IR(087F)_Italy_ERP_20201116180954/MD5.txt'
+& curl.exe -s -L $raw

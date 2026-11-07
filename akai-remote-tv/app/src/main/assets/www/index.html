@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>AKAI JARVIS · TV Assistant & Remote</title>
+    
+    <!-- PWA & Mobile Web App Meta -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AKAI JARVIS">
+    <meta name="theme-color" content="#090e19">
+    <meta name="description" content="Telecomando Web PWA & Assistente Vocale JARVIS per Smart TV AKAI AKTV5037N">
+    
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app" class="remote-shell">
+        <!-- Top App Bar -->
+        <header class="app-header">
+            <div class="brand-zone">
+                <div class="brand-mark">AKAI</div>
+                <div class="brand-text">
+                    <h1>JARVIS <span class="brand-accent">· TV</span></h1>
+                    <p class="brand-model">AKTV5037N · Controllo vocale</p>
+                </div>
+            </div>
+            
+            <div class="header-status">
+                <button id="connection-pill" class="status-pill disconnected" type="button" title="Stato connessione TV">
+                    <span class="status-dot"></span>
+                    <span id="status-text">Non connesso</span>
+                </button>
+                <span id="ping-badge" class="ping-badge hidden">-- ms</span>
+            </div>
+            
+            <div class="header-actions">
+                <button id="btn-settings" class="icon-btn" title="Impostazioni avanzate e AI" aria-label="Impostazioni">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                    </svg>
+                </button>
+                <button id="btn-power" class="icon-btn btn-power" title="Standby TV" aria-label="Standby">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                        <path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.38 1.19-4.47 3-5.74L6.58 4.84A8.948 8.948 0 0 0 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Pages Container -->
+        <main class="main-content">
+            <!-- ============================================================= -->
+            <!-- TAB 1: ASSISTENTE VOCALE JARVIS -->
+            <!-- ============================================================= -->
+            <section class="page active" id="page-assistant" aria-label="Assistente vocale">
+                <div class="heading">
+                    <div>
+                        <h2>Parla con JARVIS</h2>
+                        <p>Il telefono ascolta, la TV risponde.</p>
+                    </div>
+                    <span class="micro-tag">iOS + Android</span>
+                </div>
+
+                <!-- Voice Hero Card -->
+                <div class="hero">
+                    <div class="hero-top">
+                        <span>ASSISTENTE VOCALE</span>
+                        <span id="jarvis-badge-mode">● RESIDENTE</span>
+                    </div>
+
+                    <div class="orb-space">
+                        <div class="halo"></div>
+                        <button class="orb" id="jarvis-orb" aria-label="Inizia conversazione con JARVIS" type="button" aria-pressed="false">
+                            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M12 15a4 4 0 0 0 4-4V6a4 4 0 0 0-8 0v5a4 4 0 0 0 4 4zm6-4a6 6 0 0 1-12 0H4a8 8 0 0 0 7 7.93V22h2v-3.07A8 8 0 0 0 20 11h-2z"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <p class="voice-name" id="jarvis-state-badge" aria-live="polite">Pronto ad ascoltarti</p>
+                    <p class="voice-sub" id="jarvis-live-transcript" aria-live="polite">Tocca l'orb per avviare una conversazione naturale continua.</p>
+
+                    <button class="primary" id="btn-orb-action" type="button">Parla con JARVIS</button>
+
+                    <!-- Conversation Turn Controls -->
+                    <div id="jarvis-convo-controls" class="jarvis-convo-controls hidden">
+                        <button id="btn-convo-stop" class="primary stop" type="button">⏹ Termina Conversazione</button>
+                        <button id="btn-convo-talk-again" class="secondary-btn hidden" type="button">🎤 Rispondi a Voce</button>
+                    </div>
+
+                    <div class="under">
+                        <span class="dot"></span>
+                        <span id="voice-footnote">Microfono attivo solo durante la conversazione</span>
+                    </div>
+                </div>
+
+                <!-- Animated State Indicator -->
+                <div id="ai-active-state" class="ai-active-state hidden" aria-live="polite">
+                    <span class="ai-wave-dot"></span>
+                    <span class="ai-wave-dot"></span>
+                    <span class="ai-wave-dot"></span>
+                    <span id="ai-active-label" class="ai-active-label">In ascolto...</span>
+                </div>
+
+                <!-- AI Response Card with Accuracy & Token Badge -->
+                <div id="ai-response-box" class="ai-response-box hidden" aria-live="polite">
+                    <div class="ai-response-header">
+                        <span id="ai-badge-source" class="ai-badge-source local">⚡ Memoria Procedurale (0 Token)</span>
+                        <span id="ai-badge-status" class="ai-badge-status verified">✓ Verificato</span>
+                        <span id="ai-badge-meta" class="ai-badge-meta">-- ms</span>
+                    </div>
+                    <div id="ai-response-text" class="ai-response-text"></div>
+                    <div id="ai-retry-box" class="ai-retry-box hidden">
+                        <button id="btn-retry-ai" class="btn-retry" type="button">↻ Riprova</button>
+                    </div>
+                </div>
+
+                <!-- Alternative Input & Quick Typing -->
+                <div class="ai-input-row">
+                    <button id="btn-voice-ai" class="ai-mic-btn" title="Microfono singolo push-to-talk" aria-label="Microfono rapido">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                        </svg>
+                    </button>
+                    <input type="text" id="ai-text-input" class="ai-text-input" placeholder="Oppure scrivi... (es. 'metti Rai 1', 'cosa c'è stasera?')" autocomplete="off">
+                    <button id="btn-ai-send" class="ai-send-btn" title="Invia ad AKAI AI" aria-label="Invia">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Quick Command Chips -->
+                <div class="quick">
+                    <div class="section-row">
+                        <h3>Comandi frequenti</h3>
+                        <small>Istantanei a 0 Token</small>
+                    </div>
+                    <div class="chips">
+                        <button class="chip" data-ai="Metti Rai 1">📺 Rai 1 <span class="arrow">›</span></button>
+                        <button class="chip" data-ai="Metti Italia 2">🎬 Italia 2 <span class="arrow">›</span></button>
+                        <button class="chip" data-ai="Vai alla Home">⌂ Home TV <span class="arrow">›</span></button>
+                        <button class="chip" data-ai="Imposta il volume a 20">◖)) Volume 20 <span class="arrow">›</span></button>
+                    </div>
+                </div>
+
+                <div class="info-card">
+                    <span class="info-ico">ⓘ</span>
+                    <span><strong>Un solo assistente integrato.</strong> Risiede sulla TV AKAI, risponde dagli altoparlanti del televisore e mantiene la memoria delle preferenze.</span>
+                </div>
+            </section>
+
+            <!-- ============================================================= -->
+            <!-- TAB 2: TELECOMANDO FISICO TOUCH -->
+            <!-- ============================================================= -->
+            <section class="page" id="page-remote" aria-label="Telecomando">
+                <div class="heading">
+                    <div>
+                        <h2>Telecomando</h2>
+                        <p>Comandi essenziali, sempre a portata di mano.</p>
+                    </div>
+                    <span class="micro-tag">MODALITÀ TV</span>
+                </div>
+
+                <div class="remote-card">
+                    <!-- Quick Sources -->
+                    <div class="sources">
+                        <button class="source" data-cmd="input_tv">TV</button>
+                        <button class="source" data-cmd="input_hdmi1">HDMI 1</button>
+                        <button class="source" data-cmd="input_hdmi2">HDMI 2</button>
+                        <button class="source" data-cmd="input_source">Ingressi</button>
+                        <button class="source" data-cmd="open_numpad" id="btn-toggle-numpad">123...</button>
+                    </div>
+
+                    <!-- Collapsible Number Pad -->
+                    <div id="numpad-panel" class="numpad-panel collapsed">
+                        <div class="numpad-grid">
+                            <button class="num-btn" data-key="1">1</button>
+                            <button class="num-btn" data-key="2">2</button>
+                            <button class="num-btn" data-key="3">3</button>
+                            <button class="num-btn" data-key="4">4</button>
+                            <button class="num-btn" data-key="5">5</button>
+                            <button class="num-btn" data-key="6">6</button>
+                            <button class="num-btn" data-key="7">7</button>
+                            <button class="num-btn" data-key="8">8</button>
+                            <button class="num-btn" data-key="9">9</button>
+                            <button class="num-btn num-empty" disabled></button>
+                            <button class="num-btn" data-key="0">0</button>
+                            <button class="num-btn num-close" id="btn-close-numpad" aria-label="Chiudi tastierino">✕</button>
+                        </div>
+                    </div>
+
+                    <!-- Circular D-Pad Controller -->
+                    <div class="dpad" aria-label="Pulsanti direzionali">
+                        <button class="dkey up" data-cmd="dpad_up" aria-label="Freccia Su">⌃</button>
+                        <button class="dkey left" data-cmd="dpad_left" aria-label="Freccia Sinistra">‹</button>
+                        <button class="dkey ok" data-cmd="dpad_center" aria-label="OK">OK</button>
+                        <button class="dkey right" data-cmd="dpad_right" aria-label="Freccia Destra">›</button>
+                        <button class="dkey down" data-cmd="dpad_down" aria-label="Freccia Giù">⌄</button>
+                    </div>
+
+                    <!-- Navigation Trio: Back, Home, Menu -->
+                    <div class="three">
+                        <button class="square" data-cmd="back" aria-label="Indietro">← Indietro</button>
+                        <button class="square home" data-cmd="home" aria-label="Home TV">⌂ Home</button>
+                        <button class="square" data-cmd="menu" aria-label="Menu opzioni">☷ Menu</button>
+                    </div>
+
+                    <!-- Rockers: Volume & Canale -->
+                    <div class="pairs">
+                        <div class="pair">
+                            <small>VOLUME</small>
+                            <button data-cmd="volume_down" aria-label="Abbassa volume">−</button>
+                            <button data-cmd="volume_mute" aria-label="Mute" class="btn-mute">🔇</button>
+                            <button data-cmd="volume_up" aria-label="Alza volume">+</button>
+                        </div>
+                        <div class="pair">
+                            <small>CANALE</small>
+                            <button data-cmd="channel_down" aria-label="Canale precedente">▼</button>
+                            <button data-cmd="channel_prev" aria-label="Canale richiamato" class="btn-prev">PREV</button>
+                            <button data-cmd="channel_up" aria-label="Canale successivo">▲</button>
+                        </div>
+                    </div>
+
+                    <!-- TV Smartphone Typing Bar -->
+                    <div class="keyboard-input-bar">
+                        <input type="text" id="keyboard-input" placeholder="Digita testo per la TV..." autocomplete="off">
+                        <button id="btn-send-text" class="btn-send-text" aria-label="Invia testo a schermo">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- App Shortcuts Strip -->
+                    <div class="shortcuts-row">
+                        <button class="app-chip app-mediaset" data-ai="Metti Italia 2">Italia 2</button>
+                        <button class="app-chip app-raiplay" data-ai="Metti Rai 1">Rai 1</button>
+                        <button class="app-chip app-youtube" data-cmd="app_youtube">YouTube</button>
+                        <button class="app-chip app-disney" data-ai="Apri Disney+">Disney+</button>
+                        <button class="app-chip app-netflix" data-cmd="app_netflix">Netflix</button>
+                        <button class="app-chip app-prime" data-cmd="app_prime">Prime</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================================= -->
+            <!-- TAB 3: ATTIVITÀ & MEMORIA SQLITE -->
+            <!-- ============================================================= -->
+            <section class="page" id="page-activity" aria-label="Attività e Memoria">
+                <div class="heading">
+                    <div>
+                        <h2>Attività e Memoria</h2>
+                        <p>Risultati verificati, procedure e privacy.</p>
+                    </div>
+                    <span class="micro-tag">ON-TV SQLITE</span>
+                </div>
+
+                <!-- Summary Metrics Cards -->
+                <div class="stats-overview">
+                    <div class="stat-pill highlight">
+                        <span class="stat-num" id="stat-zero-token-quick">0</span>
+                        <span class="stat-sub">0 Token (Locali)</span>
+                    </div>
+                    <div class="stat-pill">
+                        <span class="stat-num" id="stat-cloud-calls-quick">0</span>
+                        <span class="stat-sub">Chiamate Cloud</span>
+                    </div>
+                    <div class="stat-pill">
+                        <span class="stat-num" id="budget-spent-quick">0,00 €</span>
+                        <span class="stat-sub">Spesa Totale</span>
+                    </div>
+                </div>
+
+                <!-- Privacy & Data Controls Card -->
+                <div class="activity-card">
+                    <div class="card-title-row">
+                        <h3>🔒 Privacy e Modalità Ospite</h3>
+                    </div>
+                    <label class="toggle-card">
+                        <input type="checkbox" id="pref-guest-mode-quick">
+                        <div class="toggle-info">
+                            <div class="toggle-title">Modalità Ospite (Guest Mode)</div>
+                            <div class="toggle-desc">Se attiva, le conversazioni non vengono salvate nel database SQLite della TV.</div>
+                        </div>
+                    </label>
+                    <div class="memory-quick-actions">
+                        <button id="btn-clear-personal-prefs-quick" class="btn-danger-outline" type="button">Elimina Dati Personali e Cronologia</button>
+                        <button id="btn-reset-procedural-quick" class="btn-subtle-outline" type="button">Ripristina Template Procedure</button>
+                    </div>
+                </div>
+
+                <!-- Recent Activity Feed -->
+                <div class="activity-card">
+                    <div class="card-title-row">
+                        <h3>💬 Cronologia Conversazioni Recenti</h3>
+                        <small>Memoria TV</small>
+                    </div>
+                    <div id="activity-feed" class="activity-feed">
+                        <div class="loading-state">Nessuna conversazione registrata di recente.</div>
+                    </div>
+                </div>
+
+                <!-- Learned Procedures Quick View -->
+                <div class="activity-card">
+                    <div class="card-title-row">
+                        <h3>⚡ Memorie Procedurali Apprese</h3>
+                        <small>0 Token</small>
+                    </div>
+                    <div id="activity-procedural-list" class="procedural-list">
+                        <div class="loading-state">Caricamento memorie in corso...</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Fixed Bottom Navigation Bar -->
+        <nav class="bottom-nav" aria-label="Navigazione principale">
+            <button class="nav-tab active" data-page="page-assistant" aria-selected="true" type="button">
+                <span class="symbol">◎</span>
+                <span>Assistente</span>
+            </button>
+            <button class="nav-tab" data-page="page-remote" aria-selected="false" type="button">
+                <span class="symbol">▦</span>
+                <span>Telecomando</span>
+            </button>
+            <button class="nav-tab" data-page="page-activity" aria-selected="false" type="button">
+                <span class="symbol">◷</span>
+                <span>Attività</span>
+            </button>
+        </nav>
+
+        <!-- ============================================================= -->
+        <!-- MODALI: PAIRING & IMPOSTAZIONI AVANZATE -->
+        <!-- ============================================================= -->
+
+        <!-- Toast Feedback Notification -->
+        <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+        <!-- Pairing & Authentication Modal -->
+        <div id="modal-pairing" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 id="pairing-title">Associazione AKAI TV</h3>
+                    <button id="btn-close-pairing" class="modal-close-btn" aria-label="Chiudi finestra associazione">✕</button>
+                </div>
+                <div class="modal-body">
+                    <p class="modal-desc">
+                        Inserisci il <strong>codice PIN a 6 cifre</strong> visualizzato a schermo sulla TV.
+                    </p>
+                    <div class="pin-display-group">
+                        <input type="tel" maxlength="6" pattern="[0-9]*" id="pin-input" class="pin-input-field" placeholder="••••••" autofocus aria-label="Codice PIN a 6 cifre">
+                    </div>
+                    <div id="pairing-timer" class="pairing-timer">Scadenza codice: <span id="pin-countdown">120</span>s</div>
+                    <div id="pairing-error" class="pairing-error hidden"></div>
+                    <button id="btn-submit-pin" class="btn-primary-action">Associa Dispositivo</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Comprehensive Advanced Settings Modal (AI, Voce, Rete, Memoria) -->
+        <div id="modal-settings" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div class="modal-card modal-large-card">
+                <div class="modal-header">
+                    <div class="modal-title-with-pill">
+                        <h3 id="settings-title">Impostazioni Avanzate</h3>
+                        <span class="badge-accent">AKAI JARVIS</span>
+                    </div>
+                    <button id="btn-close-settings" class="modal-close-btn" aria-label="Chiudi impostazioni">✕</button>
+                </div>
+
+                <!-- Settings Sub-Tabs -->
+                <div class="ai-tabs-nav" role="tablist">
+                    <button class="ai-tab-btn active" data-tab="tab-conn" role="tab" aria-selected="true">Connessione</button>
+                    <button class="ai-tab-btn" data-tab="tab-provider" role="tab" aria-selected="false">Provider & API</button>
+                    <button class="ai-tab-btn" data-tab="tab-voice" role="tab" aria-selected="false">Voce & TTS</button>
+                    <button class="ai-tab-btn" data-tab="tab-memory" role="tab" aria-selected="false">Memoria SQLite</button>
+                    <button class="ai-tab-btn" data-tab="tab-prefs" role="tab" aria-selected="false">Preferenze</button>
+                    <button class="ai-tab-btn" data-tab="tab-stats" role="tab" aria-selected="false">Statistiche</button>
+                </div>
+
+                <div class="modal-body ai-modal-body">
+                    <!-- SUBTAB: CONNESSIONE RETE -->
+                    <div id="tab-conn" class="ai-tab-content active" role="tabpanel">
+                        <div class="form-group">
+                            <label for="server-host">Indirizzo IP Smart TV:</label>
+                            <input type="text" id="server-host" value="192.168.1.8" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="server-port">Porta HTTP/HTTPS:</label>
+                            <input type="number" id="server-port" value="8088" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Protocollo di Rete:</label>
+                            <div class="protocol-toggles">
+                                <label><input type="radio" name="proto" value="http" checked> HTTP (Porta 8088)</label>
+                                <label><input type="radio" name="proto" value="https"> HTTPS Sicuro (Porta 8443)</label>
+                            </div>
+                        </div>
+                        <div class="token-status-box">
+                            <span class="token-label">Stato Sessione Dispositivo:</span>
+                            <span id="session-badge" class="session-badge">Nessun token</span>
+                        </div>
+                        <div class="settings-actions">
+                            <button id="btn-save-settings" class="btn-primary-action">Salva & Riconnetti</button>
+                            <button id="btn-revoke-session" class="btn-danger-action">Disaccoppia / Revoca</button>
+                        </div>
+                    </div>
+
+                    <!-- SUBTAB: PROVIDER & API CLOUD (DEEPSEEK / KIMI / BUDGET GUARD) -->
+                    <div id="tab-provider" class="ai-tab-content" role="tabpanel">
+                        <div class="form-group">
+                            <label>Seleziona Motore AI:</label>
+                            <div class="ai-provider-selector">
+                                <label class="provider-radio-card">
+                                    <input type="radio" name="ai-provider" value="local">
+                                    <div class="provider-info">
+                                        <div class="provider-name">Solo Locale (Fast-Path)</div>
+                                        <div class="provider-desc">0 Token, &lt;10ms, completamente su TV a PC spento</div>
+                                    </div>
+                                </label>
+                                <label class="provider-radio-card">
+                                    <input type="radio" name="ai-provider" value="deepseek" checked>
+                                    <div class="provider-info">
+                                        <div class="provider-name">DeepSeek (Consigliato)</div>
+                                        <div class="provider-desc">deepseek-flash / deepseek-v4-pro</div>
+                                    </div>
+                                </label>
+                                <label class="provider-radio-card">
+                                    <input type="radio" name="ai-provider" value="kimi">
+                                    <div class="provider-info">
+                                        <div class="provider-name">Moonshot Kimi</div>
+                                        <div class="provider-desc">kimi-k2.6 (Vision & Agent)</div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div id="provider-config-box" class="provider-config-box">
+                            <div class="form-group">
+                                <label for="ai-model-select">Modello:</label>
+                                <select id="ai-model-select" class="form-select">
+                                    <option value="deepseek-flash">deepseek-flash (Predefinito - Economico, Visione, Tool Calling)</option>
+                                    <option value="deepseek-v4-pro">deepseek-v4-pro (Avanzato / Pro)</option>
+                                    <option value="deepseek-reasoner">deepseek-reasoner (R1 Ragionamento)</option>
+                                    <option value="kimi-k2.6">kimi-k2.6 (Moonshot Flagship Vision & Agent)</option>
+                                    <option value="moonshot-v1-8k">moonshot-v1-8k</option>
+                                    <option value="moonshot-v1-32k">moonshot-v1-32k</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="ai-api-key-input">API Key Privata (salvata in modo sicuro solo sulla TV):</label>
+                                <div class="password-input-group">
+                                    <input type="password" id="ai-api-key-input" placeholder="sk-..." class="form-input">
+                                    <button type="button" id="btn-toggle-key-visibility" class="key-eye-btn" aria-label="Mostra o nascondi chiave">👁</button>
+                                </div>
+                                <span class="form-hint">Le chiavi risiedono esclusivamente nel chip sicuro (TrustZone) della TV.</span>
+                            </div>
+
+                            <div class="test-connection-row">
+                                <button id="btn-test-ai-connection" class="btn-secondary-action">Testa Connessione</button>
+                                <span id="test-connection-result" class="test-result-label hidden"></span>
+                            </div>
+                        </div>
+
+                        <!-- Budgeting & Security Guard Card -->
+                        <div class="budget-guard-card">
+                            <div class="budget-card-header">
+                                <div class="budget-card-title">
+                                    <span class="budget-icon">🛡️</span>
+                                    <span>Controllo Budget Condiviso</span>
+                                </div>
+                                <span id="budget-status-badge" class="budget-status-pill ok">✓ Normale (&lt; 3,00 €)</span>
+                            </div>
+
+                            <div class="budget-metrics-row">
+                                <div class="budget-metric">
+                                    <span class="metric-label">Tetto Massimo:</span>
+                                    <span class="metric-val">5,00 €</span>
+                                </div>
+                                <div class="budget-metric">
+                                    <span class="metric-label">Speso Finora:</span>
+                                    <span id="budget-spent-val" class="metric-val highlight">0,0000 €</span>
+                                </div>
+                                <div class="budget-metric">
+                                    <span class="metric-label">In-Flight:</span>
+                                    <span id="budget-inflight-val" class="metric-val">0,0000 €</span>
+                                </div>
+                                <div class="budget-metric">
+                                    <span class="metric-label">Residuo:</span>
+                                    <span id="budget-remaining-val" class="metric-val success">5,00 €</span>
+                                </div>
+                            </div>
+
+                            <div class="budget-progress-container">
+                                <div class="budget-progress-bar-bg">
+                                    <div id="budget-progress-fill" class="budget-progress-fill" style="width: 0%;"></div>
+                                </div>
+                                <div class="budget-markers">
+                                    <span class="marker marker-start">0 €</span>
+                                    <span class="marker marker-warn1">3 € (Avviso)</span>
+                                    <span class="marker marker-warn2">4 € (Critico)</span>
+                                    <span class="marker marker-stop">5 € (Stop)</span>
+                                </div>
+                            </div>
+
+                            <div id="budget-alert-box" class="budget-alert-box hidden"></div>
+
+                            <div class="budget-actions-row">
+                                <button type="button" id="btn-test-budget-guard" class="btn-subtle-reset" title="Testa blocco preventivo">Test Blocco Budget</button>
+                                <button type="button" id="btn-reset-budget" class="btn-subtle-reset" title="Azzera contatore spesa TV">Azzera Contatore Spesa</button>
+                            </div>
+                        </div>
+
+                        <div class="settings-actions">
+                            <button id="btn-save-ai-config" class="btn-primary-action">Salva Configurazione AI</button>
+                        </div>
+                    </div>
+
+                    <!-- SUBTAB: VOCE & TTS NEURALE -->
+                    <div id="tab-voice" class="ai-tab-content" role="tabpanel">
+                        <p class="section-intro">
+                            Sintesi vocale naturale italiana (Azure Speech F0: 500.000 car/mese gratuiti) con ducking automatico del volume TV.
+                        </p>
+
+                        <div class="form-group">
+                            <label for="ai-voice-select">Voce Assistente:</label>
+                            <select id="ai-voice-select" class="form-select">
+                                <option value="it-IT-DiegoNeural" selected>Diego (Azure Neurale Maschile - Naturale e Calmo)</option>
+                                <option value="it-IT-IsabellaNeural">Isabella (Azure Neurale Femminile - Naturale)</option>
+                                <option value="offline_espeak">Offline Standard (eSpeak NG Locale sulla TV)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="azure-speech-key-input">Chiave Azure Speech F0 (opzionale, cifrata in TrustZone):</label>
+                            <div class="password-input-group">
+                                <input type="password" id="azure-speech-key-input" placeholder="Chiave Azure Speech..." class="form-input">
+                                <button type="button" class="btn-toggle-pwd" id="btn-toggle-azure-key" aria-label="Mostra chiave Azure">👁</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="azure-region-select">Regione Azure:</label>
+                            <select id="azure-region-select" class="form-select">
+                                <option value="westeurope" selected>West Europe (westeurope)</option>
+                                <option value="italynorth">Italy North (italynorth)</option>
+                                <option value="eastus">East US (eastus)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="budget-card">
+                                <div class="budget-row">
+                                    <span class="budget-label">Cache Audio Disco:</span>
+                                    <span id="tts-cache-size" class="budget-val">0 KB / 8 MB</span>
+                                </div>
+                                <div class="budget-row">
+                                    <span class="budget-label">Audio Focus TV:</span>
+                                    <span class="budget-val">Ducking Automatico (API 26+)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-actions">
+                            <button id="btn-save-voice" class="btn-primary-action">Salva Impostazioni Voce</button>
+                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta Anteprima</button>
+                            <button id="btn-clear-cache" class="btn-danger-outline">Svuota Cache</button>
+                        </div>
+                    </div>
+
+                    <!-- SUBTAB: MEMORIA PROCEDURALE (SQLITE) -->
+                    <div id="tab-memory" class="ai-tab-content" role="tabpanel">
+                        <p class="section-intro">
+                            Sequenze di comandi salvate nel database SQLite locale della TV ed eseguibili a <strong>costo 0 token</strong>.
+                        </p>
+                        <div id="procedural-list" class="procedural-list">
+                            <div class="loading-state">Caricamento memoria in corso...</div>
+                        </div>
+                        <div class="memory-actions">
+                            <button id="btn-reset-procedural" class="btn-danger-outline">Ripristina Solo Procedure</button>
+                        </div>
+                    </div>
+
+                    <!-- SUBTAB: PREFERENZE & PRIVACY -->
+                    <div id="tab-prefs" class="ai-tab-content" role="tabpanel">
+                        <p class="section-intro">
+                            Distingue la <strong>memoria tecnica</strong> (procedure TV) dai <strong>dati personali</strong> (preferenze e cronologia).
+                        </p>
+                        <div class="form-group">
+                            <label class="toggle-card">
+                                <input type="checkbox" id="pref-guest-mode">
+                                <div class="toggle-info">
+                                    <div class="toggle-title">Modalità Ospite (Guest Mode)</div>
+                                    <div class="toggle-desc">Disattiva i consigli personalizzati e non memorizza abitudini o conversazioni.</div>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="pref-fav-channels">Canali Preferiti:</label>
+                            <input type="text" id="pref-fav-channels" class="form-input" value="Italia 2, Rai 1, Canale 5, Focus, 20 Mediaset">
+                        </div>
+                        <div class="form-group">
+                            <label for="pref-fav-genres">Generi Preferiti:</label>
+                            <input type="text" id="pref-fav-genres" class="form-input" value="Fantascienza, Documentari, Serie TV, Animazione, Calcio">
+                        </div>
+                        <div class="form-group">
+                            <label for="pref-fav-apps">App Streaming Preferite:</label>
+                            <input type="text" id="pref-fav-apps" class="form-input" value="Mediaset Infinity, RaiPlay, YouTube, Disney+">
+                        </div>
+                        <div class="settings-actions">
+                            <button id="btn-save-prefs" class="btn-primary-action">Aggiorna Preferenze</button>
+                            <button id="btn-clear-personal-prefs" class="btn-danger-outline">Elimina Solo Dati Personali</button>
+                        </div>
+                    </div>
+
+                    <!-- SUBTAB: STATISTICHE D'USO -->
+                    <div id="tab-stats" class="ai-tab-content" role="tabpanel">
+                        <div class="stats-grid">
+                            <div class="stat-card stat-highlight">
+                                <span class="stat-value" id="stat-zero-token">0</span>
+                                <span class="stat-label">Esecuzioni Locali (0 Token)</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-value" id="stat-cloud-calls">0</span>
+                                <span class="stat-label">Chiamate Cloud</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-value" id="stat-prompt-tokens">0</span>
+                                <span class="stat-label">Prompt Token</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-value" id="stat-completion-tokens">0</span>
+                                <span class="stat-label">Completion Token</span>
+                            </div>
+                        </div>
+                        <div class="stat-summary-box">
+                            <strong>Risparmio verificato:</strong> Le richieste eseguite tramite la memoria locale o il fast-path locale hanno costo 0 token e mantengono i tuoi dati all'interno della rete Wi-Fi di casa.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

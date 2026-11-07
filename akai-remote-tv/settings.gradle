@@ -1,0 +1,2 @@
+rootProject.name = 'akai-remote-tv'
+include ':app'
