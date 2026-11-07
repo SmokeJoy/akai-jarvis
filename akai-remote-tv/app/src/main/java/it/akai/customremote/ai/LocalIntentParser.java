@@ -157,6 +157,10 @@ public class LocalIntentParser {
         // -------------------------------------------------------------
         if (clean.contains("canali preferiti") || clean.contains("canali che preferisco") || clean.contains("quali canali preferisco") || clean.equals("i miei canali")) {
             AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
+            if (mem.isGuestMode()) {
+                return new ParsedIntent(true, "pref_favorite_channels", "Consultazione canali preferiti", new JSONArray(),
+                        "La modalità Ospite è attiva. I canali preferiti personali sono protetti e non accessibili.", "local_memory", null);
+            }
             String favs = mem.getPreference("favorite_channels", "[]");
             String msg;
             try {
@@ -177,6 +181,10 @@ public class LocalIntentParser {
 
         if (clean.contains("generi preferiti") || clean.contains("cosa mi piace guardare") || clean.contains("miei gusti")) {
             AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
+            if (mem.isGuestMode()) {
+                return new ParsedIntent(true, "pref_favorite_genres", "Consultazione generi preferiti", new JSONArray(),
+                        "La modalità Ospite è attiva. I generi e i gusti personali sono protetti e non accessibili.", "local_memory", null);
+            }
             String favs = mem.getPreference("favorite_genres", "[]");
             String msg;
             try {
@@ -197,6 +205,10 @@ public class LocalIntentParser {
 
         if (clean.contains("cosa hai fatto") || clean.contains("cosa hai appena fatto") || clean.contains("ultimo comando") || clean.contains("ultima operazione")) {
             AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
+            if (mem.isGuestMode()) {
+                return new ParsedIntent(true, "last_action_recall", "Rievocazione ultima operazione", new JSONArray(),
+                        "La modalità Ospite è attiva. La cronologia delle operazioni recenti è protetta.", "local_memory", null);
+            }
             JSONArray convs = mem.getRecentConversations(2);
             String msg;
             if (convs != null && convs.length() > 0) {

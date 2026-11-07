@@ -191,7 +191,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
         }
         if (oldVersion < 6) {
             try {
-                db.execSQL("ALTER TABLE " + TABLE_PROCEDURES + " ADD COLUMN " + COL_IS_PERSONAL + " INTEGER DEFAULT 0;");
+                // Politica conservativa: le procedure pregresse create dall'utente
+                // vengono marcate di default come personali (is_personal = 1) per prevenire leak in Guest Mode
+                db.execSQL("ALTER TABLE " + TABLE_PROCEDURES + " ADD COLUMN " + COL_IS_PERSONAL + " INTEGER DEFAULT 1;");
+                // Whitelist rigorosa per i template di sistema tecnici verificabili
+                db.execSQL("UPDATE " + TABLE_PROCEDURES + " SET " + COL_IS_PERSONAL + " = 0 WHERE " + COL_INTENT_KEY + " IN ('youtube');");
             } catch (Exception e) {
                 Log.w(TAG, "Schema upgrade v6 notice: " + e.getMessage());
             }
@@ -274,28 +278,34 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     public synchronized JSONObject findProcedureByGoal(String rawQuery) {
         if (rawQuery == null || rawQuery.trim().isEmpty()) return null;
         String clean = rawQuery.trim().toLowerCase(Locale.ITALIAN).replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
+        boolean guest = isGuestMode();
 
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
 
         try {
-            // Check 1: Match esatto su intent_key
-            c = db.query(TABLE_PROCEDURES, null, COL_INTENT_KEY + "=?", new String[]{clean}, null, null, null);
+            // Check 1: Match esatto su intent_key (filtrando procedure personali in Guest Mode)
+            String where1 = COL_INTENT_KEY + "=?";
+            if (guest) where1 += " AND " + COL_IS_PERSONAL + "=0";
+            c = db.query(TABLE_PROCEDURES, null, where1, new String[]{clean}, null, null, null);
             if (c != null && c.moveToFirst()) {
                 return parseProcedureCursor(c);
             }
             if (c != null) c.close();
 
-            // Check 2: Match su goal_intent
-            c = db.query(TABLE_PROCEDURES, null, COL_GOAL_INTENT + "=?", new String[]{clean}, null, null, null);
+            // Check 2: Match su goal_intent (filtrando procedure personali in Guest Mode)
+            String where2 = COL_GOAL_INTENT + "=?";
+            if (guest) where2 += " AND " + COL_IS_PERSONAL + "=0";
+            c = db.query(TABLE_PROCEDURES, null, where2, new String[]{clean}, null, null, null);
             if (c != null && c.moveToFirst()) {
                 return parseProcedureCursor(c);
             }
             if (c != null) c.close();
 
-            // Check 3: Match se la query contiene l'intent_key memorizzato (es. "metti italia 2" contiene "italia 2" o "italia2")
+            // Check 3: Match se la query contiene l'intent_key memorizzato (es. "metti italia 2")
             String cleanNoSpace = clean.replaceAll("\\s+", "");
-            Cursor allProcs = db.query(TABLE_PROCEDURES, null, null, null, null, null, COL_SUCCESS_COUNT + " DESC");
+            String where3 = guest ? (COL_IS_PERSONAL + "=0") : null;
+            Cursor allProcs = db.query(TABLE_PROCEDURES, null, where3, null, null, null, COL_SUCCESS_COUNT + " DESC");
             if (allProcs != null && allProcs.moveToFirst()) {
                 do {
                     String ik = allProcs.getString(allProcs.getColumnIndex(COL_INTENT_KEY));
@@ -331,10 +341,13 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
 
     public synchronized JSONObject getProcedure(String intentKey) {
         if (intentKey == null) return null;
+        boolean guest = isGuestMode();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
-            c = db.query(TABLE_PROCEDURES, null, COL_INTENT_KEY + "=?", new String[]{intentKey}, null, null, null);
+            String where = COL_INTENT_KEY + "=?";
+            if (guest) where += " AND " + COL_IS_PERSONAL + "=0";
+            c = db.query(TABLE_PROCEDURES, null, where, new String[]{intentKey}, null, null, null);
             if (c != null && c.moveToFirst()) {
                 return parseProcedureCursor(c);
             }
@@ -523,9 +536,15 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
-            c = db.query(TABLE_PREFERENCES, new String[]{COL_PREF_VAL}, COL_PREF_KEY + "=?", new String[]{key}, null, null, null);
+            c = db.query(TABLE_PREFERENCES, new String[]{COL_PREF_VAL, COL_IS_PERSONAL}, COL_PREF_KEY + "=?", new String[]{key}, null, null, null);
             if (c != null && c.moveToFirst()) {
-                return c.getString(0);
+                String val = c.getString(0);
+                int personal = c.getInt(1);
+                // Se la preferenza è personale e la modalità Ospite è attiva, non esporla
+                if (personal == 1 && !"guest_mode".equals(key) && isGuestMode()) {
+                    return defaultValue;
+                }
+                return val;
             }
         } catch (Exception e) {
             Log.e(TAG, "Error getting pref " + key + ": " + e.getMessage());
