@@ -47,6 +47,7 @@ public class View {
     public int getScrollX() { return scrollX; }
     public int getScrollY() { return scrollY; }
     public void scrollTo(int x, int y) { this.scrollX = x; this.scrollY = y; }
+    public boolean post(Runnable r) { if (r != null) r.run(); return true; }
 
     public void setOnClickListener(OnClickListener l) { this.onClickListener = l; }
     public void setOnLongClickListener(OnLongClickListener l) { this.onLongClickListener = l; }

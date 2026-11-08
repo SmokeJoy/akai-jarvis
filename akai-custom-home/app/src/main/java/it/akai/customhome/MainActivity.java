@@ -306,7 +306,8 @@ public class MainActivity extends Activity {
                         }
                     }
                 }
-                loadInstalledApps();
+                boolean forceRefresh = Intent.ACTION_PACKAGE_REPLACED.equals(action);
+                loadInstalledApps(forceRefresh);
             }
         };
         IntentFilter filter = new IntentFilter();
@@ -584,7 +585,7 @@ public class MainActivity extends Activity {
                 } else if (which == 3) {
                     showSystemApps = !showSystemApps;
                     saveThemePreferences();
-                    loadInstalledApps();
+                    loadInstalledApps(true);
                     Toast.makeText(MainActivity.this, "App tecniche: " + (showSystemApps ? "Visibili" : "Nascoste"), Toast.LENGTH_SHORT).show();
                 } else if (which == 4) {
                     showNetworkDetails = !showNetworkDetails;
@@ -598,7 +599,7 @@ public class MainActivity extends Activity {
                     showSystemApps = false;
                     showNetworkDetails = false;
                     saveThemePreferences();
-                    loadInstalledApps();
+                    loadInstalledApps(true);
                     applyTheme();
                     Toast.makeText(MainActivity.this, "Tema ripristinato", Toast.LENGTH_SHORT).show();
                 }
@@ -919,14 +920,30 @@ public class MainActivity extends Activity {
         if (list1 == null || list2 == null) return false;
         if (list1.size() != list2.size()) return false;
         for (int i = 0; i < list1.size(); i++) {
-            if (!list1.get(i).packageName.equals(list2.get(i).packageName)) {
-                return false;
-            }
+            AppItem a = list1.get(i);
+            AppItem b = list2.get(i);
+            if (!a.packageName.equals(b.packageName)) return false;
+            if (a.activityName != null && !a.activityName.equals(b.activityName)) return false;
+            if (a.label != null && !a.label.equals(b.label)) return false;
         }
         return true;
     }
 
-    private void restoreFocusState(String focusedPkg, int focusedSection, int focusedViewId) {
+    private void restoreFocusState(final String focusedPkg, final int focusedSection, final int focusedViewId) {
+        Runnable r = new Runnable() {
+            @Override
+            public void run() {
+                performRestoreFocus(focusedPkg, focusedSection, focusedViewId);
+            }
+        };
+        if (layoutMainRoot != null) {
+            layoutMainRoot.post(r);
+        } else {
+            r.run();
+        }
+    }
+
+    private void performRestoreFocus(String focusedPkg, int focusedSection, int focusedViewId) {
         if (focusedPkg != null) {
             ViewGroup targetContainer = null;
             if (focusedSection == SECTION_FAVORITES) targetContainer = llFavContainer;
@@ -960,13 +977,37 @@ public class MainActivity extends Activity {
     }
 
     private void restoreScrollPositions(final int scrollY, final int favX, final int streamX, final int allX) {
-        if (scrollMainBody != null) scrollMainBody.scrollTo(0, scrollY);
-        if (scrollFavs != null) scrollFavs.scrollTo(favX, 0);
-        if (scrollStreaming != null) scrollStreaming.scrollTo(streamX, 0);
-        if (scrollAllApps != null) scrollAllApps.scrollTo(allX, 0);
+        if (scrollMainBody != null) {
+            scrollMainBody.post(new Runnable() {
+                @Override
+                public void run() { scrollMainBody.scrollTo(0, scrollY); }
+            });
+        }
+        if (scrollFavs != null) {
+            scrollFavs.post(new Runnable() {
+                @Override
+                public void run() { scrollFavs.scrollTo(favX, 0); }
+            });
+        }
+        if (scrollStreaming != null) {
+            scrollStreaming.post(new Runnable() {
+                @Override
+                public void run() { scrollStreaming.scrollTo(streamX, 0); }
+            });
+        }
+        if (scrollAllApps != null) {
+            scrollAllApps.post(new Runnable() {
+                @Override
+                public void run() { scrollAllApps.scrollTo(allX, 0); }
+            });
+        }
     }
 
-    private void loadInstalledApps() {
+    public void loadInstalledApps() {
+        loadInstalledApps(false);
+    }
+
+    public void loadInstalledApps(boolean forceRefresh) {
         PackageManager pm = getPackageManager();
         Set<String> seen = new HashSet<String>();
         List<AppItem> newAllApps = new ArrayList<AppItem>();
@@ -1046,9 +1087,9 @@ public class MainActivity extends Activity {
         int scrollStreamX = (scrollStreaming != null) ? scrollStreaming.getScrollX() : 0;
         int scrollAllX = (scrollAllApps != null) ? scrollAllApps.getScrollX() : 0;
 
-        boolean favsChanged = !areAppListsEqual(favoriteApps, newFavoriteApps);
-        boolean streamChanged = !areAppListsEqual(streamingApps, newStreamingApps);
-        boolean allAppsChanged = !areAppListsEqual(allApps, newAllApps);
+        boolean favsChanged = forceRefresh || !areAppListsEqual(favoriteApps, newFavoriteApps);
+        boolean streamChanged = forceRefresh || !areAppListsEqual(streamingApps, newStreamingApps);
+        boolean allAppsChanged = forceRefresh || !areAppListsEqual(allApps, newAllApps);
 
         favoriteApps.clear();
         favoriteApps.addAll(newFavoriteApps);
@@ -1217,9 +1258,6 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Gestione rigorosa del D-Pad del telecomando TV (P0 risolto)
-        card.setOnKeyListener(new CardKeyHandler(this, item, sectionType, index));
-
         return card;
     }
 
@@ -1315,6 +1353,32 @@ public class MainActivity extends Activity {
         }
     }
 
+    public boolean moveVisibleFavorite(String targetPkg, boolean moveRight) {
+        if (targetPkg == null) return false;
+        int visibleIndex = -1;
+        for (int i = 0; i < favoriteApps.size(); i++) {
+            if (targetPkg.equals(favoriteApps.get(i).packageName)) {
+                visibleIndex = i;
+                break;
+            }
+        }
+        if (visibleIndex == -1) return false;
+        int targetVisibleIndex = moveRight ? visibleIndex + 1 : visibleIndex - 1;
+        if (targetVisibleIndex < 0 || targetVisibleIndex >= favoriteApps.size()) {
+            return false;
+        }
+        String swapWithPkg = favoriteApps.get(targetVisibleIndex).packageName;
+        int pIdx1 = favoritePackages.indexOf(targetPkg);
+        int pIdx2 = favoritePackages.indexOf(swapWithPkg);
+        if (pIdx1 != -1 && pIdx2 != -1) {
+            Collections.swap(favoritePackages, pIdx1, pIdx2);
+            saveFavoritePreferences();
+            updateFavoritesList();
+            return true;
+        }
+        return false;
+    }
+
     public void showFavoriteOptionsDialog(final AppItem fav, final int index) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
         builder.setTitle(fav.label + " (Preferiti)");
@@ -1326,7 +1390,7 @@ public class MainActivity extends Activity {
             options.add("⬅️ Sposta a sinistra");
             actions.add(1);
         }
-        if (index < favoritePackages.size() - 1) {
+        if (index < favoriteApps.size() - 1) {
             options.add("➡️ Sposta a destra");
             actions.add(2);
         }
@@ -1341,14 +1405,10 @@ public class MainActivity extends Activity {
             public void onClick(DialogInterface dialog, int which) {
                 int action = actions.get(which);
                 if (action == 1) {
-                    Collections.swap(favoritePackages, index, index - 1);
-                    saveFavoritePreferences();
-                    updateFavoritesList();
+                    moveVisibleFavorite(fav.packageName, false);
                     Toast.makeText(MainActivity.this, fav.label + " spostato a sinistra", Toast.LENGTH_SHORT).show();
                 } else if (action == 2) {
-                    Collections.swap(favoritePackages, index, index + 1);
-                    saveFavoritePreferences();
-                    updateFavoritesList();
+                    moveVisibleFavorite(fav.packageName, true);
                     Toast.makeText(MainActivity.this, fav.label + " spostato a destra", Toast.LENGTH_SHORT).show();
                 } else if (action == 3) {
                     favoritePackages.remove(fav.packageName);

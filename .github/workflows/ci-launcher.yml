@@ -66,9 +66,9 @@ jobs:
           test -f "$ANDROID_HOME/platforms/android-28/android.jar" || (echo "FATAL: android-28 platform installation failed!" && exit 1)
           echo "android-28 platform successfully installed and verified."
 
-      - name: "4. Compile and Run Launcher Java Unit Tests (86 Tests - P0 OEM Filter, D-Pad Repeats, Empty Favs, Contrast)"
+      - name: "4. Compile and Run Launcher Java Unit Tests (101 Tests - P0 Listener Reset, P1 Hidden OEM Reorder, Dynamic Metadata Diffing, D-Pad Repeats)"
         run: |
-          echo "=== Compiling and Running LauncherUnitTests (86 Tests) ==="
+          echo "=== Compiling and Running LauncherUnitTests (101 Tests) ==="
           mkdir -p test_bin
           MOCK_SRC=$(find akai-custom-home/test/host_mock -name "*.java")
           javac -encoding UTF-8 -d test_bin \
@@ -77,7 +77,7 @@ jobs:
             akai-custom-home/test/it/akai/customhome/LauncherUnitTests.java
 
           java -cp test_bin it.akai.customhome.LauncherUnitTests
-          echo "All 86 Launcher unit tests passed successfully."
+          echo "All 101 Launcher unit tests passed successfully."
 
       - name: "5. Compile Standalone AKAI Custom Home v8 Leanback APK with AAPT2, Javac and D8 (Strict Android API 28)"
         run: |

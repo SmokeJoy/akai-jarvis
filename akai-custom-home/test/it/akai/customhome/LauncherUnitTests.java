@@ -86,6 +86,26 @@ public class LauncherUnitTests {
             }
         }
 
+        public List<AppItem> getFavoriteAppsList() {
+            try {
+                java.lang.reflect.Field field = MainActivity.class.getDeclaredField("favoriteApps");
+                field.setAccessible(true);
+                return (List<AppItem>) field.get(this);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public List<AppItem> getAllAppsList() {
+            try {
+                java.lang.reflect.Field field = MainActivity.class.getDeclaredField("allApps");
+                field.setAccessible(true);
+                return (List<AppItem>) field.get(this);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+
         public void invokeLoadPreferences() {
             try {
                 java.lang.reflect.Field prefsField = MainActivity.class.getDeclaredField("prefs");
@@ -285,6 +305,38 @@ public class LauncherUnitTests {
         assertEquals("ZERO lanci app dopo reset da focus loss", 0, harness.launchAppCalls);
     }
 
+    public static void testSingleOnKeyListenerWiringWithFocusLoss() {
+        System.out.println("\nTest 1.8: Cablaggio Reale View con Singolo OnKeyListener (P0 Risolto)");
+        MockActivityHarness harness = new MockActivityHarness();
+        MainActivity.AppItem testItem = new MainActivity.AppItem("VLC", "org.videolan.vlc", "MainActivity", null);
+        View card = new View();
+
+        final MainActivity.CardKeyHandler keyHandler = new MainActivity.CardKeyHandler(harness, testItem, MainActivity.SECTION_STREAMING, 0);
+        card.setOnKeyListener(keyHandler);
+        card.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (!hasFocus) {
+                    keyHandler.reset();
+                }
+            }
+        });
+
+        // 1. Simula DOWN sulla View (l'utente preme il tasto)
+        boolean downDispatched = card.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+        assertTrue("DOWN deve essere consumato dalla card", downDispatched);
+        assertTrue("downReceived deve essere true nel keyHandler associato", keyHandler.isDownReceived());
+
+        // 2. Simula perdita focus della card prima del rilascio
+        card.setFocused(false);
+        assertFalse("downReceived deve essere resettato a false via onFocusChange", keyHandler.isDownReceived());
+
+        // 3. Simula UP sulla View
+        boolean upDispatched = card.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+        assertTrue("UP orfano dopo focus loss deve essere consumato", upDispatched);
+        assertEquals("ZERO lanci app: il listener associato alla View ha resettato correttamente!", 0, harness.launchAppCalls);
+    }
+
     // -------------------------------------------------------------------------
     // TEST PREFERITI VUOTI E REGRESSIONE OEM (P0 & P1)
     // -------------------------------------------------------------------------
@@ -345,6 +397,48 @@ public class LauncherUnitTests {
         assertEquals("Posizione preferito YouTube preservata all'indice 1", "com.google.android.youtube.tv", loadedFavs.get(1));
     }
 
+    public static void testReorderFavoritesWithHiddenOemApps() {
+        System.out.println("\nTest 2.4: Riordino Preferiti con App Tecniche OEM Nascoste (P1 Risolto)");
+        MockActivityHarness harness = new MockActivityHarness();
+        harness.invokeLoadPreferences();
+
+        // favoritePackages persistenti: 1 OEM nascosta e 2 visibili (YouTube e RaiPlay)
+        List<String> favPkgs = harness.getFavoritePackagesList();
+        favPkgs.clear();
+        favPkgs.add("com.cultraview.launcher"); // OEM nascosta (index 0)
+        favPkgs.add("com.google.android.youtube.tv"); // Visibile 1 (vIndex 0)
+        favPkgs.add("it.rainet.androidtv"); // Visibile 2 (vIndex 1)
+
+        // favoriteApps visibili: solo YouTube e RaiPlay
+        List<MainActivity.AppItem> favApps = harness.getFavoriteAppsList();
+        favApps.clear();
+        favApps.add(new MainActivity.AppItem("YouTube TV", "com.google.android.youtube.tv", "MainActivity", null));
+        favApps.add(new MainActivity.AppItem("RaiPlay", "it.rainet.androidtv", "RaiPlayActivity", null));
+
+        // Popola allApps così che updateFavoritesList() possa ricostruire favoriteApps preservando i dati
+        List<MainActivity.AppItem> allAppsList = harness.getAllAppsList();
+        allAppsList.clear();
+        allAppsList.add(new MainActivity.AppItem("YouTube TV", "com.google.android.youtube.tv", "MainActivity", null));
+        allAppsList.add(new MainActivity.AppItem("RaiPlay", "it.rainet.androidtv", "RaiPlayActivity", null));
+
+        // L'utente preme "Sposta a destra" su YouTube
+        boolean moveRightSuccess = harness.moveVisibleFavorite("com.google.android.youtube.tv", true);
+        assertTrue("Spostamento a destra del preferito visibile riuscito", moveRightSuccess);
+
+        // Verifica che l'OEM nascosta sia rimasta INTATTA all'indice 0, e YouTube/RaiPlay si siano scambiati
+        assertEquals("OEM Cultraview DEVE rimanere all'indice 0", "com.cultraview.launcher", favPkgs.get(0));
+        assertEquals("RaiPlay ora deve essere all'indice 1", "it.rainet.androidtv", favPkgs.get(1));
+        assertEquals("YouTube ora deve essere all'indice 2", "com.google.android.youtube.tv", favPkgs.get(2));
+
+        // Ora l'utente preme "Sposta a sinistra" su YouTube
+        boolean moveLeftSuccess = harness.moveVisibleFavorite("com.google.android.youtube.tv", false);
+        assertTrue("Spostamento a sinistra del preferito visibile riuscito", moveLeftSuccess);
+
+        assertEquals("OEM Cultraview rimane sempre all'indice 0", "com.cultraview.launcher", favPkgs.get(0));
+        assertEquals("YouTube torna all'indice 1", "com.google.android.youtube.tv", favPkgs.get(1));
+        assertEquals("RaiPlay torna all'indice 2", "it.rainet.androidtv", favPkgs.get(2));
+    }
+
     // -------------------------------------------------------------------------
     // TEST DIFFING NON DISTRUTTIVO, FOCUS E SCROLL (P1)
     // -------------------------------------------------------------------------
@@ -369,6 +463,16 @@ public class LauncherUnitTests {
         List<MainActivity.AppItem> listDifferentSize = new ArrayList<MainActivity.AppItem>();
         listDifferentSize.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", null));
         assertFalse("Liste con dimensioni diverse devono risultare differenti", MainActivity.areAppListsEqual(listA, listDifferentSize));
+
+        List<MainActivity.AppItem> listDifferentLabel = new ArrayList<MainActivity.AppItem>();
+        listDifferentLabel.add(new MainActivity.AppItem("App 1 Nuova", "com.test.app1", "Act1", null));
+        listDifferentLabel.add(new MainActivity.AppItem("App 2", "com.test.app2", "Act2", null));
+        assertFalse("Liste con etichetta modificata devono risultare differenti (PACKAGE_REPLACED)", MainActivity.areAppListsEqual(listA, listDifferentLabel));
+
+        List<MainActivity.AppItem> listDifferentActivity = new ArrayList<MainActivity.AppItem>();
+        listDifferentActivity.add(new MainActivity.AppItem("App 1", "com.test.app1", "NewActivity", null));
+        listDifferentActivity.add(new MainActivity.AppItem("App 2", "com.test.app2", "Act2", null));
+        assertFalse("Liste con activity name modificata devono risultare differenti", MainActivity.areAppListsEqual(listA, listDifferentActivity));
     }
 
     public static void testCardTagPackageAndSectionAssociation() {
@@ -485,11 +589,13 @@ public class LauncherUnitTests {
             testOrphanedUpEventDoesNotLaunchApp();
             testRepeatedDownOnlyTriggersDialogOnceAndConsumesRepeats();
             testFocusLossResetsCardKeyHandler();
+            testSingleOnKeyListenerWiringWithFocusLoss();
 
             // Preferiti & P0 OEM Regression
             testEmptyFavoritesPersistenceAcrossReboot();
             testFirstRunSeedsDefaultFavorites();
             testOemTechnicalAppInFavoritesPreservedAcrossFilterToggle();
+            testReorderFavoritesWithHiddenOemApps();
 
             // Diffing e Focus
             testAppListsEqualDiffing();
