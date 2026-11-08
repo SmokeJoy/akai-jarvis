@@ -343,7 +343,8 @@ if (args.includes('exec-out')) {
     return;
 }
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
-if (args.includes('pidof')) { console.log('12345'); process.exit(0); }
+if (args.includes('pidof')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('shell')) { process.exit(0); }
 process.exit(0);
 "@ | Out-File -FilePath $mockAdbJs7 -Encoding ascii
@@ -496,8 +497,8 @@ if (args.includes('exec-out')) {
     return;
 }
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
-if (args.includes('pidof')) { console.log('12345'); process.exit(0); }
-if (args.includes('test -f')) { console.log('NOT_FOUND'); process.exit(0); }
+if (args.includes('pidof')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('shell')) {
@@ -669,8 +670,8 @@ if (args.includes('exec-out') || args.includes('cat databases/akai_memory.db')) 
     return;
 }
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
-if (args.includes('pidof')) { console.log('12345'); process.exit(0); }
-if (args.includes('test -f databases/akai_memory.db-wal')) { console.log('NOT_FOUND'); process.exit(0); }
+if (args.includes('pidof')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 process.exit(0);
@@ -1357,7 +1358,7 @@ if (args.includes('kill -9')) {
 }
 if (args.includes('pidof')) {
     // Processo writer ancora attivo (simula processo bloccato che non muore)
-    console.log('9999');
+    console.log('PIDOF_CHECK:pids=[9999]:exit=[0]');
     process.exit(0);
 }
 // Se viene tentata l'estrazione DB nonostante il writer non sia quiescente:
@@ -1515,6 +1516,209 @@ try {
     }
 } finally {
     Remove-Item $testDir17 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+
+# ==============================================================================
+# TEST 18: [TEST NEGATIVO / QUIESCENZA ERRORE TRASPORTO O SENZA STDOUT FAIL-CLOSED]
+# Errore di trasporto o output vuoto durante il probe della quiescenza (pidof):
+# Blocco FAIL-CLOSED immediato prima di qualsiasi estrazione DB
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 18: Errore trasporto/probe durante verifica quiescenza (Fail-Closed) ---" -ForegroundColor Yellow
+$testDir18 = Join-Path $tempDir "akai_test_quiescence_transport_fail_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir18 | Out-Null
+
+$mockAdbJs18 = Join-Path $testDir18 "mock_adb_18.js"
+$mockSignerJs18 = Join-Path $testDir18 "mock_signer_18.js"
+$backupDir18 = Join-Path $testDir18 "backup_target"
+
+@"
+console.log('Signer #1 certificate SHA-256 digest: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs18 -Encoding ascii
+
+$mockSignerCmd18 = if ($isWin) { Join-Path $testDir18 "apksigner.cmd" } else { Join-Path $testDir18 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockSignerJs18`" %*" | Out-File -FilePath $mockSignerCmd18 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs18`" `"`$@`"" | Out-File -FilePath $mockSignerCmd18 -Encoding ascii
+    & chmod +x $mockSignerCmd18
+}
+
+@"
+const fs = require('fs');
+const args = process.argv.slice(2).join(' ');
+
+if (args.includes('connect')) process.exit(0);
+if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
+if (args.includes('pull') && args.includes('base.apk')) {
+    const dest = process.argv[process.argv.length - 1];
+    fs.writeFileSync(dest, 'PK_DEVICE_BACKUP_APK_MOCK');
+    process.exit(0);
+}
+// Snapshot v6 assente per innescare estrazione baseline v5
+if (args.includes('akai_memory_snapshot.db')) {
+    process.exit(1);
+}
+if (args.includes('am force-stop')) {
+    process.exit(0);
+}
+// Probe quiescenza: simula fallimento trasporto ADB o assenza stdout (exit 1 con zero output)
+if (args.includes('pidof') || args.includes('PIDOF_CHECK')) {
+    process.exit(1);
+}
+// Se viene tentata l'estrazione DB nonostante il fallimento del probe di quiescenza:
+if (args.includes('exec-out') || args.includes('pull') || args.includes('cat databases/akai_memory.db')) {
+    console.error('FAIL_UNSAFE_PULL: Tentata estrazione del DB senza quiescenza verificata!');
+    process.exit(1);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs18 -Encoding ascii
+
+$mockAdbCmd18 = if ($isWin) { Join-Path $testDir18 "adb.cmd" } else { Join-Path $testDir18 "adb" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockAdbJs18`" %*" | Out-File -FilePath $mockAdbCmd18 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs18`" `"`$@`"" | Out-File -FilePath $mockAdbCmd18 -Encoding ascii
+    & chmod +x $mockAdbCmd18
+}
+
+$mockAdbEscaped18 = $mockAdbCmd18.Replace('\', '/')
+$mockSignerEscaped18 = $mockSignerCmd18.Replace('\', '/')
+$backupDirEscaped18 = $backupDir18.Replace('\', '/')
+
+$testCmd18 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped18'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped18'
+
+& '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -BackupDir '$backupDirEscaped18' -AllowHardwareExecution
+"@
+try {
+    $res18 = & $psExe -ExecutionPolicy Bypass -Command $testCmd18 2>&1 | Out-String
+
+    if ($res18 -match "ERRORE FAIL-CLOSED: Probe dello stato dei processi per .* fallito" -and $res18 -notmatch "FAIL_UNSAFE_PULL" -and $res18 -notmatch "Sessione di backup completata") {
+        Write-Host "[PASS] [TEST NEGATIVO / QUIESCENZA ERRORE TRASPORTO FAIL-CLOSED] Test 18: Fallimento probe o assenza stdout in Get-ApplicationProcessState blocca categoricamente in Fail-Closed prima del pull DB" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / QUIESCENZA ERRORE TRASPORTO FAIL-CLOSED] Test 18: Mancato blocco fail-closed: $res18" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Probe dello stato dei processi per .* fallito") {
+        Write-Host "[PASS] [TEST NEGATIVO / QUIESCENZA ERRORE TRASPORTO FAIL-CLOSED] Test 18: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / QUIESCENZA ERRORE TRASPORTO FAIL-CLOSED] Test 18: Eccezione inattesa: $($_.Exception.Message)" -ForegroundColor Red
+        $failed++
+    }
+} finally {
+    Remove-Item $testDir18 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+
+# ==============================================================================
+# TEST 19: [TEST NEGATIVO / ROLLBACK PROBE WAL FALLITO RUN-AS E SU NEGATI FAIL-CLOSED]
+# Canali run-as e su entrambi falliti con stdout vuoto/errore durante il probe WAL/SHM:
+# Nessun default a NOT_FOUND, blocco categorico FAIL-CLOSED e zero streaming restore del DB
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 19: Probe file WAL/SHM fallito su run-as e su nel Rollback (Fail-Closed) ---" -ForegroundColor Yellow
+$testDir19 = Join-Path $tempDir "akai_test_rollback_probe_fail_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir19 | Out-Null
+
+$mockAdbJs19 = Join-Path $testDir19 "mock_adb_19.js"
+$mockSignerJs19 = Join-Path $testDir19 "mock_signer_19.js"
+$backupDir19 = Join-Path $testDir19 "backup_target"
+$sessionDir19 = Join-Path $backupDir19 "session_20261108_050000"
+New-Item -ItemType Directory -Force -Path $sessionDir19 | Out-Null
+
+$deviceApk19 = Join-Path $sessionDir19 "it.akai.customremote_backup.apk"
+$deviceDb19 = Join-Path $sessionDir19 "akai_memory.db"
+
+[System.IO.File]::WriteAllText($deviceApk19, "PK_DEVICE_BACKUP_APK_MOCK")
+New-MockRealDatabase -FilePath $deviceDb19
+
+@"
+console.log('Signer #1 certificate SHA-256 digest: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs19 -Encoding ascii
+
+$mockSignerCmd19 = if ($isWin) { Join-Path $testDir19 "apksigner.cmd" } else { Join-Path $testDir19 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockSignerJs19`" %*" | Out-File -FilePath $mockSignerCmd19 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs19`" `"`$@`"" | Out-File -FilePath $mockSignerCmd19 -Encoding ascii
+    & chmod +x $mockSignerCmd19
+}
+
+@"
+const fs = require('fs');
+const args = process.argv.slice(2).join(' ');
+
+if (args.includes('connect')) process.exit(0);
+if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (args.includes('am force-stop')) process.exit(0);
+if (args.includes('install')) { console.log('Success'); process.exit(0); }
+if (args.includes('exec-in') && args.includes('pm install')) {
+    process.stdin.on('data', () => {});
+    process.stdin.on('end', () => { console.log('Success'); process.exit(0); });
+    return;
+}
+if (args.includes('rm -f')) {
+    process.exit(0);
+}
+// Probe WAL/SHM: fallisce sia per run-as che per su con codice di uscita 1 e stdout vuoto
+if (args.includes('FILE_PROBE_RESULT') || args.includes('test -f')) {
+    process.exit(1);
+}
+// Se viene tentato il ripristino o lo streaming del DB originale:
+if (args.includes('akai_memory.db') || args.includes('exec-in') || args.includes('cat databases/akai_memory.db')) {
+    console.error('FAIL_UNSAFE_RESTORE: Tentato ripristino del DB con probe WAL/SHM non determinabile!');
+    process.exit(1);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs19 -Encoding ascii
+
+$mockAdbCmd19 = if ($isWin) { Join-Path $testDir19 "adb.cmd" } else { Join-Path $testDir19 "adb" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockAdbJs19`" %*" | Out-File -FilePath $mockAdbCmd19 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs19`" `"`$@`"" | Out-File -FilePath $mockAdbCmd19 -Encoding ascii
+    & chmod +x $mockAdbCmd19
+}
+
+$mockAdbEscaped19 = $mockAdbCmd19.Replace('\', '/')
+$mockSignerEscaped19 = $mockSignerCmd19.Replace('\', '/')
+$backupDirEscaped19 = $backupDir19.Replace('\', '/')
+
+$testCmd19 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped19'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped19'
+
+& '$scriptEscaped' -Action rollback -TargetTv '127.0.0.1' -BackupDir '$backupDirEscaped19' -AllowHardwareExecution
+"@
+try {
+    $res19 = & $psExe -ExecutionPolicy Bypass -Command $testCmd19 2>&1 | Out-String
+
+    if ($res19 -match "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file.*akai_memory\.db-wal" -and $res19 -notmatch "FAIL_UNSAFE_RESTORE" -and $res19 -notmatch "ROLLBACK COMPLETATO CON SUCCESSO") {
+        Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK PROBE WAL FALLITO FAIL-CLOSED] Test 19: Probe fallito su entrambi i canali (run-as e su) blocca categoricamente il rollback in Fail-Closed senza assumere NOT_FOUND e senza toccare il DB" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / ROLLBACK PROBE WAL FALLITO FAIL-CLOSED] Test 19: Mancato blocco fail-closed: $res19" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file.*akai_memory\.db-wal") {
+        Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK PROBE WAL FALLITO FAIL-CLOSED] Test 19: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / ROLLBACK PROBE WAL FALLITO FAIL-CLOSED] Test 19: Eccezione inattesa: $($_.Exception.Message)" -ForegroundColor Red
+        $failed++
+    }
+} finally {
+    Remove-Item $testDir19 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan

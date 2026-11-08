@@ -186,6 +186,41 @@ function Receive-FileViaAdbExecOut {
     }
 }
 
+function Get-ApplicationProcessState {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName
+    )
+    # Esecuzione comando shell con marcatore esplicito: echo PIDOF_CHECK:pids=[$pids]:exit=[$code]
+    # In una shell POSIX, echo ha successo (exit 0) anche se pidof esce con 1 (nessun processo trovato).
+    # Quindi ADB restituisce exit 0 e stampa PIDOF_CHECK:pids=[$pids]:exit=[$code].
+    # Se ADB fallisce (trasporto, timeout, demone terminato) o il comando fallisce senza stdout,
+    # il probe fallisce categoricamente in FAIL-CLOSED per prevenire estrazioni a caldo.
+    $probeCmd = "pids=`$(pidof $PackageName 2>/dev/null); code=`$?; echo PIDOF_CHECK:pids=[`$pids]:exit=[`$code]"
+    $raw = & $AdbExe -s $TargetAdb shell $probeCmd 2>&1
+    $adbExit = $LASTEXITCODE
+
+    if ($adbExit -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
+        throw "ERRORE FAIL-CLOSED: Probe dello stato dei processi per $PackageName fallito su target device (exit: $adbExit, out: '$raw'). Impossibile verificare la quiescenza per errore di trasporto o permessi ADB."
+    }
+
+    $rawStr = $raw.ToString().Trim()
+    if ($rawStr -match "PIDOF_CHECK:pids=\[([^\]]*)\]:exit=\[(\d+)\]") {
+        $foundPids = $Matches[1].Trim()
+        $pidofExit = [int]$Matches[2]
+        $isRunning = (-not [string]::IsNullOrWhiteSpace($foundPids))
+        return @{
+            Success = $true
+            Pids = $foundPids
+            PidofExit = $pidofExit
+            IsRunning = $isRunning
+        }
+    } else {
+        throw "ERRORE FAIL-CLOSED: Formato output probe quiescenza non valido per ${PackageName}: '$rawStr'. Impossibile confermare la quiescenza in modo deterministico."
+    }
+}
+
 function Ensure-ApplicationQuiescence {
     param(
         [string]$AdbExe,
@@ -199,20 +234,60 @@ function Ensure-ApplicationQuiescence {
     }
 
     Start-Sleep -Milliseconds 300
-    $pidsRaw = & $AdbExe -s $TargetAdb shell "pidof $PackageName 2>/dev/null"
-    $pids = if ($pidsRaw) { $pidsRaw.ToString().Trim() } else { "" }
-    if ($pids) {
+    $state = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName
+    if ($state.IsRunning) {
+        $pids = $state.Pids
         Write-Host "      Processo ancora attivo (PID: $pids), tentativo terminazione forzata (kill -9)..." -ForegroundColor Yellow
         & $AdbExe -s $TargetAdb shell "kill -9 $pids 2>/dev/null" | Out-Null
         Start-Sleep -Milliseconds 300
-        $pidsRetryRaw = & $AdbExe -s $TargetAdb shell "pidof $PackageName 2>/dev/null"
-        $pidsRetry = if ($pidsRetryRaw) { $pidsRetryRaw.ToString().Trim() } else { "" }
-        if ($pidsRetry) {
+        $stateRetry = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName
+        if ($stateRetry.IsRunning) {
+            $pidsRetry = $stateRetry.Pids
             throw "ERRORE FAIL-CLOSED: Impossibile arrestare il processo dell'applicazione ($PackageName, PID residuo: $pidsRetry). Writer non quiescente: estrazione database bloccata categoricamente per prevenire incoerenze o corruzione."
         }
     }
     Write-Host "      Quiescenza applicazione verificata e confermata (zero processi attivi)." -ForegroundColor Green
     return $true
+}
+
+function Probe-DeviceFileState {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$RelativePath,
+        [string]$Channel = "any" # "any", "run-as", "su"
+    )
+    $probeCmdRunAs = "run-as $PackageName sh -c 'test -f $RelativePath && echo FILE_PROBE_RESULT:EXISTS || echo FILE_PROBE_RESULT:NOT_FOUND'"
+    $probeCmdSu = "su -c 'test -f /data/data/$PackageName/$RelativePath && echo FILE_PROBE_RESULT:EXISTS || echo FILE_PROBE_RESULT:NOT_FOUND'"
+
+    $runAsAttempted = $false
+    $runAsExit = -1
+    $runAsOut = ""
+    if ($Channel -eq "any" -or $Channel -eq "run-as") {
+        $runAsAttempted = $true
+        $outRunAs = & $AdbExe -s $TargetAdb shell $probeCmdRunAs 2>&1
+        $runAsExit = $LASTEXITCODE
+        $runAsOut = if ($outRunAs) { $outRunAs.ToString().Trim() } else { "" }
+        if ($runAsExit -eq 0 -and $runAsOut -match "FILE_PROBE_RESULT:(EXISTS|NOT_FOUND)") {
+            return $Matches[1]
+        }
+    }
+
+    $suAttempted = $false
+    $suExit = -1
+    $suOut = ""
+    if ($Channel -eq "any" -or $Channel -eq "su") {
+        $suAttempted = $true
+        $outSu = & $AdbExe -s $TargetAdb shell $probeCmdSu 2>&1
+        $suExit = $LASTEXITCODE
+        $suOut = if ($outSu) { $outSu.ToString().Trim() } else { "" }
+        if ($suExit -eq 0 -and $suOut -match "FILE_PROBE_RESULT:(EXISTS|NOT_FOUND)") {
+            return $Matches[1]
+        }
+    }
+
+    throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file ($RelativePath) su storage device. Probe run-as (tentato: $runAsAttempted, exit: $runAsExit, out: '$runAsOut'); Probe su (tentato: $suAttempted, exit: $suExit, out: '$suOut'). Operazione abortita per prevenire stati inconsistenti."
 }
 
 function Remove-OrphanedWalAndShmFiles {
@@ -225,24 +300,14 @@ function Remove-OrphanedWalAndShmFiles {
     & $AdbExe -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
     & $AdbExe -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
 
-    $walRaw = & $AdbExe -s $TargetAdb shell "run-as $PackageName sh -c 'test -f databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND' 2>/dev/null"
-    $walCheck = if ($walRaw) { $walRaw.ToString().Trim() } else { "NOT_FOUND" }
-    if ($walCheck -notmatch "NOT_FOUND" -and $walCheck -notmatch "EXISTS") {
-        $walRaw = & $AdbExe -s $TargetAdb shell "su -c 'test -f /data/data/$PackageName/databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND' 2>/dev/null"
-        $walCheck = if ($walRaw) { $walRaw.ToString().Trim() } else { "NOT_FOUND" }
-    }
+    # Probing attivo tri-state su entrambi i file: solo NOT_FOUND con exit 0 e marcatore valido e' accettato
+    $walState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "any"
+    $shmState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-shm" -Channel "any"
 
-    $shmRaw = & $AdbExe -s $TargetAdb shell "run-as $PackageName sh -c 'test -f databases/akai_memory.db-shm && echo EXISTS || echo NOT_FOUND' 2>/dev/null"
-    $shmCheck = if ($shmRaw) { $shmRaw.ToString().Trim() } else { "NOT_FOUND" }
-    if ($shmCheck -notmatch "NOT_FOUND" -and $shmCheck -notmatch "EXISTS") {
-        $shmRaw = & $AdbExe -s $TargetAdb shell "su -c 'test -f /data/data/$PackageName/databases/akai_memory.db-shm && echo EXISTS || echo NOT_FOUND' 2>/dev/null"
-        $shmCheck = if ($shmRaw) { $shmRaw.ToString().Trim() } else { "NOT_FOUND" }
+    if ($walState -ne "NOT_FOUND" -or $shmState -ne "NOT_FOUND") {
+        throw "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita su device (WAL: $walState, SHM: $shmState). Ripristino abortito categoricamente in FAIL-CLOSED per prevenire corruzione dello schema."
     }
-
-    if ($walCheck -match "EXISTS" -or $shmCheck -match "EXISTS") {
-        throw "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita su device (WAL: $walCheck, SHM: $shmCheck). Ripristino abortito categoricamente in FAIL-CLOSED per prevenire corruzione dello schema."
-    }
-    Write-Host "      Assenza file WAL/SHM orfani confermata con successo." -ForegroundColor Green
+    Write-Host "      Assenza file WAL/SHM orfani confermata con successo (WAL: $walState, SHM: $shmState)." -ForegroundColor Green
     return $true
 }
 
@@ -546,19 +611,17 @@ switch ($Action) {
         if (-not $extracted) {
             $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $backupDb
             if ($rx.Success) {
-                $walProbe = (& $adb -s $TargetAdb shell "run-as $PackageName sh -c 'test -f databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND'").ToString().Trim()
-                if ($walProbe -match "EXISTS") {
+                $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "run-as"
+                if ($walProbe -eq "EXISTS") {
                     Write-Host "      File WAL presente su device (run-as): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
                     $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal
                     if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
                         throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via run-as."
                     }
                     Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                } elseif ($walProbe -match "NOT_FOUND") {
+                } elseif ($walProbe -eq "NOT_FOUND") {
                     Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
                     if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
-                } else {
-                    throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file WAL su device via run-as (output: '$walProbe')."
                 }
                 $extracted = $true
             }
@@ -568,19 +631,17 @@ switch ($Action) {
         if (-not $extracted) {
             $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $backupDb
             if ($rx.Success) {
-                $walProbe = (& $adb -s $TargetAdb shell "su -c 'test -f /data/data/$PackageName/databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND'").ToString().Trim()
-                if ($walProbe -match "EXISTS") {
+                $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "su"
+                if ($walProbe -eq "EXISTS") {
                     Write-Host "      File WAL presente su device (su): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
                     $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal
                     if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
                         throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via su."
                     }
                     Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                } elseif ($walProbe -match "NOT_FOUND") {
+                } elseif ($walProbe -eq "NOT_FOUND") {
                     Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
                     if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
-                } else {
-                    throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file WAL su device via su (output: '$walProbe')."
                 }
                 $extracted = $true
             }
@@ -672,19 +733,17 @@ switch ($Action) {
             if (-not $dbExtracted) {
                 $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $backupDb
                 if ($rx.Success) {
-                    $walProbe = (& $adb -s $TargetAdb shell "run-as $PackageName sh -c 'test -f databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND'").ToString().Trim()
-                    if ($walProbe -match "EXISTS") {
+                    $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "run-as"
+                    if ($walProbe -eq "EXISTS") {
                         Write-Host "      File WAL presente su device (run-as): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
                         $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal
                         if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
                             throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via run-as."
                         }
                         Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                    } elseif ($walProbe -match "NOT_FOUND") {
+                    } elseif ($walProbe -eq "NOT_FOUND") {
                         Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
                         if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
-                    } else {
-                        throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file WAL su device via run-as (output: '$walProbe')."
                     }
                     $dbExtracted = $true
                 }
@@ -694,19 +753,17 @@ switch ($Action) {
             if (-not $dbExtracted) {
                 $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $backupDb
                 if ($rx.Success) {
-                    $walProbe = (& $adb -s $TargetAdb shell "su -c 'test -f /data/data/$PackageName/databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND'").ToString().Trim()
-                    if ($walProbe -match "EXISTS") {
+                    $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "su"
+                    if ($walProbe -eq "EXISTS") {
                         Write-Host "      File WAL presente su device (su): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
                         $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal
                         if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
                             throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via su."
                         }
                         Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                    } elseif ($walProbe -match "NOT_FOUND") {
+                    } elseif ($walProbe -eq "NOT_FOUND") {
                         Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
                         if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
-                    } else {
-                        throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file WAL su device via su (output: '$walProbe')."
                     }
                     $dbExtracted = $true
                 }
