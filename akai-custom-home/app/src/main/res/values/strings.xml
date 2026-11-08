@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">AKAI Custom Home</string>
     <string name="brand_akai">AKAI</string>
-    <string name="brand_custom_tv">CUSTOM HOME v8 LEANBACK</string>
+    <string name="brand_custom_tv">CUSTOM HOME v8</string>
     <string name="section_inputs">Ingressi Hardware</string>
     <string name="section_favorites">App Preferite</string>
     <string name="section_streaming">Streaming &amp; Cinema</string>
@@ -16,11 +16,11 @@
     <string name="sidebar_settings">Impostazioni</string>
 
     <!-- Hardware Source Labels -->
-    <string name="src_dtv">📺 TV Digitale</string>
-    <string name="src_hdmi1">🔥 Fire TV (HDMI 1)</string>
-    <string name="src_hdmi2">🎬 HDMI 2</string>
-    <string name="src_hdmi3">💻 HDMI 3</string>
-    <string name="src_all">⇄ Menu Ingressi</string>
+    <string name="src_dtv">📺  TV Digitale</string>
+    <string name="src_hdmi1">🔥  Fire TV (HDMI 1)</string>
+    <string name="src_hdmi2">🔌  HDMI 2</string>
+    <string name="src_hdmi3">💻  HDMI 3</string>
+    <string name="src_all">⇄  Menu Ingressi</string>
 
     <!-- Top Bar Controls -->
     <string name="btn_wifi">📶 Wi-Fi Connesso</string>

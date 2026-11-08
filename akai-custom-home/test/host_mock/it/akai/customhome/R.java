@@ -44,6 +44,8 @@ public class R {
         public static final int scroll_all_apps = 31;
         public static final int iv_card_icon = 32;
         public static final int tv_card_label = 33;
+        public static final int iv_card_banner = 39;
+        public static final int layout_card_icon_mode = 40;
         public static final int sidebar_nav_home = 34;
         public static final int sidebar_nav_movies = 35;
         public static final int sidebar_nav_apps = 36;

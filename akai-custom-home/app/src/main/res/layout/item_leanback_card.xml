@@ -1,36 +1,57 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="175dp"
-    android:layout_height="118dp"
-    android:orientation="vertical"
-    android:gravity="center"
-    android:layout_marginEnd="14dp"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/card_root"
+    android:layout_width="136dp"
+    android:layout_height="68dp"
+    android:layout_marginEnd="12dp"
     android:background="@drawable/card_focus_selector"
     android:focusable="true"
-    android:clickable="true"
-    android:paddingStart="8dp"
-    android:paddingEnd="8dp"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp">
+    android:clickable="true">
 
+    <!-- Mode 1: Authentic Android TV Banner (full-bleed rounded tile inside focus border) -->
     <ImageView
-        android:id="@+id/iv_card_icon"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:scaleType="fitCenter"
-        android:layout_marginBottom="6dp" />
-
-    <TextView
-        android:id="@+id/tv_card_label"
+        android:id="@+id/iv_card_banner"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:maxLines="2"
-        android:lines="2"
-        android:ellipsize="end"
-        android:textColor="@color/text_white"
-        android:textSize="14sp"
-        android:textStyle="bold"
-        android:lineSpacingExtra="1dp" />
+        android:layout_height="match_parent"
+        android:layout_margin="3.5dp"
+        android:scaleType="centerCrop"
+        android:background="@drawable/card_inner_clip_bg"
+        android:visibility="gone" />
 
-</LinearLayout>
+    <!-- Mode 2: Sleek Glass Horizontal Tile (fallback for apps with square icon only) -->
+    <LinearLayout
+        android:id="@+id/layout_card_icon_mode"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_margin="3.5dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/card_inner_clip_bg"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp">
+
+        <ImageView
+            android:id="@+id/iv_card_icon"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:scaleType="fitCenter"
+            android:layout_marginEnd="10dp" />
+
+        <TextView
+            android:id="@+id/tv_card_label"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="start|center_vertical"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:textColor="@color/text_white"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:lineSpacingExtra="1dp" />
+
+    </LinearLayout>
+
+</FrameLayout>

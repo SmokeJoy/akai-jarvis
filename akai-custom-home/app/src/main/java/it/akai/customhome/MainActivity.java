@@ -29,6 +29,7 @@ import android.widget.Button;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -51,18 +52,24 @@ public class MainActivity extends Activity {
         public final String packageName;
         public final String activityName;
         public final Drawable icon;
+        public final Drawable banner;
         public final int versionCode;
         public final long lastUpdateTime;
 
         public AppItem(String label, String packageName, String activityName, Drawable icon) {
-            this(label, packageName, activityName, icon, 0, 0L);
+            this(label, packageName, activityName, icon, null, 0, 0L);
         }
 
         public AppItem(String label, String packageName, String activityName, Drawable icon, int versionCode, long lastUpdateTime) {
+            this(label, packageName, activityName, icon, null, versionCode, lastUpdateTime);
+        }
+
+        public AppItem(String label, String packageName, String activityName, Drawable icon, Drawable banner, int versionCode, long lastUpdateTime) {
             this.label = label;
             this.packageName = packageName;
             this.activityName = activityName;
             this.icon = icon;
+            this.banner = banner;
             this.versionCode = versionCode;
             this.lastUpdateTime = lastUpdateTime;
         }
@@ -145,6 +152,7 @@ public class MainActivity extends Activity {
         "com.mediatek.wwtv.factory",
         "com.mediatek.TimeMeasurementAgent",
         "com.android.traceur",
+        "com.google.android.traceur",
         "com.mediatek.engineermode",
         "com.mediatek.ygps",
         "com.mediatek.factorymode",
@@ -158,7 +166,9 @@ public class MainActivity extends Activity {
         "factory menu",
         "engineermode",
         "factorymode",
-        "open_launch"
+        "open_launch",
+        "system tracing",
+        "traceur"
     };
 
     // Keyword per identificare app di streaming e cinema
@@ -464,23 +474,23 @@ public class MainActivity extends Activity {
         if (btnSrcAll != null) btnSrcAll.setBackground(createDynamicSelector(
             SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
 
-        // Header buttons selector
+        // Header buttons selector (pill silhouette)
         StateListDrawable headerSelector = createDynamicSelector(
             SURFACE_COLORS[currentBgIndex],
             FOCUSED_SURFACE_COLORS[currentBgIndex],
             ACCENT_COLORS[currentAccentIndex],
-            (int) (10 * density),
+            (int) (14 * density),
             3.0f * density
         );
         if (btnWifi != null) btnWifi.setBackground(headerSelector);
         if (btnHomeRemote != null) btnHomeRemote.setBackground(createDynamicSelector(
-            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(10 * density), 3.0f * density));
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(14 * density), 3.0f * density));
         if (btnTheme != null) btnTheme.setBackground(createDynamicSelector(
-            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(10 * density), 3.0f * density));
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(14 * density), 3.0f * density));
         if (btnHomeSettings != null) btnHomeSettings.setBackground(createDynamicSelector(
-            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(10 * density), 3.0f * density));
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(14 * density), 3.0f * density));
         if (btnFavReorder != null) btnFavReorder.setBackground(createDynamicSelector(
-            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(10 * density), 3.0f * density));
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(14 * density), 3.0f * density));
     }
 
     private void applySectionOrder(boolean favsFirst) {
@@ -708,6 +718,21 @@ public class MainActivity extends Activity {
         }
     }
 
+    private AlertDialog showAccessibleDialog(AlertDialog.Builder builder) {
+        final AlertDialog dialog = builder.show();
+        final ListView lv = dialog != null ? dialog.getListView() : null;
+        if (lv != null) {
+            lv.post(new Runnable() {
+                @Override
+                public void run() {
+                    lv.requestFocus();
+                    lv.setSelection(0);
+                }
+            });
+        }
+        return dialog;
+    }
+
     private void showThemeDialog() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("🎨 Personalizzazione AKAI Home v8 Leanback");
@@ -754,7 +779,7 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Chiudi", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void showBackgroundSelectorDialog() {
@@ -772,7 +797,7 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Annulla", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void showAccentSelectorDialog() {
@@ -790,7 +815,7 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Annulla", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void showLayoutOrderSelectorDialog() {
@@ -813,7 +838,7 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Annulla", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void launchRemotePairing() {
@@ -1207,6 +1232,11 @@ public class MainActivity extends Activity {
             String pkg = ri.activityInfo.packageName;
             String act = ri.activityInfo.name;
 
+            // Il launcher corrente non deve mai apparire nel catalogo di avvio
+            if ("it.akai.customhome".equals(pkg)) {
+                continue;
+            }
+
             // Filtro app tecniche e OEM di fabbrica se non abilitate esplicitamente
             if (!showSystemApps && isSystemOrTechnicalApp(ri, pm)) {
                 continue;
@@ -1219,6 +1249,13 @@ public class MainActivity extends Activity {
                     label = pkg;
                 }
                 Drawable icon = ri.loadIcon(pm);
+                Drawable banner = null;
+                try {
+                    banner = ri.activityInfo.loadBanner(pm);
+                    if (banner == null && ri.activityInfo.applicationInfo != null) {
+                        banner = pm.getApplicationBanner(ri.activityInfo.applicationInfo);
+                    }
+                } catch (Throwable ignored) {}
                 int versionCode = 0;
                 long lastUpdateTime = 0L;
                 try {
@@ -1229,7 +1266,7 @@ public class MainActivity extends Activity {
                     }
                 } catch (Exception ignored) {
                 }
-                AppItem item = new AppItem(label, pkg, act, icon, versionCode, lastUpdateTime);
+                AppItem item = new AppItem(label, pkg, act, icon, banner, versionCode, lastUpdateTime);
                 newAllApps.add(item);
                 if (isStreamingApp(item)) {
                     newStreamingApps.add(item);
@@ -1363,10 +1400,20 @@ public class MainActivity extends Activity {
                 if (event.isLongPress() || event.getRepeatCount() > 0) {
                     if (!longPressHandled) {
                         longPressHandled = true;
-                        if (sectionType == SECTION_FAVORITES) {
-                            activity.showFavoriteOptionsDialog(item, index);
+                        Runnable openDialogTask = new Runnable() {
+                            @Override
+                            public void run() {
+                                if (sectionType == SECTION_FAVORITES) {
+                                    activity.showFavoriteOptionsDialog(item, index);
+                                } else {
+                                    activity.showAppOptionsDialog(item);
+                                }
+                            }
+                        };
+                        if (v != null) {
+                            v.postDelayed(openDialogTask, 80L);
                         } else {
-                            activity.showAppOptionsDialog(item);
+                            openDialogTask.run();
                         }
                     }
                     // Consuma tutti i repeat successivi per evitare aperture multiple del dialogo
@@ -1401,12 +1448,50 @@ public class MainActivity extends Activity {
         View card = inflater.inflate(R.layout.item_leanback_card, parent, false);
         card.setBackground(createDynamicCardSelector());
         card.setTag(new CardTag(item.packageName, sectionType));
+        card.setContentDescription(item.label);
 
+        float density = getResources().getDisplayMetrics().density;
+        ViewGroup.LayoutParams lp = card.getLayoutParams();
+        if (lp != null) {
+            if (sectionType == SECTION_STREAMING) {
+                lp.width = (int) (168 * density);
+                lp.height = (int) (92 * density);
+            } else {
+                lp.width = (int) (136 * density);
+                lp.height = (int) (68 * density);
+            }
+            card.setLayoutParams(lp);
+        }
+
+        if (index == 0) {
+            if (sectionType == SECTION_STREAMING) {
+                card.setNextFocusLeftId(R.id.sidebar_nav_movies);
+            } else if (sectionType == SECTION_ALL_APPS) {
+                card.setNextFocusLeftId(R.id.sidebar_nav_apps);
+            } else {
+                card.setNextFocusLeftId(R.id.sidebar_nav_home);
+            }
+        }
+
+        ImageView ivBanner = (ImageView) card.findViewById(R.id.iv_card_banner);
+        View layoutIconMode = card.findViewById(R.id.layout_card_icon_mode);
         ImageView iv = (ImageView) card.findViewById(R.id.iv_card_icon);
         TextView tv = (TextView) card.findViewById(R.id.tv_card_label);
 
-        if (iv != null) iv.setImageDrawable(item.icon);
-        if (tv != null) tv.setText(item.label);
+        if (item.banner != null && ivBanner != null && layoutIconMode != null) {
+            ivBanner.setImageDrawable(item.banner);
+            ivBanner.setVisibility(View.VISIBLE);
+            try { ivBanner.setClipToOutline(true); } catch (Throwable ignored) {}
+            layoutIconMode.setVisibility(View.GONE);
+        } else {
+            if (ivBanner != null) ivBanner.setVisibility(View.GONE);
+            if (layoutIconMode != null) {
+                layoutIconMode.setVisibility(View.VISIBLE);
+                try { layoutIconMode.setClipToOutline(true); } catch (Throwable ignored) {}
+            }
+            if (iv != null) iv.setImageDrawable(item.icon);
+            if (tv != null) tv.setText(item.label);
+        }
 
         final CardKeyHandler keyHandler = new CardKeyHandler(this, item, sectionType, index);
         card.setOnKeyListener(keyHandler);
@@ -1415,7 +1500,7 @@ public class MainActivity extends Activity {
             @Override
             public void onFocusChange(View v, boolean hasFocus) {
                 if (hasFocus) {
-                    v.animate().scaleX(1.08f).scaleY(1.08f).setDuration(120).start();
+                    v.animate().scaleX(1.045f).scaleY(1.045f).setDuration(120).start();
                 } else {
                     v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start();
                     keyHandler.reset(); // reset deterministico su perdita focus
@@ -1613,7 +1698,7 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Chiudi", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     public void showAppOptionsDialog(final AppItem item) {
@@ -1655,7 +1740,7 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Chiudi", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void showReorderAllDialog() {
@@ -1680,6 +1765,6 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Chiudi", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 }

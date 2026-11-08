@@ -7,23 +7,23 @@
     android:background="@drawable/bg_cinematic_gradient"
     android:clipChildren="false"
     android:clipToPadding="false"
-    android:paddingStart="24dp"
-    android:paddingEnd="24dp"
-    android:paddingTop="12dp"
-    android:paddingBottom="12dp">
+    android:paddingStart="20dp"
+    android:paddingEnd="20dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
 
-    <!-- Top Header Bar -->
+    <!-- Top Header Bar (Responsive 1080p layout, guaranteed zero clipping) -->
     <LinearLayout
         android:id="@+id/layout_header_bar"
         android:layout_width="match_parent"
-        android:layout_height="48dp"
+        android:layout_height="40dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:clipChildren="false"
         android:clipToPadding="false"
         android:layout_marginBottom="6dp">
 
-        <!-- Logo Brand -->
+        <!-- Brand Wordmark matching Concept Art -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -34,17 +34,17 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/brand_akai"
-                android:textColor="@color/text_white"
-                android:textSize="20sp"
+                android:textColor="@color/akai_red"
+                android:textSize="22sp"
                 android:textStyle="bold"
-                android:background="@drawable/badge_akai"
-                android:layout_marginEnd="12dp" />
+                android:letterSpacing="0.06"
+                android:layout_marginEnd="10dp" />
 
             <View
-                android:layout_width="1.5dp"
-                android:layout_height="20dp"
-                android:background="#334155"
-                android:layout_marginEnd="12dp" />
+                android:layout_width="1dp"
+                android:layout_height="16dp"
+                android:background="#33FFFFFF"
+                android:layout_marginEnd="10dp" />
 
             <TextView
                 android:id="@+id/tv_brand_version"
@@ -52,9 +52,13 @@
                 android:layout_height="wrap_content"
                 android:text="@string/brand_custom_tv"
                 android:textColor="@color/text_white"
-                android:textSize="15sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
-                android:letterSpacing="0.04" />
+                android:letterSpacing="0.04"
+                android:maxLines="1"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:maxWidth="170dp" />
         </LinearLayout>
 
         <View
@@ -62,76 +66,104 @@
             android:layout_height="1dp"
             android:layout_weight="1" />
 
-        <!-- Status Pills -->
+        <!-- Status & Action Pills (Sentence Case, Compact Responsive Width) -->
         <Button
             android:id="@+id/btn_home_wifi"
             android:layout_width="wrap_content"
-            android:layout_height="34dp"
+            android:layout_height="28dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:textAllCaps="false"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:maxWidth="165dp"
             android:text="@string/btn_wifi"
             android:textColor="@color/status_green_live"
-            android:textSize="12sp"
+            android:textSize="11sp"
             android:textStyle="bold"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
             android:background="@drawable/header_btn_selector"
             android:focusable="true"
-            android:layout_marginEnd="8dp" />
+            android:layout_marginEnd="6dp" />
 
         <Button
             android:id="@+id/btn_home_remote"
             android:layout_width="wrap_content"
-            android:layout_height="34dp"
+            android:layout_height="28dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:textAllCaps="false"
+            android:singleLine="true"
             android:text="@string/btn_remote"
             android:textColor="@color/text_white"
-            android:textSize="12sp"
+            android:textSize="11sp"
             android:textStyle="bold"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
             android:background="@drawable/header_btn_selector"
             android:focusable="true"
-            android:layout_marginEnd="8dp" />
+            android:layout_marginEnd="6dp" />
 
         <Button
             android:id="@+id/btn_home_theme"
             android:layout_width="wrap_content"
-            android:layout_height="34dp"
+            android:layout_height="28dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:textAllCaps="false"
+            android:singleLine="true"
             android:text="@string/btn_theme"
             android:textColor="@color/text_white"
-            android:textSize="12sp"
+            android:textSize="11sp"
             android:textStyle="bold"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
             android:background="@drawable/header_btn_selector"
             android:focusable="true"
-            android:layout_marginEnd="8dp" />
+            android:layout_marginEnd="6dp" />
 
         <Button
             android:id="@+id/btn_home_settings"
             android:layout_width="wrap_content"
-            android:layout_height="34dp"
+            android:layout_height="28dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:textAllCaps="false"
+            android:singleLine="true"
             android:text="@string/btn_settings"
             android:textColor="@color/text_white"
-            android:textSize="12sp"
+            android:textSize="11sp"
             android:textStyle="bold"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
             android:background="@drawable/header_btn_selector"
             android:focusable="true"
-            android:layout_marginEnd="14dp" />
+            android:layout_marginEnd="10dp" />
 
-        <!-- Digital Clock -->
+        <View
+            android:layout_width="1dp"
+            android:layout_height="16dp"
+            android:background="#26FFFFFF"
+            android:layout_marginEnd="10dp" />
+
+        <!-- Digital Clock (Explicit HH:mm on BOTH 12h/24h formats to prevent clipping) -->
         <TextClock
             android:id="@+id/home_clock"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:format12Hour="HH:mm"
             android:format24Hour="HH:mm"
+            android:singleLine="true"
+            android:minWidth="46dp"
+            android:gravity="end|center_vertical"
             android:textColor="@color/text_white"
-            android:textSize="20sp"
+            android:textSize="17sp"
             android:textStyle="bold" />
 
     </LinearLayout>
 
-    <!-- Main Workspace: Left Sidebar + Content Area -->
+    <!-- Main Workspace: Left Sidebar + 4-Row Content Area -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -143,13 +175,14 @@
         <!-- Left Vertical Navigation Rail (Sidebar) -->
         <LinearLayout
             android:id="@+id/sidebar_navigation"
-            android:layout_width="72dp"
+            android:layout_width="70dp"
             android:layout_height="match_parent"
             android:orientation="vertical"
             android:gravity="center_horizontal"
             android:clipChildren="false"
             android:clipToPadding="false"
-            android:paddingTop="8dp">
+            android:paddingTop="14dp"
+            android:paddingEnd="4dp">
 
             <!-- 1. Home -->
             <LinearLayout
@@ -160,25 +193,29 @@
                 android:gravity="center"
                 android:focusable="true"
                 android:clickable="true"
-                android:layout_marginBottom="14dp">
+                android:nextFocusUp="@id/btn_home_wifi"
+                android:nextFocusDown="@id/sidebar_nav_movies"
+                android:layout_marginBottom="12dp">
 
                 <TextView
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:duplicateParentState="true"
                     android:gravity="center"
                     android:text="⌂"
                     android:textColor="@color/text_white"
-                    android:textSize="22sp"
+                    android:textSize="20sp"
                     android:background="@drawable/sidebar_home_active_bg" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
                     android:text="@string/sidebar_home"
                     android:textColor="@color/text_white"
-                    android:textSize="11sp"
+                    android:textSize="10sp"
                     android:textStyle="bold"
-                    android:layout_marginTop="2dp" />
+                    android:layout_marginTop="3dp" />
             </LinearLayout>
 
             <!-- 2. Film & Serie -->
@@ -190,24 +227,28 @@
                 android:gravity="center"
                 android:focusable="true"
                 android:clickable="true"
-                android:layout_marginBottom="14dp">
+                android:nextFocusUp="@id/sidebar_nav_home"
+                android:nextFocusDown="@id/sidebar_nav_apps"
+                android:layout_marginBottom="12dp">
 
                 <TextView
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:duplicateParentState="true"
                     android:gravity="center"
                     android:text="🎬"
-                    android:textSize="18sp"
+                    android:textSize="16sp"
                     android:background="@drawable/sidebar_btn_selector" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
                     android:text="@string/sidebar_movies"
                     android:textColor="@color/text_sidebar"
-                    android:textSize="11sp"
+                    android:textSize="10sp"
                     android:textStyle="bold"
-                    android:layout_marginTop="2dp" />
+                    android:layout_marginTop="3dp" />
             </LinearLayout>
 
             <!-- 3. App -->
@@ -219,25 +260,29 @@
                 android:gravity="center"
                 android:focusable="true"
                 android:clickable="true"
-                android:layout_marginBottom="14dp">
+                android:nextFocusUp="@id/sidebar_nav_movies"
+                android:nextFocusDown="@id/sidebar_nav_livetv"
+                android:layout_marginBottom="12dp">
 
                 <TextView
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:duplicateParentState="true"
                     android:gravity="center"
                     android:text="㗊"
                     android:textColor="@color/text_white"
-                    android:textSize="20sp"
+                    android:textSize="18sp"
                     android:background="@drawable/sidebar_btn_selector" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
                     android:text="@string/sidebar_apps"
                     android:textColor="@color/text_sidebar"
-                    android:textSize="11sp"
+                    android:textSize="10sp"
                     android:textStyle="bold"
-                    android:layout_marginTop="2dp" />
+                    android:layout_marginTop="3dp" />
             </LinearLayout>
 
             <!-- 4. Live TV -->
@@ -249,24 +294,28 @@
                 android:gravity="center"
                 android:focusable="true"
                 android:clickable="true"
-                android:layout_marginBottom="14dp">
+                android:nextFocusUp="@id/sidebar_nav_apps"
+                android:nextFocusDown="@id/sidebar_nav_settings"
+                android:layout_marginBottom="12dp">
 
                 <TextView
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:duplicateParentState="true"
                     android:gravity="center"
                     android:text="📺"
-                    android:textSize="18sp"
+                    android:textSize="16sp"
                     android:background="@drawable/sidebar_btn_selector" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
                     android:text="@string/sidebar_livetv"
                     android:textColor="@color/text_sidebar"
-                    android:textSize="11sp"
+                    android:textSize="10sp"
                     android:textStyle="bold"
-                    android:layout_marginTop="2dp" />
+                    android:layout_marginTop="3dp" />
             </LinearLayout>
 
             <!-- 5. Impostazioni -->
@@ -277,29 +326,40 @@
                 android:orientation="vertical"
                 android:gravity="center"
                 android:focusable="true"
-                android:clickable="true">
+                android:clickable="true"
+                android:nextFocusUp="@id/sidebar_nav_livetv">
 
                 <TextView
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:duplicateParentState="true"
                     android:gravity="center"
                     android:text="⚙️"
-                    android:textSize="18sp"
+                    android:textSize="16sp"
                     android:background="@drawable/sidebar_btn_selector" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
                     android:text="@string/sidebar_settings"
                     android:textColor="@color/text_sidebar"
-                    android:textSize="11sp"
+                    android:textSize="10sp"
                     android:textStyle="bold"
-                    android:layout_marginTop="2dp" />
+                    android:layout_marginTop="3dp" />
             </LinearLayout>
 
         </LinearLayout>
 
-        <!-- Main Scrollable Body (4 Rows of Content) -->
+        <!-- Hairline Vertical Divider between Sidebar & Content (Concept Art Detail) -->
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#1AFFFFFF"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="4dp" />
+
+        <!-- Main Scrollable Body (Clip horizontal scroll cleanly inside right pane, allow vertical glow via padding) -->
         <ScrollView
             android:id="@+id/scroll_main_body"
             android:layout_width="0dp"
@@ -307,8 +367,8 @@
             android:layout_weight="1"
             android:fillViewport="true"
             android:scrollbars="none"
-            android:clipChildren="false"
-            android:clipToPadding="false"
+            android:clipChildren="true"
+            android:clipToPadding="true"
             android:paddingStart="12dp">
 
             <LinearLayout
@@ -316,8 +376,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:clipChildren="false"
-                android:clipToPadding="false">
+                android:clipChildren="true"
+                android:clipToPadding="true">
 
                 <!-- Section 1: Ingressi Hardware -->
                 <LinearLayout
@@ -327,21 +387,21 @@
                     android:orientation="vertical"
                     android:clipChildren="false"
                     android:clipToPadding="false"
-                    android:layout_marginBottom="14dp">
+                    android:layout_marginBottom="8dp">
 
                     <LinearLayout
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
                         android:gravity="center_vertical"
-                        android:layout_marginBottom="4dp">
+                        android:layout_marginBottom="3dp">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="|"
                             android:textColor="@color/section_accent_amber"
-                            android:textSize="18sp"
+                            android:textSize="15sp"
                             android:textStyle="bold"
                             android:layout_marginEnd="6dp" />
 
@@ -351,7 +411,7 @@
                             android:layout_height="wrap_content"
                             android:text="@string/section_inputs"
                             android:textColor="@color/text_white"
-                            android:textSize="15sp"
+                            android:textSize="14sp"
                             android:textStyle="bold" />
                     </LinearLayout>
 
@@ -360,11 +420,11 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:scrollbars="none"
-                        android:clipChildren="false"
+                        android:clipChildren="true"
                         android:clipToPadding="false"
-                        android:paddingStart="4dp"
-                        android:paddingEnd="4dp"
-                        android:paddingTop="4dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="5dp"
                         android:paddingBottom="6dp">
 
                         <LinearLayout
@@ -377,60 +437,86 @@
 
                             <Button
                                 android:id="@+id/btn_src_dtv"
-                                android:layout_width="165dp"
-                                android:layout_height="52dp"
+                                android:layout_width="154dp"
+                                android:layout_height="48dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:textAllCaps="false"
+                                android:nextFocusLeft="@id/sidebar_nav_home"
+                                android:nextFocusUp="@id/btn_home_wifi"
                                 android:text="@string/src_dtv"
                                 android:textColor="@color/text_white"
-                                android:textSize="14sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold"
+                                android:padding="4dp"
                                 android:background="@drawable/source_chip_selector"
                                 android:focusable="true"
-                                android:layout_marginEnd="12dp" />
+                                android:layout_marginEnd="10dp" />
 
                             <Button
                                 android:id="@+id/btn_src_hdmi1"
-                                android:layout_width="195dp"
-                                android:layout_height="52dp"
+                                android:layout_width="164dp"
+                                android:layout_height="48dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:textAllCaps="false"
+                                android:nextFocusUp="@id/btn_home_wifi"
                                 android:text="@string/src_hdmi1"
                                 android:textColor="@color/text_white"
-                                android:textSize="14sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold"
+                                android:padding="4dp"
                                 android:background="@drawable/source_chip_selector"
                                 android:focusable="true"
-                                android:layout_marginEnd="12dp" />
+                                android:layout_marginEnd="10dp" />
 
                             <Button
                                 android:id="@+id/btn_src_hdmi2"
-                                android:layout_width="150dp"
-                                android:layout_height="52dp"
+                                android:layout_width="148dp"
+                                android:layout_height="48dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:textAllCaps="false"
+                                android:nextFocusUp="@id/btn_home_remote"
                                 android:text="@string/src_hdmi2"
                                 android:textColor="@color/text_white"
-                                android:textSize="14sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold"
+                                android:padding="4dp"
                                 android:background="@drawable/source_chip_selector"
                                 android:focusable="true"
-                                android:layout_marginEnd="12dp" />
+                                android:layout_marginEnd="10dp" />
 
                             <Button
                                 android:id="@+id/btn_src_hdmi3"
-                                android:layout_width="150dp"
-                                android:layout_height="52dp"
+                                android:layout_width="148dp"
+                                android:layout_height="48dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:textAllCaps="false"
+                                android:nextFocusUp="@id/btn_home_theme"
                                 android:text="@string/src_hdmi3"
                                 android:textColor="@color/text_white"
-                                android:textSize="14sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold"
+                                android:padding="4dp"
                                 android:background="@drawable/source_chip_selector"
                                 android:focusable="true"
-                                android:layout_marginEnd="12dp" />
+                                android:layout_marginEnd="10dp" />
 
                             <Button
                                 android:id="@+id/btn_src_all"
-                                android:layout_width="165dp"
-                                android:layout_height="52dp"
+                                android:layout_width="156dp"
+                                android:layout_height="48dp"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:textAllCaps="false"
+                                android:nextFocusUp="@id/btn_home_settings"
                                 android:text="@string/src_all"
                                 android:textColor="@color/text_white"
-                                android:textSize="14sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold"
+                                android:padding="4dp"
                                 android:background="@drawable/source_chip_selector"
                                 android:focusable="true" />
                         </LinearLayout>
@@ -445,7 +531,7 @@
                     android:orientation="vertical"
                     android:clipChildren="false"
                     android:clipToPadding="false"
-                    android:layout_marginBottom="14dp">
+                    android:layout_marginBottom="8dp">
 
                     <LinearLayout
                         android:id="@+id/layout_fav_header"
@@ -453,14 +539,14 @@
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
                         android:gravity="center_vertical"
-                        android:layout_marginBottom="4dp">
+                        android:layout_marginBottom="3dp">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="|"
                             android:textColor="@color/section_accent_amber"
-                            android:textSize="18sp"
+                            android:textSize="15sp"
                             android:textStyle="bold"
                             android:layout_marginEnd="6dp" />
 
@@ -470,7 +556,7 @@
                             android:layout_height="wrap_content"
                             android:text="@string/section_favorites"
                             android:textColor="@color/text_white"
-                            android:textSize="15sp"
+                            android:textSize="14sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -478,14 +564,14 @@
                             android:layout_height="wrap_content"
                             android:text=" · "
                             android:textColor="@color/text_muted"
-                            android:textSize="13sp" />
+                            android:textSize="11sp" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/hint_fav_help"
                             android:textColor="@color/text_muted"
-                            android:textSize="12sp" />
+                            android:textSize="11sp" />
 
                         <View
                             android:layout_width="0dp"
@@ -495,10 +581,13 @@
                         <Button
                             android:id="@+id/btn_fav_reorder"
                             android:layout_width="wrap_content"
-                            android:layout_height="28dp"
+                            android:layout_height="24dp"
+                            android:minWidth="0dp"
+                            android:minHeight="0dp"
+                            android:textAllCaps="false"
                             android:text="@string/btn_edit_favs"
                             android:textColor="@color/text_gray"
-                            android:textSize="11sp"
+                            android:textSize="10.5sp"
                             android:textStyle="bold"
                             android:paddingStart="8dp"
                             android:paddingEnd="8dp"
@@ -512,12 +601,12 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:scrollbars="none"
-                        android:clipChildren="false"
+                        android:clipChildren="true"
                         android:clipToPadding="false"
-                        android:paddingStart="4dp"
-                        android:paddingEnd="4dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="6dp">
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="7dp">
 
                         <LinearLayout
                             android:id="@+id/ll_fav_container"
@@ -529,7 +618,7 @@
                     </HorizontalScrollView>
                 </LinearLayout>
 
-                <!-- Section 3: Streaming & Cinema -->
+                <!-- Section 3: Streaming & Cinema (Wider 16:9 TV Showcase Cards) -->
                 <LinearLayout
                     android:id="@+id/section_streaming_container"
                     android:layout_width="match_parent"
@@ -537,7 +626,7 @@
                     android:orientation="vertical"
                     android:clipChildren="false"
                     android:clipToPadding="false"
-                    android:layout_marginBottom="14dp">
+                    android:layout_marginBottom="8dp">
 
                     <LinearLayout
                         android:id="@+id/layout_streaming_header"
@@ -545,14 +634,14 @@
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
                         android:gravity="center_vertical"
-                        android:layout_marginBottom="4dp">
+                        android:layout_marginBottom="3dp">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="|"
                             android:textColor="@color/section_accent_amber"
-                            android:textSize="18sp"
+                            android:textSize="15sp"
                             android:textStyle="bold"
                             android:layout_marginEnd="6dp" />
 
@@ -562,7 +651,7 @@
                             android:layout_height="wrap_content"
                             android:text="@string/section_streaming"
                             android:textColor="@color/text_white"
-                            android:textSize="15sp"
+                            android:textSize="14sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -570,14 +659,14 @@
                             android:layout_height="wrap_content"
                             android:text=" · "
                             android:textColor="@color/text_muted"
-                            android:textSize="13sp" />
+                            android:textSize="11sp" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/hint_streaming_help"
                             android:textColor="@color/text_muted"
-                            android:textSize="12sp" />
+                            android:textSize="11sp" />
                     </LinearLayout>
 
                     <HorizontalScrollView
@@ -585,12 +674,12 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:scrollbars="none"
-                        android:clipChildren="false"
+                        android:clipChildren="true"
                         android:clipToPadding="false"
-                        android:paddingStart="4dp"
-                        android:paddingEnd="4dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="6dp">
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="7dp">
 
                         <LinearLayout
                             android:id="@+id/ll_streaming_container"
@@ -610,7 +699,7 @@
                     android:orientation="vertical"
                     android:clipChildren="false"
                     android:clipToPadding="false"
-                    android:layout_marginBottom="16dp">
+                    android:layout_marginBottom="6dp">
 
                     <LinearLayout
                         android:id="@+id/layout_all_apps_header"
@@ -618,14 +707,14 @@
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
                         android:gravity="center_vertical"
-                        android:layout_marginBottom="4dp">
+                        android:layout_marginBottom="3dp">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="|"
                             android:textColor="@color/section_accent_amber"
-                            android:textSize="18sp"
+                            android:textSize="15sp"
                             android:textStyle="bold"
                             android:layout_marginEnd="6dp" />
 
@@ -635,7 +724,7 @@
                             android:layout_height="wrap_content"
                             android:text="@string/section_all_apps"
                             android:textColor="@color/text_white"
-                            android:textSize="15sp"
+                            android:textSize="14sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -643,14 +732,14 @@
                             android:layout_height="wrap_content"
                             android:text=" · "
                             android:textColor="@color/text_muted"
-                            android:textSize="13sp" />
+                            android:textSize="11sp" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/hint_all_apps_help"
                             android:textColor="@color/text_muted"
-                            android:textSize="12sp" />
+                            android:textSize="11sp" />
                     </LinearLayout>
 
                     <HorizontalScrollView
@@ -658,12 +747,12 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:scrollbars="none"
-                        android:clipChildren="false"
+                        android:clipChildren="true"
                         android:clipToPadding="false"
-                        android:paddingStart="4dp"
-                        android:paddingEnd="4dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="6dp">
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="7dp">
 
                         <LinearLayout
                             android:id="@+id/ll_all_apps_container"

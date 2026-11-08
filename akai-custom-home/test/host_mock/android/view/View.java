@@ -34,11 +34,19 @@ public class View {
     private int id = -1;
     private int scrollX = 0;
     private int scrollY = 0;
+    private ViewGroup.LayoutParams layoutParams = new ViewGroup.MarginLayoutParams(100, 100);
+    private CharSequence contentDescription;
 
     public void setBackgroundResource(int resid) {}
     public int getTop() { return 0; }
     public void setTag(Object tag) { this.tag = tag; }
     public Object getTag() { return tag; }
+    public ViewGroup.LayoutParams getLayoutParams() { return layoutParams; }
+    public void setLayoutParams(ViewGroup.LayoutParams lp) { this.layoutParams = lp; }
+    public void setClipToOutline(boolean clip) {}
+    public void setNextFocusLeftId(int nextFocusLeftId) {}
+    public void setContentDescription(CharSequence contentDescription) { this.contentDescription = contentDescription; }
+    public CharSequence getContentDescription() { return contentDescription; }
 
     public void setId(int id) { this.id = id; }
     public int getId() { return id; }
@@ -50,6 +58,7 @@ public class View {
     public int getScrollY() { return scrollY; }
     public void scrollTo(int x, int y) { this.scrollX = x; this.scrollY = y; }
     public boolean post(Runnable r) { if (r != null) r.run(); return true; }
+    public boolean postDelayed(Runnable r, long delayMillis) { if (r != null) r.run(); return true; }
 
     public void setOnClickListener(OnClickListener l) { this.onClickListener = l; }
     public void setOnLongClickListener(OnLongClickListener l) { this.onLongClickListener = l; }
