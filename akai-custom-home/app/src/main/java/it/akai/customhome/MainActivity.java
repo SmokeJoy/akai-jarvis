@@ -947,7 +947,8 @@ public class MainActivity extends Activity {
         if (!objectsEqual(a.label, b.label)) return false;
         if (a.versionCode != b.versionCode) return false;
         if (a.lastUpdateTime != b.lastUpdateTime) return false;
-        if (!areIconsEqual(a.icon, b.icon)) return false;
+        // Chiave deterministica: package + activity + label + versionCode + lastUpdateTime.
+        // Evita rebuild spuri dovuti a identità instabili di Drawable/ConstantState restituiti da loadIcon().
         return true;
     }
 

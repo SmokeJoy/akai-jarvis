@@ -491,23 +491,19 @@ public class LauncherUnitTests {
         listBothNull2.add(new MainActivity.AppItem(null, "com.test.app1", null, null));
         assertTrue("Entrambi i record con campi null devono risultare uguali", MainActivity.areAppListsEqual(listBothNull, listBothNull2));
 
-        // 2. Rilevazione variazione icona (stesso package, label e activity - Review 4)
+        // 2. Prevenzione rebuild spuri e stabilità istanze Drawable (Review 5)
         android.graphics.drawable.Drawable icon1 = new android.graphics.drawable.Drawable();
         android.graphics.drawable.Drawable icon2 = new android.graphics.drawable.Drawable();
         List<MainActivity.AppItem> listIcon1 = new ArrayList<MainActivity.AppItem>();
-        listIcon1.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1));
+        listIcon1.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1, 1, 1000L));
         List<MainActivity.AppItem> listIcon2 = new ArrayList<MainActivity.AppItem>();
-        listIcon2.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon2));
-        assertFalse("Stesso package/label/activity ma icona aggiornata deve risultare differente (rebuild richiesto)", MainActivity.areAppListsEqual(listIcon1, listIcon2));
+        listIcon2.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon2, 1, 1000L));
+        assertTrue("Istanze distinte di Drawable con metadati e versioni identici NON devono innescare rebuild (Review 5)", MainActivity.areAppListsEqual(listIcon1, listIcon2));
 
-        List<MainActivity.AppItem> listIconNull = new ArrayList<MainActivity.AppItem>();
-        listIconNull.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", null));
-        assertFalse("Icona null vs icona non-null deve risultare differente", MainActivity.areAppListsEqual(listIconNull, listIcon1));
-        assertFalse("Icona non-null vs icona null deve risultare differente", MainActivity.areAppListsEqual(listIcon1, listIconNull));
-
-        List<MainActivity.AppItem> listSameIcon = new ArrayList<MainActivity.AppItem>();
-        listSameIcon.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1));
-        assertTrue("Stessa icona deve risultare uguale", MainActivity.areAppListsEqual(listIcon1, listSameIcon));
+        // Test helper areIconsEqual
+        assertFalse("areIconsEqual rileva drawables diversi", MainActivity.areIconsEqual(icon1, icon2));
+        assertFalse("areIconsEqual rileva drawable vs null", MainActivity.areIconsEqual(icon1, null));
+        assertTrue("areIconsEqual riconosce medesima istanza", MainActivity.areIconsEqual(icon1, icon1));
 
         // 3. Rilevazione aggiornamento app tramite versionCode e lastUpdateTime (Review 4)
         List<MainActivity.AppItem> listV1 = new ArrayList<MainActivity.AppItem>();
