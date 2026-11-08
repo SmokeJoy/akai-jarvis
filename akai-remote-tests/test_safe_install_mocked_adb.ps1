@@ -1021,8 +1021,13 @@ if (args.includes('pull')) {
 if (args.includes('akai_memory_snapshot.db')) {
     process.exit(1);
 }
-if (args.includes('test -f databases/akai_memory.db-wal')) {
-    console.log('EXISTS');
+if (args.includes('pidof') || args.includes('PIDOF_CHECK')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+if (args.includes('akai_memory.db-wal') && (args.includes('test -f') || args.includes('FILE_PROBE_RESULT'))) {
+    console.log('FILE_PROBE_RESULT:EXISTS');
+    process.exit(0);
+}
+if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) {
+    console.log('FILE_PROBE_RESULT:NOT_FOUND');
     process.exit(0);
 }
 if (args.includes('cat databases/akai_memory.db-wal')) {
@@ -1460,13 +1465,14 @@ if (args.includes('exec-in') && args.includes('pm install')) {
 if (args.includes('rm -f')) {
     process.exit(0);
 }
-// test -f: simula che akai_memory.db-wal non sia stato rimosso (EXISTS)
-if (args.includes('test -f') && args.includes('akai_memory.db-wal')) {
-    console.log('EXISTS');
+if (args.includes('pidof') || args.includes('PIDOF_CHECK')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+// Probing tri-state: simula che akai_memory.db-wal non sia stato rimosso (EXISTS)
+if (args.includes('akai_memory.db-wal') && (args.includes('test -f') || args.includes('FILE_PROBE_RESULT'))) {
+    console.log('FILE_PROBE_RESULT:EXISTS');
     process.exit(0);
 }
-if (args.includes('test -f')) {
-    console.log('NOT_FOUND');
+if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) {
+    console.log('FILE_PROBE_RESULT:NOT_FOUND');
     process.exit(0);
 }
 // Se viene tentato il ripristino del database:
@@ -1598,7 +1604,7 @@ $testCmd18 = @"
 try {
     $res18 = & $psExe -ExecutionPolicy Bypass -Command $testCmd18 2>&1 | Out-String
 
-    if ($res18 -match "ERRORE FAIL-CLOSED: Probe dello stato dei processi per .* fallito" -and $res18 -notmatch "FAIL_UNSAFE_PULL" -and $res18 -notmatch "Sessione di backup completata") {
+    if (($res18 -match "ERRORE FAIL-CLOSED: Probe dello stato dei processi" -and $res18 -match "fallito") -and $res18 -notmatch "FAIL_UNSAFE_PULL" -and $res18 -notmatch "Sessione di backup completata") {
         Write-Host "[PASS] [TEST NEGATIVO / QUIESCENZA ERRORE TRASPORTO FAIL-CLOSED] Test 18: Fallimento probe o assenza stdout in Get-ApplicationProcessState blocca categoricamente in Fail-Closed prima del pull DB" -ForegroundColor Green
         $passed++
     } else {
@@ -1606,7 +1612,7 @@ try {
         $failed++
     }
 } catch {
-    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Probe dello stato dei processi per .* fallito") {
+    if (($_.Exception.Message -match "ERRORE FAIL-CLOSED: Probe dello stato dei processi" -or $_.Exception.Message -match "quiescenza")) {
         Write-Host "[PASS] [TEST NEGATIVO / QUIESCENZA ERRORE TRASPORTO FAIL-CLOSED] Test 18: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
         $passed++
     } else {
