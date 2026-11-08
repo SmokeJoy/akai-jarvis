@@ -655,6 +655,12 @@ public class LauncherUnitTests {
         service.resetGlobalActionsCount();
         service.onKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU));
         assertEquals("MENU UP su RaiPlay deve attivare GLOBAL_ACTION_HOME", 1, service.getGlobalActionsPerformed());
+
+        // Simula foreground Browser Ufficiale TV Bro (com.phlox.tvwebbrowser)
+        service.setCurrentPackageForTest("com.phlox.tvwebbrowser");
+        service.resetGlobalActionsCount();
+        service.onKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU));
+        assertEquals("MENU UP su Browser TV Bro ufficiale deve attivare GLOBAL_ACTION_HOME", 1, service.getGlobalActionsPerformed());
     }
 
     private static void testMenuKeyOnOemDtvAppPassesThrough() {

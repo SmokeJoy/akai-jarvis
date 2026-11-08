@@ -41,7 +41,7 @@ public class AkaiMenuHomeService extends AccessibilityService {
             "org.videolan.vlc",
             "org.xbmc.kodi",
             "cm.aptoide.pt",
-            "com.phimtat.tvbro",
+            "com.phlox.tvwebbrowser",
             "org.mozilla.firefox",
             "tv.pluto.android",
             "com.dazn",
