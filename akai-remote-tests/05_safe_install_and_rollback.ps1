@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # AKAI Custom Remote - Procedura di Installazione Sicura, Verifica Firme e Rollback Atomico
 #
 # REGOLA DI SICUREZZA ASSOLUTA:
@@ -259,20 +259,38 @@ function Verify-SQLiteIntegrityOffline($dbFile) {
 try {
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync('$dbEscaped');
-    try { db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch (e) {}
+
+    // 1. Checkpoint categorico TRUNCATE
+    let cp = null;
+    try {
+        cp = db.prepare('PRAGMA wal_checkpoint(TRUNCATE);').get();
+    } catch (cpErr) {
+        console.error('FAIL_CHECKPOINT_EXCEPTION: ' + cpErr.message);
+        process.exit(3);
+    }
+    if (!cp || cp.busy !== 0) {
+        console.error('FAIL_CHECKPOINT_BUSY: busy=' + (cp ? cp.busy : 'unknown'));
+        process.exit(3);
+    }
+
+    // 2. Controllo di integrita' categorico
     const row = db.prepare('PRAGMA integrity_check;').get();
     db.close();
     if (row && row.integrity_check === 'ok') {
         process.exit(0);
     }
+    console.error('FAIL_INTEGRITY: ' + (row ? row.integrity_check : 'null'));
     process.exit(1);
 } catch (e) {
+    console.error('FAIL_OPEN: ' + e.message);
     process.exit(2);
 }
 "@
         $res = & $validNode --no-warnings -e $jsCheck 2>&1
         if ($LASTEXITCODE -eq 0) {
             $verified = $true
+        } elseif ($LASTEXITCODE -eq 3) {
+            throw "ERRORE FAIL-CLOSED: Checkpoint WAL fallito o bloccato (busy>0) su $dbFile : $res"
         } elseif ($LASTEXITCODE -eq 1) {
             throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito (database corrotto) su $dbFile : $res"
         }
@@ -283,14 +301,30 @@ try {
         $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1
         if (-not $pythonCmd) { $pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1 }
         if ($pythonCmd) {
-            $pyCheck = "import sqlite3, sys; con = sqlite3.connect(r'$dbFile');
-try: con.execute('PRAGMA wal_checkpoint(TRUNCATE);')
-except Exception: pass
-res = con.execute('PRAGMA integrity_check;').fetchone()[0]; con.close(); sys.exit(0 if res == 'ok' else 1)"
+            $pyCheck = "import sqlite3, sys
+try:
+    con = sqlite3.connect(r'$dbFile')
+    cur = con.cursor()
+    cur.execute('PRAGMA wal_checkpoint(TRUNCATE);')
+    cp = cur.fetchone()
+    if not cp or cp[0] != 0:
+        b = cp[0] if cp else -1; sys.stderr.write(f'FAIL_CHECKPOINT_BUSY: busy={b}\n')
+        sys.exit(3)
+    res = cur.execute('PRAGMA integrity_check;').fetchone()[0]
+    con.close()
+    if res == 'ok':
+        sys.exit(0)
+    sys.stderr.write(f'FAIL_INTEGRITY: {res}\n')
+    sys.exit(1)
+except Exception as e:
+    sys.stderr.write(f'FAIL_OPEN: {e}\n')
+    sys.exit(2)"
             $res = & $pythonCmd.Source -c $pyCheck 2>&1
             if ($LASTEXITCODE -eq 0) {
                 $verified = $true
-            } else {
+            } elseif ($LASTEXITCODE -eq 3) {
+                throw "ERRORE FAIL-CLOSED: Checkpoint WAL fallito o bloccato con Python su $dbFile : $res"
+            } elseif ($LASTEXITCODE -eq 1) {
                 throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito con Python (exit $LASTEXITCODE) su $dbFile : $res"
             }
         }
@@ -300,9 +334,12 @@ res = con.execute('PRAGMA integrity_check;').fetchone()[0]; con.close(); sys.exi
     if (-not $verified) {
         $sqlite3 = Get-Command sqlite3 -ErrorAction SilentlyContinue
         if ($sqlite3) {
-            & $sqlite3.Source $dbFile "PRAGMA wal_checkpoint(TRUNCATE);" 2>$null | Out-Null
+            $cpOut = & $sqlite3.Source $dbFile "PRAGMA wal_checkpoint(TRUNCATE);" 2>&1
+            if ($LASTEXITCODE -ne 0 -or ($cpOut -notmatch "^0\|")) {
+                throw "ERRORE FAIL-CLOSED: Checkpoint WAL fallito o bloccato con sqlite3 su $dbFile : $cpOut"
+            }
             $out = & $sqlite3.Source $dbFile "PRAGMA integrity_check;" 2>&1
-            if ($LASTEXITCODE -eq 0 -and $out.Trim() -eq "ok") {
+            if ($LASTEXITCODE -ne 0 -and $out.Trim() -eq "ok") {
                 $verified = $true
             } else {
                 throw "ERRORE FAIL-CLOSED: Controllo di integrita' fallito con sqlite3 su $dbFile : $out"
@@ -314,10 +351,12 @@ res = con.execute('PRAGMA integrity_check;').fetchone()[0]; con.close(); sys.exi
         throw "ERRORE FAIL-CLOSED: Impossibile verificare l'integrita' SQLite offline. Nessun interprete idoneo disponibile (Node.js, Python o sqlite3 mancanti). Operazione interrotta per sicurezza."
     }
 
-    # Se presente WAL post-checkpoint con dimensione 0 o residuo, rimuovere per consolidamento bit-for-bit del solo .db
+    # Se presente WAL post-checkpoint con dimensione 0 o residuo, verificare o rimuovere
     if (Test-Path $walFile) {
         if ((Get-Item $walFile).Length -eq 0) {
             Remove-Item $walFile -Force -ErrorAction SilentlyContinue
+        } else {
+            throw "ERRORE FAIL-CLOSED: Post-checkpoint TRUNCATE il file WAL ($walFile) contiene ancora $((Get-Item $walFile).Length) bytes non consolidati. Impossibile consolidare il database come single-file autonomo."
         }
     }
     if (Test-Path $shmFile) {
@@ -425,21 +464,53 @@ switch ($Action) {
             if ($rx.Success) { $extracted = $true }
         }
 
-        # Tentativo C: database primario + WAL via run-as (baseline v5)
+        # Se snapshot v6 non presente, applica quiescenza assoluta per estrazione baseline v5
+        if (-not $extracted) {
+            Write-Host "      Snapshot v6 non presente. Applicazione quiescenza forzata per estrazione baseline v5 (am force-stop)..." -ForegroundColor Yellow
+            & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
+        }
+
+        # Tentativo C: database primario + WAL via run-as (baseline v5 con probing attivo WAL)
         if (-not $extracted) {
             $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $backupDb
             if ($rx.Success) {
+                $walProbe = (& $adb -s $TargetAdb shell "run-as $PackageName sh -c 'test -f databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND'").ToString().Trim()
+                if ($walProbe -match "EXISTS") {
+                    Write-Host "      File WAL presente su device (run-as): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                    $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal
+                    if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                        throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via run-as."
+                    }
+                    Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                } elseif ($walProbe -match "NOT_FOUND") {
+                    Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                    if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+                } else {
+                    throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file WAL su device via run-as (output: '$walProbe')."
+                }
                 $extracted = $true
-                Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal | Out-Null
             }
         }
 
-        # Tentativo D: database primario + WAL via su (baseline v5)
+        # Tentativo D: database primario + WAL via su (baseline v5 con probing attivo WAL)
         if (-not $extracted) {
             $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $backupDb
             if ($rx.Success) {
+                $walProbe = (& $adb -s $TargetAdb shell "su -c 'test -f /data/data/$PackageName/databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND'").ToString().Trim()
+                if ($walProbe -match "EXISTS") {
+                    Write-Host "      File WAL presente su device (su): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                    $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal
+                    if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                        throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via su."
+                    }
+                    Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                } elseif ($walProbe -match "NOT_FOUND") {
+                    Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                    if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+                } else {
+                    throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file WAL su device via su (output: '$walProbe')."
+                }
                 $extracted = $true
-                Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal | Out-Null
             }
         }
 
@@ -520,21 +591,53 @@ switch ($Action) {
                 if ($rx.Success) { $dbExtracted = $true }
             }
 
-            # Tentativo C: database primario + WAL via run-as (baseline v5)
+            # Se snapshot v6 non presente, applica quiescenza forzata per estrazione baseline v5
+            if (-not $dbExtracted) {
+                Write-Host "      Snapshot v6 non presente. Applicazione quiescenza forzata per estrazione baseline v5 (am force-stop)..." -ForegroundColor Yellow
+                & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
+            }
+
+            # Tentativo C: database primario + WAL via run-as (baseline v5 con probing attivo WAL)
             if (-not $dbExtracted) {
                 $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $backupDb
                 if ($rx.Success) {
+                    $walProbe = (& $adb -s $TargetAdb shell "run-as $PackageName sh -c 'test -f databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND'").ToString().Trim()
+                    if ($walProbe -match "EXISTS") {
+                        Write-Host "      File WAL presente su device (run-as): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                        $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal
+                        if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                            throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via run-as."
+                        }
+                        Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                    } elseif ($walProbe -match "NOT_FOUND") {
+                        Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                        if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+                    } else {
+                        throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file WAL su device via run-as (output: '$walProbe')."
+                    }
                     $dbExtracted = $true
-                    Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal | Out-Null
                 }
             }
 
-            # Tentativo D: database primario + WAL via su (baseline v5)
+            # Tentativo D: database primario + WAL via su (baseline v5 con probing attivo WAL)
             if (-not $dbExtracted) {
                 $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $backupDb
                 if ($rx.Success) {
+                    $walProbe = (& $adb -s $TargetAdb shell "su -c 'test -f /data/data/$PackageName/databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND'").ToString().Trim()
+                    if ($walProbe -match "EXISTS") {
+                        Write-Host "      File WAL presente su device (su): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                        $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal
+                        if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                            throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via su."
+                        }
+                        Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                    } elseif ($walProbe -match "NOT_FOUND") {
+                        Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                        if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+                    } else {
+                        throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file WAL su device via su (output: '$walProbe')."
+                    }
                     $dbExtracted = $true
-                    Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal | Out-Null
                 }
             }
 
@@ -656,7 +759,10 @@ switch ($Action) {
                     $statOut = if ($statRaw) { $statRaw.ToString().Trim() } else { "" }
                     if ($statOut -match "^\d+$") { $appUid = $statOut }
                 }
-                $chownTarget = $(if ($appUid) { "${appUid}:${appUid}" } else { "10000:10000" })
+                if ([string]::IsNullOrWhiteSpace($appUid) -or ($appUid -notmatch "^\d+$")) {
+    throw "ERRORE FAIL-CLOSED: Impossibile risolvere con certezza l'identita' numerica UID Linux dell'applicazione ($PackageName) via dumpsys o stat. Applicazione permessi con UID arbitrario (es. 10000) categoricamente VIETATA per sicurezza."
+}
+$chownTarget = "${appUid}:${appUid}"
 
                 # 3. Streaming diretto del backup binario in databases/akai_memory.db tramite pipe universale
                 $restored = $false
@@ -768,7 +874,10 @@ switch ($Action) {
             $statOut = if ($statRaw) { $statRaw.ToString().Trim() } else { "" }
             if ($statOut -match "^\d+$") { $appUid = $statOut }
         }
-        $chownTarget = $(if ($appUid) { "${appUid}:${appUid}" } else { "10000:10000" })
+        if ([string]::IsNullOrWhiteSpace($appUid) -or ($appUid -notmatch "^\d+$")) {
+    throw "ERRORE FAIL-CLOSED: Impossibile risolvere con certezza l'identita' numerica UID Linux dell'applicazione ($PackageName) via dumpsys o stat. Applicazione permessi con UID arbitrario (es. 10000) categoricamente VIETATA per sicurezza."
+}
+$chownTarget = "${appUid}:${appUid}"
 
         $restored = $false
         $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "run-as $PackageName sh -c 'mkdir -p databases; cat > databases/akai_memory.db; chmod 660 databases/akai_memory.db'"

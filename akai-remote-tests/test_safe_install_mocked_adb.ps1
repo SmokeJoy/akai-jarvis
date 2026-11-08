@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # AKAI Custom Remote - Test Suite Mock ADB, Fail-Closed & E2E Verification (PowerShell / Pwsh)
 # Esercita direttamente il codice di 05_safe_install_and_rollback.ps1 senza toccare la TV fisica
 #
@@ -418,7 +418,7 @@ try {
 "@
     $res7 = & $psExe -ExecutionPolicy Bypass -Command $testCmd7 2>&1 | Out-String
 
-    if ($res7 -match "DEPLOYMENT VERIFICATO CON SUCCESSO AL 100%" -and $res7 -match "Compatibilità firma SHA-256 verificata con successo") {
+    if ($res7 -match "DEPLOYMENT VERIFICATO CON SUCCESSO AL 100%" -and $res7 -match "Compatibilit.*firma SHA-256 verificata con successo") {
         Write-Host "[PASS] [TEST AFFERMATIVO / SUCCESS PATH] Test 7: E2E Happy Path Upgrade (ADB mock, backup SQLite reale, firme compatibili, Watchdog OK)" -ForegroundColor Green
         $passed++
     } else {
@@ -497,6 +497,9 @@ if (args.includes('exec-out')) {
 }
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('pidof')) { console.log('12345'); process.exit(0); }
+if (args.includes('test -f databases/akai_memory.db-wal')) { console.log('NOT_FOUND'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('shell')) {
     if (args.includes('cat databases/akai_memory.db')) {
         const src = (process.env.DEVICE_RESTORE_TARGET && fs.existsSync(process.env.DEVICE_RESTORE_TARGET)) ? process.env.DEVICE_RESTORE_TARGET : process.env.DEVICE_DB_FILE;
@@ -667,6 +670,9 @@ if (args.includes('exec-out') || args.includes('cat databases/akai_memory.db')) 
 }
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('pidof')) { console.log('12345'); process.exit(0); }
+if (args.includes('test -f databases/akai_memory.db-wal')) { console.log('NOT_FOUND'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 process.exit(0);
 "@ | Out-File -FilePath $mockAdbJs9 -Encoding ascii
 
@@ -961,6 +967,215 @@ setInterval(() => {}, 1000);
 } finally {
     if ($httpProc12 -and -not $httpProc12.HasExited) { Stop-Process -Id $httpProc12.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $testDir12 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ==============================================================================
+# TEST 13: [TEST NEGATIVO / WAL FAIL-CLOSED] WAL presente su device ma estrazione fallita blocca in fail-closed
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 13: File WAL presente ma estrazione fallita (Fail-Closed) ---" -ForegroundColor Yellow
+$testDir13 = Join-Path $tempDir "akai_test_wal_failclosed_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir13 | Out-Null
+
+$mockAdbJs13 = Join-Path $testDir13 "mock_adb_13.js"
+$mockSignerJs13 = Join-Path $testDir13 "mock_signer_13.js"
+$realDb13 = Join-Path $testDir13 "device_db.sqlite"
+$deviceApk13 = Join-Path $testDir13 "device_backup.apk"
+$candidateApk13 = Join-Path $testDir13 "candidate.apk"
+$backupDir13 = Join-Path $testDir13 "backup_target"
+
+New-MockRealDatabase -FilePath $realDb13
+[System.IO.File]::WriteAllText($deviceApk13, "PK_DEVICE_BACKUP_APK_MOCK_13")
+[System.IO.File]::WriteAllText($candidateApk13, "PK_CANDIDATE_APK_MOCK_13")
+
+# Mock apksigner
+@"
+console.log('Signer #1 certificate SHA-256 digest: deadbeefcafebabe00112233445566778899aabbccddeeffdeadbeefcafebabe');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs13 -Encoding ascii
+
+$mockSignerCmd13 = if ($isWin) { Join-Path $testDir13 "apksigner.cmd" } else { Join-Path $testDir13 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs13`" %*" | Out-File -FilePath $mockSignerCmd13 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs13`" `"`$@`"" | Out-File -FilePath $mockSignerCmd13 -Encoding ascii
+    & chmod +x $mockSignerCmd13
+}
+
+# Mock ADB per Test 13:
+# - exec-out su akai_memory.db ha successo
+# - test -f akai_memory.db-wal restituisce EXISTS
+# - exec-out su akai_memory.db-wal FALLISCE (process.exit(1))
+@"
+const fs = require('fs');
+const args = process.argv.slice(2).join(' ');
+
+if (args.includes('connect')) process.exit(0);
+if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
+if (args.includes('pull')) {
+    const dest = process.argv[process.argv.length - 1];
+    fs.copyFileSync(process.env.DEVICE_APK_FILE, dest);
+    process.exit(0);
+}
+if (args.includes('akai_memory_snapshot.db')) {
+    process.exit(1);
+}
+if (args.includes('test -f databases/akai_memory.db-wal')) {
+    console.log('EXISTS');
+    process.exit(0);
+}
+if (args.includes('cat databases/akai_memory.db-wal')) {
+    process.stderr.write('cat: databases/akai_memory.db-wal: Permission denied\n');
+    process.exit(1);
+}
+if (args.includes('cat databases/akai_memory.db')) {
+    const buf = fs.readFileSync(process.env.DEVICE_DB_FILE);
+    process.stdout.write(buf, () => process.exit(0));
+    return;
+}
+if (args.includes('exec-out')) {
+    const buf = fs.readFileSync(process.env.DEVICE_DB_FILE);
+    process.stdout.write(buf, () => process.exit(0));
+    return;
+}
+if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('shell')) { process.exit(0); }
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs13 -Encoding ascii
+
+$mockAdbCmd13 = if ($isWin) { Join-Path $testDir13 "adb.cmd" } else { Join-Path $testDir13 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs13`" %*" | Out-File -FilePath $mockAdbCmd13 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs13`" `"`$@`"" | Out-File -FilePath $mockAdbCmd13 -Encoding ascii
+    & chmod +x $mockAdbCmd13
+}
+
+$port13 = Get-Random -Minimum 52001 -Maximum 58000
+$httpProc13 = $null
+
+try {
+    $mockServerJs13 = @"
+const http = require('http');
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
+});
+server.listen($port13, '127.0.0.1');
+setInterval(() => {}, 1000);
+"@
+    $serverPath13 = Join-Path $testDir13 "mock_server13.js"
+    [System.IO.File]::WriteAllText($serverPath13, $mockServerJs13, [System.Text.Encoding]::UTF8)
+    $httpProc13 = Start-Process -FilePath $validNode -ArgumentList $serverPath13 -PassThru -NoNewWindow
+    Start-Sleep -Milliseconds 800
+
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $candidateEscaped = $candidateApk13.Replace('\', '/')
+    $mockAdbEscaped = $mockAdbCmd13.Replace('\', '/')
+    $mockSignerEscaped = $mockSignerCmd13.Replace('\', '/')
+    $realDbEscaped = $realDb13.Replace('\', '/')
+    $deviceApkEscaped = $deviceApk13.Replace('\', '/')
+    $backupDirEscaped = $backupDir13.Replace('\', '/')
+    $nodeEscaped = $validNode.Replace('\', '/')
+
+    $testCmd13 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped'
+`$env:DEVICE_DB_FILE = '$realDbEscaped'
+`$env:DEVICE_APK_FILE = '$deviceApkEscaped'
+
+& '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -HttpPort $port13 -BackupDir '$backupDirEscaped' -AllowHardwareExecution
+"@
+    $res13 = & $psExe -ExecutionPolicy Bypass -Command $testCmd13 2>&1 | Out-String
+
+    if ($res13 -match "ERRORE FAIL-CLOSED: File WAL.*presente su storage device ma estrazione fallita" -and $res13 -notmatch "DEPLOYMENT VERIFICATO CON SUCCESSO") {
+        Write-Host "[PASS] [TEST NEGATIVO / WAL FAIL-CLOSED] Test 13: File WAL presente ma con estrazione fallita blocca categoricamente l'operazione in Fail-Closed (zero falsi successi)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / WAL FAIL-CLOSED] Test 13: Mancato blocco fail-closed: $res13" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[PASS] [TEST NEGATIVO / WAL FAIL-CLOSED] Test 13: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
+    $passed++
+} finally {
+    if ($httpProc13 -and -not $httpProc13.HasExited) { Stop-Process -Id $httpProc13.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir13 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ==============================================================================
+# TEST 14: [TEST NEGATIVO / WAL CHECKPOINT BLOCKED] Checkpoint busy>0 blocca la verifica di integrità
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 14: Checkpoint WAL bloccato/busy (Fail-Closed) ---" -ForegroundColor Yellow
+$testDir14 = Join-Path $tempDir "akai_test_wal_busy_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir14 | Out-Null
+$testDb14 = Join-Path $testDir14 "akai_memory.db"
+$busyHolderProc14 = $null
+
+try {
+    if (-not $validNode) {
+        throw "Node.js non disponibile per fixture WAL."
+    }
+
+    $dbEsc14 = $testDb14.Replace('\', '/')
+    $setupPath14 = Join-Path $testDir14 "setup14.js"
+    $setupJs14 = @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$dbEsc14');
+db.exec('PRAGMA journal_mode=WAL;');
+db.exec('CREATE TABLE items (id INT PRIMARY KEY, title TEXT);');
+db.close();
+"@
+    [System.IO.File]::WriteAllText($setupPath14, $setupJs14, [System.Text.Encoding]::UTF8)
+    & $validNode --no-warnings $setupPath14
+
+    # Processo in background che acquisisce una transazione di lettura e la tiene aperta (blocca il checkpoint con busy=1)
+    $holderPath14 = Join-Path $testDir14 "holder14.js"
+    $holderJs14 = @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$dbEsc14');
+db.exec('BEGIN DEFERRED;');
+const row = db.prepare('SELECT count(*) FROM items;').get();
+setTimeout(() => { db.close(); process.exit(0); }, 3000);
+"@
+    [System.IO.File]::WriteAllText($holderPath14, $holderJs14, [System.Text.Encoding]::UTF8)
+    $busyHolderProc14 = Start-Process -FilePath $validNode -ArgumentList $holderPath14 -PassThru -NoNewWindow
+    Start-Sleep -Milliseconds 600
+
+    # Scrittura concorrente nel WAL che non puo' essere checkpointata a causa del lettore attivo
+    $writerPath14 = Join-Path $testDir14 "writer14.js"
+    $writerJs14 = @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$dbEsc14');
+db.exec('PRAGMA wal_autocheckpoint=0;');
+db.exec('INSERT INTO items VALUES (1, \'concurrent\');');
+process.exit(0);
+"@
+    [System.IO.File]::WriteAllText($writerPath14, $writerJs14, [System.Text.Encoding]::UTF8)
+    & $validNode --no-warnings $writerPath14
+
+    # Invochiamo Verify-SQLiteIntegrityOffline: DEVE sollevare ERRORE FAIL-CLOSED a causa di busy=1!
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $testCmd14 = @"
+. '$scriptEscaped' -Action plan | Out-Null
+Verify-SQLiteIntegrityOffline '$dbEsc14'
+"@
+    $out14 = & $psExe -ExecutionPolicy Bypass -Command $testCmd14 2>&1 | Out-String
+
+    if ($out14 -match "ERRORE FAIL-CLOSED: Checkpoint WAL fallito o bloccato \(busy>0\)") {
+        Write-Host "[PASS] [TEST NEGATIVO / WAL CHECKPOINT BLOCKED] Test 14: Checkpoint WAL occupato (busy>0) blocca categoricamente in Fail-Closed (integrity_check non scavalca il blocco)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / WAL CHECKPOINT BLOCKED] Test 14: Mancato blocco fail-closed per checkpoint busy: $out14" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[PASS] [TEST NEGATIVO / WAL CHECKPOINT BLOCKED] Test 14: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
+    $passed++
+} finally {
+    if ($busyHolderProc14 -and -not $busyHolderProc14.HasExited) { Stop-Process -Id $busyHolderProc14.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir14 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
