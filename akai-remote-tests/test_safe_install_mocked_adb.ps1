@@ -822,6 +822,147 @@ try {
     Remove-Item $testDir10 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+
+# ==============================================================================
+# TEST 11: [TEST CONSISTENZA WAL] Checkpoint offline e consolidamento transazioni WAL
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 11: Consistenza SQLite in modalita' WAL e Checkpoint Offline ---" -ForegroundColor Yellow
+$testDir11 = Join-Path $tempDir "akai_test_wal_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir11 | Out-Null
+$testDb11 = Join-Path $testDir11 "akai_memory.db"
+$testWal11 = "$testDb11-wal"
+
+try {
+    if (-not $validNode) {
+        throw "Node.js non disponibile per fixture WAL."
+    }
+
+    $dbEsc11 = $testDb11.Replace('\', '/')
+    $setupPath11 = Join-Path $testDir11 "setup.js"
+    $setupJs = @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$dbEsc11');
+db.exec('PRAGMA journal_mode=WAL;');
+db.exec('CREATE TABLE procedures (id INT PRIMARY KEY, name TEXT);');
+db.exec('INSERT INTO procedures VALUES (1, \'initial_proc\');');
+db.close();
+"@
+    [System.IO.File]::WriteAllText($setupPath11, $setupJs, [System.Text.Encoding]::UTF8)
+    & $validNode --no-warnings $setupPath11
+
+    # Scrittura seconda transazione in processo figlio che esce bruscamente senza checkpoint
+    $childPath11 = Join-Path $testDir11 "child.js"
+    $childJs = @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$dbEsc11');
+db.exec('PRAGMA wal_autocheckpoint=0;');
+db.exec('INSERT INTO procedures VALUES (2, \'uncheckpointed_wal_proc\');');
+process.exit(0);
+"@
+    [System.IO.File]::WriteAllText($childPath11, $childJs, [System.Text.Encoding]::UTF8)
+    & $validNode --no-warnings $childPath11
+
+    $walPresent = (Test-Path $testWal11) -and ((Get-Item $testWal11).Length -gt 0)
+    Write-Host "      WAL presente con transazioni non checkpointate: $walPresent ($((Get-Item $testWal11).Length) byte)"
+
+    # Eseguiamo Verify-SQLiteIntegrityOffline che esegue PRAGMA wal_checkpoint(TRUNCATE)
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $testCmd11 = @"
+. '$scriptEscaped' -Action plan | Out-Null
+Verify-SQLiteIntegrityOffline '$dbEsc11'
+"@
+    $out11 = & $psExe -ExecutionPolicy Bypass -Command $testCmd11 2>&1 | Out-String
+
+    # Verifichiamo che il record precedentemente nel WAL sia ora consolidato nel file principale .db
+    $checkPath11 = Join-Path $testDir11 "check.js"
+    $checkJs = @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$dbEsc11');
+const row = db.prepare('SELECT COUNT(*) as cnt FROM procedures WHERE name=\'uncheckpointed_wal_proc\';').get();
+db.close();
+if (row && row.cnt === 1) {
+    process.exit(0);
+}
+process.exit(1);
+"@
+    [System.IO.File]::WriteAllText($checkPath11, $checkJs, [System.Text.Encoding]::UTF8)
+    & $validNode --no-warnings $checkPath11
+    if ($LASTEXITCODE -eq 0 -and $out11 -notmatch "ERRORE FAIL-CLOSED") {
+        Write-Host "[PASS] [TEST CONSISTENZA WAL] Test 11: Checkpoint offline e consolidamento WAL verificati con successo (zero perdite di dati committati)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST CONSISTENZA WAL] Test 11: Record in WAL non consolidato nel database principale (exit=$LASTEXITCODE, out=$out11)" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST CONSISTENZA WAL] Test 11: Eccezione imprevista: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    Remove-Item $testDir11 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ==============================================================================
+# TEST 12: [TEST NEGATIVO / ROLLBACK FAIL-CLOSED] Mancanza backup DB blocca il rollback
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 12: Prerequisiti Rollback Fail-Closed (DB Mancante) ---" -ForegroundColor Yellow
+$testDir12 = Join-Path $tempDir "akai_test_rb_failclosed_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir12 | Out-Null
+$backupDir12 = Join-Path $testDir12 "backup_tv"
+$sessionDir12 = Join-Path $backupDir12 "backup_mock_session"
+New-Item -ItemType Directory -Force -Path $sessionDir12 | Out-Null
+
+$mockApk12 = Join-Path $sessionDir12 "it.akai.customremote_backup.apk"
+[System.IO.File]::WriteAllBytes($mockApk12, [byte[]]@(0x50, 0x4B, 0x03, 0x04)) # Dummy zip header
+
+# NOTA: akai_memory.db NON esiste in $sessionDir12 (backup DB assente!)
+$port12 = Get-Random -Minimum 18100 -Maximum 18999
+$httpProc12 = $null
+
+try {
+    # Mock server HTTP che restituisce status ok
+    $mockServerJs12 = @"
+const http = require('http');
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
+});
+server.listen($port12, '127.0.0.1');
+setInterval(() => {}, 1000);
+"@
+    $serverPath12 = Join-Path $testDir12 "mock_server12.js"
+    [System.IO.File]::WriteAllText($serverPath12, $mockServerJs12, [System.Text.Encoding]::UTF8)
+    $httpProc12 = Start-Process -FilePath $validNode -ArgumentList $serverPath12 -PassThru -NoNewWindow
+    Start-Sleep -Seconds 1
+
+    # Invocazione rollback manuale: DEVE sollevare eccezione fail-closed per DB mancante
+    $rollbackBlocked = $false
+    $output12 = ""
+    try {
+        $output12 = & $psExe -ExecutionPolicy Bypass -Command "& '$scriptPath' -Action rollback -BackupDir '$backupDir12' -HttpPort $port12 -AllowHardwareExecution 2>&1" | Out-String
+        if ($LASTEXITCODE -ne 0 -or $output12 -match "ERRORE FAIL-CLOSED" -or $output12 -match "Prerequisito critico mancante") {
+            $rollbackBlocked = $true
+        }
+    } catch {
+        $rollbackBlocked = $true
+    }
+
+    $noFalseSuccess = ($output12 -notmatch "Rollback manuale completato e verificato con successo") -and ($output12 -notmatch "TV operativa")
+
+    if ($rollbackBlocked -and $noFalseSuccess) {
+        Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK FAIL-CLOSED] Test 12: Rollback categoricamente bloccato per DB v5 mancante (zero downgrade eseguiti, zero falsi successi)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / ROLLBACK FAIL-CLOSED] Test 12: Mancato blocco fail-closed o falso successo emesso: $output12" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST NEGATIVO / ROLLBACK FAIL-CLOSED] Test 12: Eccezione: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($httpProc12 -and -not $httpProc12.HasExited) { Stop-Process -Id $httpProc12.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir12 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 

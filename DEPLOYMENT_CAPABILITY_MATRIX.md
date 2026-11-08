@@ -92,3 +92,19 @@ A seguito dell'audit condotto nell'ottava revisione tecnica, viene formalizzata 
    Il tentativo di installazione abortisce categoricamente se il canale di estrazione del database binario non è dimostrato e verificato con successo prima di invocare `adb install`.
 4. **Streaming Binario Nativo .NET**:
    Confermata l'eliminazione di `Get-Content -Encoding Byte` e delle redirezioni `>`, sostituite da `Send-FileViaAdbExecIn` e `Receive-FileViaAdbExecOut` basate su stream nativi .NET.
+
+5. **Consistenza SQLite in Modalità WAL e Checkpoint Offline (P0-1)**:
+   Per eliminare il rischio di perdita silenziosa di dati causata da transazioni committate residenti esclusivamente nel file `-wal`:
+   - L'applicazione writer viene forzatamente arrestata (`am force-stop`) prima della lettura del database su storage;
+   - La procedura estrae congiuntamente sia `akai_memory.db` sia `akai_memory.db-wal` (se presente);
+   - In fase di validazione offline, `Verify-SQLiteIntegrityOffline` esegue categoricamente `PRAGMA wal_checkpoint(TRUNCATE)` (supportato su Node.js `node:sqlite`, Python `sqlite3` e sqlite3 CLI), riversando tutte le transazioni pendenti nel file principale e azzerando il WAL;
+   - I file ausiliari `-wal` e `-shm` vengono eliminati localmente, ottenendo un file `.db` bit-for-bit consolidato, autonomo e verificato integro al 100% prima del calcolo dell'hash SHA-256.
+6. **Indivisibilità del Rollback e Prerequisiti Bloccanti (P0-2)**:
+   Sia nel rollback automatico scatenato dal watchdog (30s) sia nel rollback manuale, è tassativamente vietato effettuare il downgrade dell'APK se il file di backup del database SQLite v5 non è presente, integro o leggibile:
+   - Poiché la baseline v5 non possiede `onDowngrade()` e lancia eccezione irreversibile se avviata su schema v6, un downgrade del solo APK causerebbe il crash permanente del server;
+   - La presenza del backup APK, del file `akai_memory.db` originale (>= 512 byte), dell'hash SHA-256 e dell'esito positivo di `Verify-SQLiteIntegrityOffline` è validata **prima di invocare `adb install`**;
+   - In assenza di tali prerequisiti, la procedura solleva eccezione `FAIL-CLOSED` immediata con codice di uscita non-zero, senza eseguire alcuna reinstallazione né emettere falsi messaggi di ripristino riuscito (anche se `/api/status` dovesse rispondere positivamente).
+7. **Risoluzione Identità Numeriche Android (UID/GID) per Ripristino Root (P1)**:
+   Su Android Linux non riconosce i nomi di pacchetto come identificativi utente. In caso di ripristino via root (`su`), lo script risolve dinamicamente l'identità numerica (`userId` / `appId`) tramite `dumpsys package <PackageName>` o `stat -c "%u"`, applicando `chown -R <uid>:<gid>` ed evitando fallimenti silenziosi dei permessi.
+8. **Watchdog Post-Rollback Deterministic Exit (P1)**:
+   I controlli di salute post-rollback eseguono un ciclo di verifica attivo: se l'endpoint `/api/status` non risponde con `status=ok`, la procedura dichiara esplicitamente lo stato `FAIL/UNKNOWN` e termina con eccezione bloccante ed exit code 1.

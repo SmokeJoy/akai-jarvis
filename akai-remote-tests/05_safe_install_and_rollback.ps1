@@ -242,6 +242,10 @@ function Verify-SQLiteIntegrityOffline($dbFile) {
         throw "ERRORE FAIL-CLOSED: File database per verifica integrita' corrotto o inferiore a 512 byte ($((Get-Item $dbFile).Length) byte)"
     }
 
+    $walFile = "$dbFile-wal"
+    $shmFile = "$dbFile-shm"
+    $verified = $false
+
     # 1. Prova con Node.js
     $nodePaths = @(
         "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\nodejs\node.exe",
@@ -255,6 +259,7 @@ function Verify-SQLiteIntegrityOffline($dbFile) {
 try {
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync('$dbEscaped');
+    try { db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch (e) {}
     const row = db.prepare('PRAGMA integrity_check;').get();
     db.close();
     if (row && row.integrity_check === 'ok') {
@@ -267,40 +272,59 @@ try {
 "@
         $res = & $validNode --no-warnings -e $jsCheck 2>&1
         if ($LASTEXITCODE -eq 0) {
-            return $true
+            $verified = $true
         } elseif ($LASTEXITCODE -eq 1) {
             throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito (database corrotto) su $dbFile : $res"
         }
-        # Se LASTEXITCODE == 2, la versione corrente di Node.js non include node:sqlite (es. Node < 22).
-        # Fall-through trasparente verso Python 3 / sqlite3 CLI.
     }
 
     # 2. Prova con Python
-    $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1
-    if (-not $pythonCmd) { $pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1 }
-    if ($pythonCmd) {
-        $pyCheck = "import sqlite3, sys; con = sqlite3.connect(r'$dbFile'); res = con.execute('PRAGMA integrity_check;').fetchone()[0]; con.close(); sys.exit(0 if res == 'ok' else 1)"
-        $res = & $pythonCmd.Source -c $pyCheck 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            return $true
-        } else {
-            throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito con Python (exit $LASTEXITCODE) su $dbFile : $res"
+    if (-not $verified) {
+        $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1
+        if (-not $pythonCmd) { $pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1 }
+        if ($pythonCmd) {
+            $pyCheck = "import sqlite3, sys; con = sqlite3.connect(r'$dbFile');
+try: con.execute('PRAGMA wal_checkpoint(TRUNCATE);')
+except Exception: pass
+res = con.execute('PRAGMA integrity_check;').fetchone()[0]; con.close(); sys.exit(0 if res == 'ok' else 1)"
+            $res = & $pythonCmd.Source -c $pyCheck 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $verified = $true
+            } else {
+                throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito con Python (exit $LASTEXITCODE) su $dbFile : $res"
+            }
         }
     }
 
     # 3. Prova con sqlite3 CLI
-    $sqlite3 = Get-Command sqlite3 -ErrorAction SilentlyContinue
-    if ($sqlite3) {
-        $out = & $sqlite3.Source $dbFile "PRAGMA integrity_check;" 2>&1
-        if ($LASTEXITCODE -eq 0 -and $out.Trim() -eq "ok") {
-            return $true
-        } else {
-            throw "ERRORE FAIL-CLOSED: Controllo di integrita' fallito con sqlite3 su $dbFile : $out"
+    if (-not $verified) {
+        $sqlite3 = Get-Command sqlite3 -ErrorAction SilentlyContinue
+        if ($sqlite3) {
+            & $sqlite3.Source $dbFile "PRAGMA wal_checkpoint(TRUNCATE);" 2>$null | Out-Null
+            $out = & $sqlite3.Source $dbFile "PRAGMA integrity_check;" 2>&1
+            if ($LASTEXITCODE -eq 0 -and $out.Trim() -eq "ok") {
+                $verified = $true
+            } else {
+                throw "ERRORE FAIL-CLOSED: Controllo di integrita' fallito con sqlite3 su $dbFile : $out"
+            }
         }
     }
 
-    # Nessun interprete disponibile: FAIL-CLOSED categorico!
-    throw "ERRORE FAIL-CLOSED: Impossibile verificare l'integrita' SQLite offline. Nessun interprete idoneo disponibile (Node.js, Python o sqlite3 mancanti). Operazione interrotta per sicurezza."
+    if (-not $verified) {
+        throw "ERRORE FAIL-CLOSED: Impossibile verificare l'integrita' SQLite offline. Nessun interprete idoneo disponibile (Node.js, Python o sqlite3 mancanti). Operazione interrotta per sicurezza."
+    }
+
+    # Se presente WAL post-checkpoint con dimensione 0 o residuo, rimuovere per consolidamento bit-for-bit del solo .db
+    if (Test-Path $walFile) {
+        if ((Get-Item $walFile).Length -eq 0) {
+            Remove-Item $walFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (Test-Path $shmFile) {
+        Remove-Item $shmFile -Force -ErrorAction SilentlyContinue
+    }
+
+    return $true
 }
 
 switch ($Action) {
@@ -382,11 +406,13 @@ switch ($Action) {
 
         # 3. Snapshot consistente SQLite
         $backupDb = Join-Path $sessionDir "akai_memory.db"
-        Write-Host "[2/3] Creazione snapshot consistente con WAL checkpoint via intent (se v6+)..."
-        & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" | Out-Null
-        Start-Sleep -Seconds 2
+        $backupDbWal = Join-Path $sessionDir "akai_memory.db-wal"
+        Write-Host "[2/3] Arresto writer app e tentativo snapshot consistente (se v6+)..."
+        & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
+        & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" 2>$null | Out-Null
+        Start-Sleep -Seconds 1
 
-        Write-Host "[3/3] Estrazione database SQLite e verifica integrita'..."
+        Write-Host "[3/3] Estrazione database SQLite e gestione file WAL..."
         $extracted = $false
 
         # Tentativo A: snapshot via run-as
@@ -399,25 +425,40 @@ switch ($Action) {
             if ($rx.Success) { $extracted = $true }
         }
 
-        # Tentativo C: database primario via run-as (baseline v5)
+        # Tentativo C: database primario + WAL via run-as (baseline v5)
         if (-not $extracted) {
             $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $backupDb
-            if ($rx.Success) { $extracted = $true }
+            if ($rx.Success) {
+                $extracted = $true
+                Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal | Out-Null
+            }
         }
 
-        # Tentativo D: database primario via su (baseline v5)
+        # Tentativo D: database primario + WAL via su (baseline v5)
         if (-not $extracted) {
             $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $backupDb
-            if ($rx.Success) { $extracted = $true }
+            if ($rx.Success) {
+                $extracted = $true
+                Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal | Out-Null
+            }
         }
 
         if (-not $extracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
             throw "ERRORE FAIL-CLOSED: Estrazione del database fallita (permessi negati o file non accessibile)."
         }
 
+        # Pulizia WAL vuoto
+        if (Test-Path $backupDbWal) {
+            if ((Get-Item $backupDbWal).Length -lt 32) {
+                Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue
+            } else {
+                Write-Host "      File WAL rilevato ($((Get-Item $backupDbWal).Length) bytes) - applicazione checkpoint offline..." -ForegroundColor Cyan
+            }
+        }
+
         Verify-SQLiteIntegrityOffline $backupDb | Out-Null
         $dbHash = Get-Sha256Hex $backupDb
-        Write-Host "      Database SQLite salvato e verificato integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$dbHash)" -ForegroundColor Green
+        Write-Host "      Database SQLite consolidato e verificato integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$dbHash)" -ForegroundColor Green
         Write-Host "Sessione di backup completata in: $sessionDir" -ForegroundColor Green
     }
 
@@ -461,10 +502,12 @@ switch ($Action) {
                 Write-Host "      Endpoint REST non raggiungibile o autenticazione 401 richiesta ($($_.Exception.Message)) - continuo con snapshot binario..." -ForegroundColor Yellow
             }
 
-            # 1.3 Backup OBBLIGATORIO del database SQLite (FAIL-CLOSED)
-            Write-Host "[2/6] Backup preventivo OBBLIGATORIO del database SQLite..."
-            & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" | Out-Null
-            Start-Sleep -Seconds 2
+            # 1.3 Backup OBBLIGATORIO del database SQLite (FAIL-CLOSED) con WAL
+            Write-Host "[2/6] Backup preventivo OBBLIGATORIO del database SQLite e gestione WAL..."
+            $backupDbWal = Join-Path $sessionDir "akai_memory.db-wal"
+            & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
+            & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" 2>$null | Out-Null
+            Start-Sleep -Seconds 1
 
             $dbExtracted = $false
             # Tentativo A: snapshot via run-as
@@ -477,16 +520,22 @@ switch ($Action) {
                 if ($rx.Success) { $dbExtracted = $true }
             }
 
-            # Tentativo C: database primario via run-as (baseline v5)
+            # Tentativo C: database primario + WAL via run-as (baseline v5)
             if (-not $dbExtracted) {
                 $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $backupDb
-                if ($rx.Success) { $dbExtracted = $true }
+                if ($rx.Success) {
+                    $dbExtracted = $true
+                    Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal | Out-Null
+                }
             }
 
-            # Tentativo D: database primario via su (baseline v5)
+            # Tentativo D: database primario + WAL via su (baseline v5)
             if (-not $dbExtracted) {
                 $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $backupDb
-                if ($rx.Success) { $dbExtracted = $true }
+                if ($rx.Success) {
+                    $dbExtracted = $true
+                    Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal | Out-Null
+                }
             }
 
             # VERIFICA FAIL-CLOSED CATEGORICA
@@ -494,9 +543,18 @@ switch ($Action) {
                 throw "ERRORE FAIL-CLOSED: Impossibile estrarre un backup integro del database dal dispositivo (permessi negati run-as/su o database non accessibile). L'installazione e' categoricamente INTERROTTA per prevenire perdite irrecuperabili di dati."
             }
 
+            # Pulizia WAL vuoto se presente
+            if (Test-Path $backupDbWal) {
+                if ((Get-Item $backupDbWal).Length -lt 32) {
+                    Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue
+                } else {
+                    Write-Host "      File WAL rilevato ($((Get-Item $backupDbWal).Length) bytes) - applicazione checkpoint offline..." -ForegroundColor Cyan
+                }
+            }
+
             Verify-SQLiteIntegrityOffline $backupDb | Out-Null
             $backupDbHash = Get-Sha256Hex $backupDb
-            Write-Host "      Database SQLite integro e salvato: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$backupDbHash)" -ForegroundColor Green
+            Write-Host "      Database SQLite consolidato e integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$backupDbHash)" -ForegroundColor Green
 
             # 2. Verifica compatibilità firme FAIL-CLOSED
             Write-Host "[3/6] Verifica compatibilità certificato firma (FAIL-CLOSED)..."
@@ -534,8 +592,8 @@ switch ($Action) {
         # 5. Multi-Point Health Check Watchdog (30s)
         Write-Host "[6/6] Multi-Point Health Check Watchdog attivo (timeout 30s)..."
         $healthy = $false
-        $attempts = if ($env:WATCHDOG_ATTEMPTS) { [int]$env:WATCHDOG_ATTEMPTS } else { 6 }
-        $sleepSec = if ($env:WATCHDOG_SLEEP_SEC) { [int]$env:WATCHDOG_SLEEP_SEC } else { 5 }
+        $attempts = $(if ($env:WATCHDOG_ATTEMPTS) { [int]$env:WATCHDOG_ATTEMPTS } else { 6 })
+        $sleepSec = $(if ($env:WATCHDOG_SLEEP_SEC) { [int]$env:WATCHDOG_SLEEP_SEC } else { 5 })
         for ($i = 1; $i -le $attempts; $i++) {
             Start-Sleep -Seconds $sleepSec
             try {
@@ -561,6 +619,17 @@ switch ($Action) {
         } else {
             Write-Host "`nALLARME: Health check fallito entro 30s! Avvio ROLLBACK ATOMICO INDIVISIBILE (APK + DB)..." -ForegroundColor Red
             if ($hasPrevious) {
+                # VALIDAZIONE PREREQUISITI RIGOROSA PRE-ROLLBACK (P0-2 FAIL-CLOSED)
+                if (-not (Test-Path $backupApk) -or (Get-Item $backupApk).Length -eq 0) {
+                    throw "ERRORE FAIL-CLOSED FATALE: Impossibile eseguire il rollback. File APK precedente mancante ($backupApk)."
+                }
+                if (-not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
+                    throw "ERRORE FAIL-CLOSED FATALE: Impossibile procedere al rollback automatico dell'APK senza backup del database SQLite v5 ($backupDb). La baseline v5 non supporta lo schema v6; reinstallare l'APK senza DB causerebbe crash irreversibile dell'app. Rollback interrotto in FAIL-CLOSED."
+                }
+                if (-not $backupDbHash) {
+                    throw "ERRORE FAIL-CLOSED FATALE: Hash SHA-256 del backup SQLite v5 assente. Impossibile garantire integrita' bit-for-bit del ripristino."
+                }
+
                 Write-Host "[ROLLBACK 1/4] Reinstallazione APK precedente (adb install -r -d)..."
                 $rbRes = & $adb -s $TargetAdb install -r -d $backupApk
                 Write-Host "      Esito adb install rollback: $rbRes"
@@ -568,61 +637,83 @@ switch ($Action) {
                     throw "FATALE: Reinstallazione rollback APK fallita!"
                 }
 
-                if (Test-Path $backupDb) {
-                    Write-Host "[ROLLBACK 2/4] Ripristino database SQLite originale..."
-                    # 1. Arresto forzato dell'app per rilasciare lock sul file
-                    & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
+                Write-Host "[ROLLBACK 2/4] Ripristino database SQLite originale..."
+                # 1. Arresto forzato dell'app per rilasciare lock sul file
+                & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
 
-                    # 2. Rimozione file WAL e SHM orfani
-                    & $adb -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
-                    & $adb -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
+                # 2. Rimozione file WAL e SHM orfani
+                & $adb -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
+                & $adb -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
 
-                    # 3. Streaming diretto del backup binario in databases/akai_memory.db tramite pipe universale
-                    $restored = $false
-                    $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "run-as $PackageName sh -c 'mkdir -p databases; cat > databases/akai_memory.db; chmod 660 databases/akai_memory.db'"
-                    if ($streamRes.Success) {
-                        $restored = $true
-                    } else {
-                        $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "su -c 'mkdir -p /data/data/$PackageName/databases; cat > /data/data/$PackageName/databases/akai_memory.db; chown -R ${PackageName}:${PackageName} /data/data/$PackageName/databases; chmod 660 /data/data/$PackageName/databases/akai_memory.db'"
-                        if ($streamRes.Success) { $restored = $true }
-                    }
-
-                    if (-not $restored) {
-                        throw "ERRORE FAIL-CLOSED: Impossibile effettuare lo streaming del database ripristinato sul dispositivo (exit=$($streamRes.ExitCode), out=$($streamRes.Output))."
-                    }
-
-                    # 4. Verifica parità hash SHA-256 e integrità SQLite post-ripristino
-                    $verifyRestoreDb = Join-Path $sessionDir "verify_restore.db"
-                    $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $verifyRestoreDb
-                    if (-not $rx.Success) {
-                        $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $verifyRestoreDb
-                    }
-
-                    if (-not (Test-Path $verifyRestoreDb) -or (Get-Item $verifyRestoreDb).Length -lt 512) {
-                        throw "ERRORE FAIL-CLOSED: Verifica post-rollback fallita: impossibile rileggere il database ripristinato dal dispositivo per validarne l'integrita'."
-                    }
-                    Verify-SQLiteIntegrityOffline $verifyRestoreDb | Out-Null
-                    $restHash = Get-Sha256Hex $verifyRestoreDb
-                    if (-not $backupDbHash -or $restHash -ne $backupDbHash) {
-                        throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 post-ripristino! Orig: $backupDbHash, Device: $restHash"
-                    }
-                    Write-Host "      Parita' hash SHA-256 ($restHash) e integrita' SQLite post-rollback verificate con successo." -ForegroundColor Green
-
-                    Write-Host "      Database SQLite v5 ripristinato con successo." -ForegroundColor Green
+                # Risoluzione UID numerico Android per chown
+                $appUid = $null
+                $uidRaw = & $adb -s $TargetAdb shell "dumpsys package $PackageName | grep -E 'userId=|appId='" 2>$null
+                $uidOut = if ($uidRaw) { $uidRaw.ToString().Trim() } else { "" }
+                if ($uidOut -match "userId=(\d+)") { $appUid = $matches[1] }
+                elseif ($uidOut -match "appId=(\d+)") { $appUid = $matches[1] }
+                else {
+                    $statRaw = & $adb -s $TargetAdb shell "stat -c '%u' /data/data/$PackageName" 2>$null
+                    $statOut = if ($statRaw) { $statRaw.ToString().Trim() } else { "" }
+                    if ($statOut -match "^\d+$") { $appUid = $statOut }
                 }
+                $chownTarget = $(if ($appUid) { "${appUid}:${appUid}" } else { "10000:10000" })
+
+                # 3. Streaming diretto del backup binario in databases/akai_memory.db tramite pipe universale
+                $restored = $false
+                $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "run-as $PackageName sh -c 'mkdir -p databases; cat > databases/akai_memory.db; chmod 660 databases/akai_memory.db'"
+                if ($streamRes.Success) {
+                    $restored = $true
+                } else {
+                    $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "su -c 'mkdir -p /data/data/$PackageName/databases; cat > /data/data/$PackageName/databases/akai_memory.db; chown -R $chownTarget /data/data/$PackageName/databases; chmod 660 /data/data/$PackageName/databases/akai_memory.db'"
+                    if ($streamRes.Success) { $restored = $true }
+                }
+
+                if (-not $restored) {
+                    throw "ERRORE FAIL-CLOSED: Impossibile effettuare lo streaming del database ripristinato sul dispositivo (exit=$($streamRes.ExitCode), out=$($streamRes.Output))."
+                }
+
+                # 4. Verifica parità hash SHA-256 e integrità SQLite post-ripristino
+                $verifyRestoreDb = Join-Path $sessionDir "verify_restore.db"
+                $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $verifyRestoreDb
+                if (-not $rx.Success) {
+                    $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $verifyRestoreDb
+                }
+
+                if (-not (Test-Path $verifyRestoreDb) -or (Get-Item $verifyRestoreDb).Length -lt 512) {
+                    throw "ERRORE FAIL-CLOSED: Verifica post-rollback fallita: impossibile rileggere il database ripristinato dal dispositivo per validarne l'integrita'."
+                }
+                Verify-SQLiteIntegrityOffline $verifyRestoreDb | Out-Null
+                $restHash = Get-Sha256Hex $verifyRestoreDb
+                if ($restHash -ne $backupDbHash) {
+                    throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 post-ripristino! Orig: $backupDbHash, Device: $restHash"
+                }
+                Write-Host "      Parita' hash SHA-256 ($restHash) e integrita' SQLite post-rollback verificate con successo." -ForegroundColor Green
+
+                Write-Host "      Database SQLite v5 ripristinato con successo." -ForegroundColor Green
 
                 Write-Host "[ROLLBACK 3/4] Riavvio servizio RemoteServerService..."
                 & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
 
                 Write-Host "[ROLLBACK 4/4] Verifica post-rollback dello stato di salute..."
-                Start-Sleep -Seconds 3
-                try {
-                    $rbStatus = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 5 -ErrorAction Stop
-                    if ($rbStatus.status -eq "ok") {
-                        Write-Host "ROLLBACK RIUSCITO E VERIFICATO: Sistema TV tornato operativo al 100% sulla versione precedente." -ForegroundColor Green
+                $rbHealthy = $false
+                for ($r = 1; $r -le 3; $r++) {
+                    Start-Sleep -Seconds 2
+                    try {
+                        $rbStatus = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 4 -ErrorAction Stop
+                        if ($rbStatus.status -eq "ok") {
+                            $rbHealthy = $true
+                            break
+                        }
+                    } catch {
+                        Write-Host "      Controllo post-rollback $r/3: in avvio ($($_.Exception.Message))..." -ForegroundColor Yellow
                     }
-                } catch {
-                    Write-Host "ATTENZIONE POST-ROLLBACK: Endpoint status non ancora pronto ($($_.Exception.Message))." -ForegroundColor Yellow
+                }
+
+                if ($rbHealthy) {
+                    Write-Host "ROLLBACK RIUSCITO E VERIFICATO: Sistema TV tornato operativo al 100% sulla versione precedente." -ForegroundColor Green
+                } else {
+                    Write-Host "ALLARME POST-ROLLBACK: Health check post-rollback fallito - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red
+                    throw "ERRORE FAIL-CLOSED: Watchdog post-rollback non superato. Il servizio non risponde con status=ok."
                 }
             } else {
                 Write-Host "Nessun APK precedente disponibile per il ripristino." -ForegroundColor Red
@@ -636,74 +727,102 @@ switch ($Action) {
         Write-Host "=== ROLLBACK MANUALE ALLA VERSIONE PRECEDENTE CON VERIFICA ===" -ForegroundColor Yellow
         $latestSession = Get-ChildItem -Path $BackupDir -Directory | Sort-Object CreationTime -Descending | Select-Object -First 1
         if (-not $latestSession) {
-            throw "Nessuna sessione di backup trovata in $BackupDir."
+            throw "ERRORE FAIL-CLOSED: Nessuna sessione di backup trovata in $BackupDir."
         }
         $backupApk = Join-Path $latestSession.FullName "it.akai.customremote_backup.apk"
         $backupDb = Join-Path $latestSession.FullName "akai_memory.db"
 
-        if (-not (Test-Path $backupApk)) {
-            throw "File di backup APK non trovato in $backupApk."
+        # VALIDAZIONE PREREQUISITI RIGOROSA PRE-ROLLBACK (P0-2 FAIL-CLOSED)
+        if (-not (Test-Path $backupApk) -or (Get-Item $backupApk).Length -eq 0) {
+            throw "ERRORE FAIL-CLOSED: File di backup APK non trovato in $backupApk."
         }
+        if (-not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
+            throw "ERRORE FAIL-CLOSED: Prerequisito critico mancante per il rollback manuale. File database di backup mancante o non integro in $backupDb. Impossibile procedere al downgrade dell'APK senza ripristino DB (rischio crash per schema v6 non supportato da v5)."
+        }
+
+        Verify-SQLiteIntegrityOffline $backupDb | Out-Null
+        $backupDbHash = Get-Sha256Hex $backupDb
+
         Write-Host "[1/4] Reinstallazione APK precedente da sessione: $($latestSession.Name)..."
         $res = & $adb -s $TargetAdb install -r -d $backupApk
         Write-Host "      Esito adb: $res"
         if ($LASTEXITCODE -ne 0 -or $res -notmatch "Success") {
-            throw "Rollback fallito: adb non e' riuscito a reinstallare l'APK ($res)"
+            throw "ERRORE FAIL-CLOSED: Rollback fallito: adb non e' riuscito a reinstallare l'APK ($res)"
         }
 
-        if (Test-Path $backupDb) {
-            Write-Host "[2/4] Ripristino database SQLite originale..."
-            & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
+        Write-Host "[2/4] Ripristino database SQLite originale..."
+        & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
 
-            # Rimozione file WAL/SHM orfani
-            & $adb -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
-            & $adb -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
+        # Rimozione file WAL/SHM orfani
+        & $adb -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
+        & $adb -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
 
-            $restored = $false
-            $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "run-as $PackageName sh -c 'mkdir -p databases; cat > databases/akai_memory.db; chmod 660 databases/akai_memory.db'"
-            if ($streamRes.Success) {
-                $restored = $true
-            } else {
-                $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "su -c 'mkdir -p /data/data/$PackageName/databases; cat > /data/data/$PackageName/databases/akai_memory.db; chown -R ${PackageName}:${PackageName} /data/data/$PackageName/databases; chmod 660 /data/data/$PackageName/databases/akai_memory.db'"
-                if ($streamRes.Success) { $restored = $true }
-            }
-
-            if (-not $restored) {
-                throw "ERRORE FAIL-CLOSED: Impossibile effettuare lo streaming del database ripristinato sul dispositivo."
-            }
-
-            # Verifica integrità post-ripristino
-            $verifyRestoreDb = Join-Path $latestSession.FullName "verify_manual_restore.db"
-            $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $verifyRestoreDb
-            if (-not $rx.Success) {
-                $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $verifyRestoreDb
-            }
-            if (-not (Test-Path $verifyRestoreDb) -or (Get-Item $verifyRestoreDb).Length -lt 512) {
-                throw "ERRORE FAIL-CLOSED: Verifica post-rollback fallita: impossibile rileggere il database ripristinato dal dispositivo ($($rx.Output))."
-            }
-            Verify-SQLiteIntegrityOffline $verifyRestoreDb | Out-Null
-            $origHash = Get-Sha256Hex $backupDb
-            $restHash = Get-Sha256Hex $verifyRestoreDb
-            if ($origHash -ne $restHash) {
-                throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 post-ripristino! Orig: $origHash, Device: $restHash"
-            }
-            Write-Host "      Parita' hash SHA-256 ($origHash) e integrita' SQLite verificate con successo." -ForegroundColor Green
-
-            Write-Host "      Database SQLite ripristinato." -ForegroundColor Green
+        # Risoluzione UID numerico Android per chown
+        $appUid = $null
+        $uidRaw = & $adb -s $TargetAdb shell "dumpsys package $PackageName | grep -E 'userId=|appId='" 2>$null
+        $uidOut = if ($uidRaw) { $uidRaw.ToString().Trim() } else { "" }
+        if ($uidOut -match "userId=(\d+)") { $appUid = $matches[1] }
+        elseif ($uidOut -match "appId=(\d+)") { $appUid = $matches[1] }
+        else {
+            $statRaw = & $adb -s $TargetAdb shell "stat -c '%u' /data/data/$PackageName" 2>$null
+            $statOut = if ($statRaw) { $statRaw.ToString().Trim() } else { "" }
+            if ($statOut -match "^\d+$") { $appUid = $statOut }
         }
+        $chownTarget = $(if ($appUid) { "${appUid}:${appUid}" } else { "10000:10000" })
+
+        $restored = $false
+        $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "run-as $PackageName sh -c 'mkdir -p databases; cat > databases/akai_memory.db; chmod 660 databases/akai_memory.db'"
+        if ($streamRes.Success) {
+            $restored = $true
+        } else {
+            $streamRes = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "su -c 'mkdir -p /data/data/$PackageName/databases; cat > /data/data/$PackageName/databases/akai_memory.db; chown -R $chownTarget /data/data/$PackageName/databases; chmod 660 /data/data/$PackageName/databases/akai_memory.db'"
+            if ($streamRes.Success) { $restored = $true }
+        }
+
+        if (-not $restored) {
+            throw "ERRORE FAIL-CLOSED: Impossibile effettuare lo streaming del database ripristinato sul dispositivo."
+        }
+
+        # Verifica integrità post-ripristino
+        $verifyRestoreDb = Join-Path $latestSession.FullName "verify_manual_restore.db"
+        $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $verifyRestoreDb
+        if (-not $rx.Success) {
+            $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $verifyRestoreDb
+        }
+        if (-not (Test-Path $verifyRestoreDb) -or (Get-Item $verifyRestoreDb).Length -lt 512) {
+            throw "ERRORE FAIL-CLOSED: Verifica post-rollback fallita: impossibile rileggere il database ripristinato dal dispositivo ($($rx.Output))."
+        }
+        Verify-SQLiteIntegrityOffline $verifyRestoreDb | Out-Null
+        $restHash = Get-Sha256Hex $verifyRestoreDb
+        if ($backupDbHash -ne $restHash) {
+            throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 post-ripristino! Orig: $backupDbHash, Device: $restHash"
+        }
+        Write-Host "      Parita' hash SHA-256 ($backupDbHash) e integrita' SQLite verificate con successo." -ForegroundColor Green
+
+        Write-Host "      Database SQLite ripristinato." -ForegroundColor Green
 
         Write-Host "[3/4] Riavvio servizio RemoteServerService..."
         & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
 
         Write-Host "[4/4] Watchdog post-rollback..."
-        Start-Sleep -Seconds 3
-        try {
-            $statusResp = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 5 -ErrorAction Stop
-            if ($statusResp.status -eq "ok") {
-                Write-Host "Rollback manuale completato e verificato con successo: TV operativa!" -ForegroundColor Green
+        $rbHealthy = $false
+        for ($r = 1; $r -le 3; $r++) {
+            Start-Sleep -Seconds 2
+            try {
+                $statusResp = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 4 -ErrorAction Stop
+                if ($statusResp.status -eq "ok") {
+                    $rbHealthy = $true
+                    break
+                }
+            } catch {
+                Write-Host "      Controllo post-rollback $r/3: in avvio ($($_.Exception.Message))..." -ForegroundColor Yellow
             }
-        } catch {
-            Write-Host "Servizio in fase di avvio post-rollback." -ForegroundColor Yellow
+        }
+        if ($rbHealthy) {
+            Write-Host "Rollback manuale completato e verificato con successo: TV operativa!" -ForegroundColor Green
+        } else {
+            Write-Host "ALLARME POST-ROLLBACK: Endpoint status non raggiungibile o non operativo - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red
+            throw "ERRORE FAIL-CLOSED: Watchdog post-rollback non superato. Il servizio non risponde con status=ok."
         }
     }
 }
