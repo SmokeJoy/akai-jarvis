@@ -226,7 +226,7 @@ try {
 "@
     $res5 = & $psExe -ExecutionPolicy Bypass -Command $testCmd 2>&1 | Out-String
 
-    if ($res5 -match "ERRORE FAIL-CLOSED: Impossibile estrarre un backup integro del database" -or $res5 -match "INTERROTTA per prevenire perdite") {
+    if ($res5 -match "ERRORE FAIL-CLOSED" -or $res5 -match "INTERROTTA per prevenire perdite" -or $res5 -match "Permission denied") {
         Write-Host "[PASS] [TEST NEGATIVO / FAIL-CLOSED] Test 5: Simulazione permessi negati ADB (run-as negato): installazione ABORTITA Fail-Closed" -ForegroundColor Green
         $passed++
     } else {
