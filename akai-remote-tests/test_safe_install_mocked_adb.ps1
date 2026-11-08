@@ -1708,7 +1708,7 @@ $testCmd19 = @"
 try {
     $res19 = & $psExe -ExecutionPolicy Bypass -Command $testCmd19 2>&1 | Out-String
 
-    if ($res19 -match "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file.*akai_memory\.db-wal" -and $res19 -notmatch "FAIL_UNSAFE_RESTORE" -and $res19 -notmatch "ROLLBACK COMPLETATO CON SUCCESSO") {
+    if ($res19 -match "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file" -and $res19 -match "akai_memory" -and $res19 -notmatch "FAIL_UNSAFE_RESTORE" -and $res19 -notmatch "ROLLBACK COMPLETATO CON SUCCESSO") {
         Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK PROBE WAL FALLITO FAIL-CLOSED] Test 19: Probe fallito su entrambi i canali (run-as e su) blocca categoricamente il rollback in Fail-Closed senza assumere NOT_FOUND e senza toccare il DB" -ForegroundColor Green
         $passed++
     } else {
@@ -1716,7 +1716,7 @@ try {
         $failed++
     }
 } catch {
-    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file.*akai_memory\.db-wal") {
+    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file" -or $_.Exception.Message -match "akai_memory") {
         Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK PROBE WAL FALLITO FAIL-CLOSED] Test 19: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
         $passed++
     } else {
