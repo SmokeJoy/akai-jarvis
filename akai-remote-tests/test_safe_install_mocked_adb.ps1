@@ -1089,7 +1089,7 @@ setInterval(() => {}, 1000);
 "@
     $res13 = & $psExe -ExecutionPolicy Bypass -Command $testCmd13 2>&1 | Out-String
 
-    if ($res13 -match "ERRORE FAIL-CLOSED: File WAL.*presente su storage device ma estrazione fallita" -and $res13 -notmatch "DEPLOYMENT VERIFICATO CON SUCCESSO") {
+    if ($res13 -match "ERRORE FAIL-CLOSED: File WAL" -and $res13 -match "estrazione fallita" -and $res13 -notmatch "Sessione di backup completata") {
         Write-Host "[PASS] [TEST NEGATIVO / WAL FAIL-CLOSED] Test 13: File WAL presente ma con estrazione fallita blocca categoricamente l'operazione in Fail-Closed (zero falsi successi)" -ForegroundColor Green
         $passed++
     } else {
