@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AKAI Custom Home v8 Leanback — Comparazione e Anteprima Grafica</title>
+<style>
+:root {
+    --bg-midnight: #0A0B10;
+    --bg-surface: #141B2D;
+    --bg-card-focused: #1E3A8A;
+    --focus-gold: #F59E0B;
+    --focus-cyan: #00E5FF;
+    --akai-red: #E50914;
+    --text-white: #FFFFFF;
+    --text-gray: #CBD5E1;
+    --text-muted: #94A3B8;
+    --chip-bg: #1E293B;
+    --border-dark: #2A364F;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background-color: #05070B;
+    color: var(--text-white);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+header.page-header {
+    width: 100%;
+    max-width: 1400px;
+    margin-bottom: 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #1E293B;
+    padding-bottom: 16px;
+}
+
+.brand-badge {
+    background: var(--akai-red);
+    color: white;
+    font-weight: 900;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 16px;
+    letter-spacing: 1px;
+    display: inline-block;
+    margin-right: 12px;
+}
+
+.header-title h1 {
+    font-size: 24px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+}
+
+.header-title p {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.tab-controls {
+    display: flex;
+    gap: 12px;
+}
+
+.tab-btn {
+    background: #1E293B;
+    color: var(--text-gray);
+    border: 1px solid #334155;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.tab-btn.active {
+    background: #1E3A8A;
+    color: white;
+    border-color: var(--focus-gold);
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.3);
+}
+
+.canvas-container {
+    width: 100%;
+    max-width: 1400px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+/* TV Frame Mockup */
+.tv-frame {
+    background: #0D111A;
+    border: 12px solid #1E2538;
+    border-radius: 24px;
+    box-shadow: 0 25px 60px rgba(0,0,0,0.8), 0 0 30px rgba(0, 229, 255, 0.05);
+    overflow: hidden;
+    position: relative;
+}
+
+.tv-bezel-brand {
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #475569;
+    padding: 4px 0;
+    background: #141A28;
+    font-weight: bold;
+}
+
+.tv-screen {
+    background: var(--bg-midnight);
+    min-height: 720px;
+    padding: 32px 40px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Top Bar */
+.tv-header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.tv-logo-group {
+    display: flex;
+    align-items: center;
+}
+
+.tv-logo-badge {
+    background: var(--akai-red);
+    color: #fff;
+    font-size: 20px;
+    font-weight: 900;
+    padding: 4px 14px;
+    border-radius: 8px;
+    margin-right: 12px;
+}
+
+.tv-logo-sub {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #fff;
+}
+
+.tv-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.tv-btn {
+    background: #1E293B;
+    color: white;
+    border: 1px solid #334155;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tv-btn.wifi {
+    color: var(--focus-cyan);
+    border-color: #0369A1;
+}
+
+.tv-clock {
+    font-size: 26px;
+    font-weight: 800;
+    color: white;
+    margin-left: 16px;
+    letter-spacing: 1px;
+}
+
+/* Section styling */
+.section-block {
+    margin-bottom: 22px;
+}
+
+.section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.section-title {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+}
+
+.section-title.inputs { color: var(--text-gray); }
+.section-title.favorites { color: var(--focus-gold); }
+.section-title.streaming { color: var(--focus-cyan); }
+.section-title.all-apps { color: var(--text-gray); }
+
+.section-hint {
+    font-size: 14px;
+    color: var(--text-muted);
+}
+
+.horizontal-row {
+    display: flex;
+    gap: 16px;
+    overflow-x: auto;
+    padding: 8px 4px 14px 4px;
+}
+
+/* Cards & Chips */
+.chip {
+    background: #131D2E;
+    border: 1px solid #334155;
+    color: white;
+    padding: 12px 22px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 700;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chip.focused {
+    background: var(--bg-card-focused);
+    border: 3.5px solid var(--focus-gold);
+    transform: scale(1.05);
+    box-shadow: 0 8px 24px rgba(245, 158, 11, 0.35);
+}
+
+.app-card {
+    width: 175px;
+    height: 110px;
+    background: var(--bg-surface);
+    border: 1px solid #1E293B;
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-shrink: 0;
+    transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.app-card .icon-box {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+}
+
+.app-card .app-label {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-white);
+    max-width: 155px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.app-card.focused {
+    background: var(--bg-card-focused);
+    border: 3.5px solid var(--focus-gold);
+    transform: scale(1.08);
+    box-shadow: 0 10px 28px rgba(245, 158, 11, 0.4);
+    z-index: 5;
+}
+
+.app-card.focused.cyan-focus {
+    border-color: var(--focus-cyan);
+    box-shadow: 0 10px 28px rgba(0, 229, 255, 0.4);
+}
+
+/* Badge Stream */
+.badge-streaming {
+    background: rgba(0, 229, 255, 0.15);
+    border: 1px solid rgba(0, 229, 255, 0.4);
+    color: var(--focus-cyan);
+    font-size: 10px;
+    font-weight: 800;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+}
+
+/* Comparison Table */
+.comparison-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 16px;
+}
+
+.comp-card {
+    background: #0E1422;
+    border: 1px solid #1E293B;
+    border-radius: 16px;
+    padding: 24px;
+}
+
+.comp-card.new-v8 {
+    border-color: #0284C7;
+    background: #0A1326;
+}
+
+.comp-card h3 {
+    font-size: 18px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.comp-card ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 14px;
+}
+
+.comp-card li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    line-height: 1.4;
+}
+
+.comp-card li strong {
+    color: #fff;
+}
+
+.tag-red { color: #F87171; }
+.tag-green { color: #34D399; }
+
+/* Grid v7 Preview */
+.grid-6-col {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px;
+    margin-top: 12px;
+}
+.grid-v7-card {
+    height: 105px;
+    background: #111625;
+    border: 1px solid #1E293B;
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+.grid-v7-card .label-small {
+    font-size: 12px;
+    font-weight: bold;
+    color: #CBD5E1;
+}
+.grid-v7-card.technical {
+    border: 1px dashed #EF4444;
+    background: #1F1315;
+}
+.badge-tech {
+    background: #EF4444;
+    color: white;
+    font-size: 9px;
+    font-weight: 800;
+    padding: 2px 4px;
+    border-radius: 4px;
+}
+
+.metric-pill {
+    background: #1E293B;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--focus-gold);
+    display: inline-block;
+    margin-top: 6px;
+}
+</style>
+</head>
+<body>
+
+<header class="page-header">
+    <div class="header-title">
+        <h1><span class="brand-badge">AKAI</span> Custom Home v8 — Architettura Leanback 10-Foot UI</h1>
+        <p>Confronto visivo indipendente: v7 (Griglia 6 colonne) vs v8 (Righe Orizzontali Tematiche). Ottimizzato per TV Android 9 (1.5 GB RAM).</p>
+    </div>
+    <div class="tab-controls">
+        <button class="tab-btn active" onclick="switchView('v8')">✨ Nuova Home v8 (Leanback)</button>
+        <button class="tab-btn" onclick="switchView('comparison')">📊 Analisi Tecnica PRIMA / DOPO</button>
+        <button class="tab-btn" onclick="switchView('v7')">⏮️ Precedente Home v7 (Griglia)</button>
+    </div>
+</header>
+
+<div class="canvas-container">
+
+    <!-- VIEW 1: NEW V8 LEANBACK LAUNCHER -->
+    <div id="view-v8" class="tv-frame">
+        <div class="tv-bezel-brand">AKAI LED SMART TV · 1080p LEANBACK DISPLAY</div>
+        <div class="tv-screen">
+            <!-- Top Header -->
+            <div class="tv-header-bar">
+                <div class="tv-logo-group">
+                    <div class="tv-logo-badge">AKAI</div>
+                    <div class="tv-logo-sub">CUSTOM HOME v8 LEANBACK</div>
+                </div>
+                <div class="tv-header-actions">
+                    <div class="tv-btn wifi">📶 Wi-Fi (192.168.1.xxx)</div>
+                    <div class="tv-btn">📱 Associa iPhone</div>
+                    <div class="tv-btn">🎨 Tema</div>
+                    <div class="tv-btn">⚙️ Impostazioni TV</div>
+                    <div class="tv-clock">12:45</div>
+                </div>
+            </div>
+
+            <!-- Row 1: Hardware Inputs -->
+            <div class="section-block">
+                <div class="section-header">
+                    <span class="section-title inputs">INGRESSI HARDWARE</span>
+                    <span class="section-hint">Sorgenti video fisiche TV</span>
+                </div>
+                <div class="horizontal-row">
+                    <div class="chip focused">📺 TV Digitale</div>
+                    <div class="chip">🎮 Fire TV (HDMI 1)</div>
+                    <div class="chip">🎬 HDMI 2</div>
+                    <div class="chip">💻 HDMI 3</div>
+                    <div class="chip">🔌 Menu Ingressi</div>
+                </div>
+            </div>
+
+            <!-- Row 2: Favorites -->
+            <div class="section-block">
+                <div class="section-header">
+                    <span class="section-title favorites">APP PREFERITE</span>
+                    <span class="section-hint">(Tieni premuto OK per riordinare o rimuovere) — Testo 14sp</span>
+                </div>
+                <div class="horizontal-row">
+                    <div class="app-card focused">
+                        <div class="icon-box" style="background:#FF0000; color:white;">▶️</div>
+                        <div class="app-label">YouTube TV</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#003399; color:white;">📡</div>
+                        <div class="app-label">RaiPlay</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#E50914; color:white;">🍿</div>
+                        <div class="app-label">Netflix</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#FF9900; color:black;">📺</div>
+                        <div class="app-label">Infinity+</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#113CCF; color:white;">🏰</div>
+                        <div class="app-label">Disney+</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#1DB954; color:white;">🎧</div>
+                        <div class="app-label">Spotify</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 3: Streaming & Cinema (New Leanback Feature) -->
+            <div class="section-block">
+                <div class="section-header">
+                    <span class="section-title streaming">STREAMING &amp; CINEMA</span>
+                    <span class="badge-streaming">DEDICATO</span>
+                    <span class="section-hint">(Piattaforme video e multimediali) — Testo 14sp</span>
+                </div>
+                <div class="horizontal-row">
+                    <div class="app-card cyan-focus">
+                        <div class="icon-box" style="background:#00A8E1; color:white;">📦</div>
+                        <div class="app-label">Prime Video</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#003399; color:white;">📡</div>
+                        <div class="app-label">RaiPlay</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#E50914; color:white;">🍿</div>
+                        <div class="app-label">Netflix</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#FF0000; color:white;">▶️</div>
+                        <div class="app-label">YouTube TV</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#113CCF; color:white;">🏰</div>
+                        <div class="app-label">Disney+</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#1DB954; color:white;">🎧</div>
+                        <div class="app-label">Spotify</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#FF8800; color:white;">cone</div>
+                        <div class="app-label">VLC Player</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 4: All Apps (Filtered OEM) -->
+            <div class="section-block">
+                <div class="section-header">
+                    <span class="section-title all-apps">TUTTE LE APPLICAZIONI</span>
+                    <span class="section-hint">(Catalogo pulito: app tecniche/OEM nascoste) — Testo 14sp</span>
+                </div>
+                <div class="horizontal-row">
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#0084FF; color:white;">🌐</div>
+                        <div class="app-label">Browser Web</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#4285F4; color:white;">📁</div>
+                        <div class="app-label">File Manager</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#0F9D58; color:white;">🛍️</div>
+                        <div class="app-label">Google Play</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#F4B400; color:white;">📸</div>
+                        <div class="app-label">Galleria</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#DB4437; color:white;">⚙️</div>
+                        <div class="app-label">Impostazioni</div>
+                    </div>
+                    <div class="app-card">
+                        <div class="icon-box" style="background:#673AB7; color:white;">⏰</div>
+                        <div class="app-label">Orologio</div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- VIEW 2: TECHNICAL COMPARISON PRIMA / DOPO -->
+    <div id="view-comparison" class="comparison-grid" style="display:none;">
+        <div class="comp-card">
+            <h3><span class="tag-red">❌</span> Situazione Precedente (Home v7)</h3>
+            <ul>
+                <li><strong>Tipografia ridotta:</strong> Didascalie a 10sp e label a 12sp, difficilmente leggibili dal divano a 3-4 metri di distanza.</li>
+                <li><strong>Griglia fissa a 6 colonne:</strong> Schiacciamento verticale dei contenuti con card compresse e scarso respiro visivo.</li>
+                <li><strong>Disordine OEM in prima linea:</strong> App di test interne visibili nella Home (<code>A2dpSinkPlayer</code>, <code>Boot Video</code>, <code>CULTRAVIEW_OPEN_LAUNCH...</code>).</li>
+                <li><strong>Nessuna categorizzazione streaming:</strong> App multimediali disperse nella griglia generale alfabetica.</li>
+                <li><strong>Feedback di selezione statico:</strong> Bordo sottile senza ingrandimento di focus e potenziale confusione nel tracciamento D-Pad.</li>
+            </ul>
+            <div class="metric-pill">Leggibilità Divano: CRITICA (10sp) · Contrasto: Non ottimizzato</div>
+        </div>
+
+        <div class="comp-card new-v8">
+            <h3><span class="tag-green">✅</span> Nuova Architettura (Home v8 Leanback)</h3>
+            <ul>
+                <li><strong>Tipografia maggiorata (&ge; 14sp):</strong> Titoli sezioni a 15-16sp bold, didascalie a 14sp, label tessere a 14sp bold. Perfettamente leggibile a 4 metri.</li>
+                <li><strong>Layout a 4 Righe Orizzontali Tematiche:</strong> Ingressi Hardware, App Preferite, Streaming &amp; Cinema, Tutte le Applicazioni.</li>
+                <li><strong>Filtro OEM Intelligente (Blacklist configurabile):</strong> Nascoste in sicurezza utility diagnostiche superflue senza disinstallarle. Toggle riattivabile da menu Temi.</li>
+                <li><strong>Focus WCAG AAA (13.3:1):</strong> Bordo dorato 3.5dp ad alta visibilità con animazione di zoom fluido (1.08x) al passaggio del cursore D-Pad.</li>
+                <li><strong>Memoria &amp; Performance TV 1.5 GB RAM:</strong> Zero frammentazione della memoria, zero chiamate cloud o librerie esterne pesanti. 100% nativo Android 9.</li>
+            </ul>
+            <div class="metric-pill" style="color:var(--focus-cyan); border-color:#0284C7;">Contrasto: 13.3:1 WCAG AAA · Zero Hardware Risk</div>
+        </div>
+    </div>
+
+    <!-- VIEW 3: OLD V7 GRID PREVIEW -->
+    <div id="view-v7" class="tv-frame" style="display:none;">
+        <div class="tv-bezel-brand">AKAI LED SMART TV · ARCHIVIO v7 GRIGLIA STATICA</div>
+        <div class="tv-screen">
+            <div class="tv-header-bar">
+                <div class="tv-logo-group">
+                    <div class="tv-logo-badge">AKAI</div>
+                    <div class="tv-logo-sub">CUSTOM HOME v7 (LEGACY)</div>
+                </div>
+                <div class="tv-header-actions">
+                    <div class="tv-btn wifi">📶 Wi-Fi</div>
+                    <div class="tv-btn">📱 Associa iPhone</div>
+                    <div class="tv-btn">🎨 Tema</div>
+                    <div class="tv-btn">⚙️ Impostazioni</div>
+                    <div class="tv-clock">12:45</div>
+                </div>
+            </div>
+
+            <!-- Inputs -->
+            <div class="section-block">
+                <span class="section-title inputs" style="font-size:11px;">INGRESSI HARDWARE (11sp)</span>
+                <div style="display:flex; gap:8px; margin-top:6px;">
+                    <div class="chip" style="font-size:13px; padding:8px 14px;">📺 TV Digitale</div>
+                    <div class="chip" style="font-size:13px; padding:8px 14px;">🎮 Fire TV</div>
+                    <div class="chip" style="font-size:13px; padding:8px 14px;">🎬 HDMI 2</div>
+                    <div class="chip" style="font-size:13px; padding:8px 14px;">💻 HDMI 3</div>
+                </div>
+            </div>
+
+            <!-- Legacy 6-column Grid -->
+            <div class="section-block">
+                <span class="section-title all-apps" style="font-size:11px;">TUTTE LE APPLICAZIONI (Griglia 6 colonne - Didascalia 10sp illeggibile)</span>
+                <div class="grid-6-col">
+                    <div class="grid-v7-card technical">
+                        <span class="badge-tech">OEM TEST</span>
+                        <div class="label-small">A2dpSinkPlayer</div>
+                    </div>
+                    <div class="grid-v7-card technical">
+                        <span class="badge-tech">OEM TEST</span>
+                        <div class="label-small">Boot Video</div>
+                    </div>
+                    <div class="grid-v7-card technical">
+                        <span class="badge-tech">OEM TEST</span>
+                        <div class="label-small">CULTRAVIEW_OPEN...</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">Browser</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">Disney+</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">File Manager</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">Infinity+</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">Kodi</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">Netflix</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">Prime Video</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">RaiPlay</div>
+                    </div>
+                    <div class="grid-v7-card">
+                        <div class="label-small">YouTube TV</div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+</div>
+
+<script>
+function switchView(viewName, btn) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('view-v8').style.display = 'none';
+    document.getElementById('view-comparison').style.display = 'none';
+    document.getElementById('view-v7').style.display = 'none';
+
+    var targetBtn = btn || (window.event ? window.event.target : null);
+
+    if (viewName === 'v8') {
+        document.getElementById('view-v8').style.display = 'block';
+        if (targetBtn) targetBtn.classList.add('active');
+        else document.querySelectorAll('.tab-btn')[0].classList.add('active');
+    } else if (viewName === 'comparison') {
+        document.getElementById('view-comparison').style.display = 'grid';
+        if (targetBtn) targetBtn.classList.add('active');
+        else document.querySelectorAll('.tab-btn')[1].classList.add('active');
+    } else if (viewName === 'v7') {
+        document.getElementById('view-v7').style.display = 'block';
+        if (targetBtn) targetBtn.classList.add('active');
+        else document.querySelectorAll('.tab-btn')[2].classList.add('active');
+    }
+}
+</script>
+
+</body>
+</html>

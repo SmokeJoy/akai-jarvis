@@ -2,9 +2,10 @@
 <resources>
     <string name="app_name">AKAI Custom Home</string>
     <string name="brand_akai">AKAI</string>
-    <string name="brand_custom_tv">CUSTOM HOME v7</string>
+    <string name="brand_custom_tv">CUSTOM HOME v8 LEANBACK</string>
     <string name="section_inputs">INGRESSI HARDWARE</string>
     <string name="section_favorites">APP PREFERITE</string>
+    <string name="section_streaming">STREAMING &amp; CINEMA</string>
     <string name="section_all_apps">TUTTE LE APPLICAZIONI</string>
     <string name="src_dtv">📺 TV Digitale</string>
     <string name="src_hdmi1">🎮 Fire TV (HDMI 1)</string>
@@ -15,5 +16,7 @@
     <string name="btn_theme">🎨 Tema</string>
     <string name="btn_settings">⚙️ Impostazioni TV</string>
     <string name="btn_edit_favs">✏️ Riordina</string>
-    <string name="hint_fav_help">Tieni premuto OK su un\'app per riordinarla o rimuoverla</string>
+    <string name="hint_fav_help">(Tieni premuto OK per riordinare o rimuovere)</string>
+    <string name="hint_streaming_help">(Tieni premuto OK per gestire preferiti)</string>
+    <string name="hint_all_apps_help">(Tieni premuto OK per aggiungere ai preferiti)</string>
 </resources>

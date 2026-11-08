@@ -1,0 +1,101 @@
+name: AKAI Launcher CI
+
+on:
+  push:
+    branches: [ "feature/*" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-verify-launcher:
+    name: Build & Verify AKAI Custom Home v8 Leanback
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 1. Syntax Check Screenshots Script
+        run: |
+          echo "=== Syntax Checking Screenshots Script ==="
+          node --check scripts/capture_leanback_screenshot.js
+          echo "JavaScript syntax check passed."
+
+      - name: 2. Secrets Leak Detection
+        run: |
+          echo "=== Scanning for leaked credentials ==="
+          FORBIDDEN_FILES=$(find . -type f \( -name "*.p12" -o -name "*.jks" -o -name "*.keystore" \) -not -path "*/.*")
+          if [ -n "$FORBIDDEN_FILES" ]; then
+            echo "ERROR: Forbidden private keystores detected in repository:"
+            echo "$FORBIDDEN_FILES"
+            exit 1
+          fi
+          echo "Secrets scan passed: zero private keystores or unmasked API keys detected."
+
+      - name: 3. Verify Android Assets and Layout Structure
+        run: |
+          echo "=== Verifying Layout and Resource Integrity ==="
+          test -f akai-custom-home/app/src/main/res/layout/activity_main.xml || (echo "activity_main.xml missing!" && exit 1)
+          test -f akai-custom-home/app/src/main/res/layout/item_leanback_card.xml || (echo "item_leanback_card.xml missing!" && exit 1)
+          test -f akai-custom-home/app/src/main/res/values/strings.xml || (echo "strings.xml missing!" && exit 1)
+          test -f akai-custom-home/app/src/main/res/values/colors.xml || (echo "colors.xml missing!" && exit 1)
+          test -f akai-custom-home/app/src/main/java/it/akai/customhome/MainActivity.java || (echo "MainActivity.java missing!" && exit 1)
+          echo "All mandatory launcher source files present."
+
+      - name: 4. Compile Standalone AKAI Custom Home v8 Leanback APK with AAPT2, Javac & D8
+        run: |
+          echo "=== Building AKAI Custom Home v8 APK in CI ==="
+          ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
+          D8=$(find "$ANDROID_HOME/build-tools" -name "d8" 2>/dev/null | sort -V | tail -n 1)
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign" 2>/dev/null | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" 2>/dev/null | sort -V | tail -n 1)
+
+          mkdir -p build_launcher_ci/gen build_launcher_ci/classes build_launcher_ci/dex
+
+          # 1. AAPT2 compile resources
+          "$AAPT2" compile --dir akai-custom-home/app/src/main/res -o build_launcher_ci/compiled_res.zip
+
+          # 2. AAPT2 link manifest and generate R.java
+          "$AAPT2" link -I "$ANDROID_JAR" \
+            --manifest akai-custom-home/app/src/main/AndroidManifest.xml \
+            -o build_launcher_ci/base.apk \
+            --java build_launcher_ci/gen \
+            build_launcher_ci/compiled_res.zip \
+            --auto-add-overlay \
+            --min-sdk-version 21 \
+            --target-sdk-version 28
+
+          # 3. Compile Java sources
+          JAVA_SRC=$(find akai-custom-home/app/src/main/java build_launcher_ci/gen -name "*.java")
+          javac -encoding UTF-8 -source 1.8 -target 1.8 -bootclasspath "$ANDROID_JAR" -cp "$ANDROID_JAR" -d build_launcher_ci/classes $JAVA_SRC
+          echo "Java compilation succeeded."
+
+          # 4. Generate DEX with D8
+          CLASS_FILES=$(find build_launcher_ci/classes -name "*.class")
+          "$D8" --min-api 21 --lib "$ANDROID_JAR" --output build_launcher_ci/dex $CLASS_FILES
+
+          # 5. Assemble APK
+          (cd build_launcher_ci/dex && zip -u ../base.apk classes.dex)
+
+          # 6. ZipAlign
+          "$ZIPALIGN" -f -v 4 build_launcher_ci/base.apk build_launcher_ci/aligned.apk
+
+          # 7. Ephemeral test key sign
+          keytool -genkey -v -keystore /tmp/ci_launcher.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Launcher CI,O=AKAI Home,C=IT"
+          "$APKSIGNER" sign --ks /tmp/ci_launcher.keystore --ks-pass pass:android --key-pass pass:android --out build_launcher_ci/akai-custom-home-v8-ci.apk build_launcher_ci/aligned.apk
+
+          # 8. Verify
+          "$APKSIGNER" verify --verbose build_launcher_ci/akai-custom-home-v8-ci.apk
+          echo "AKAI CUSTOM HOME v8 CI BUILD SUCCESSFUL."

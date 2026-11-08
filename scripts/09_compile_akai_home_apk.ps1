@@ -94,15 +94,15 @@ $signArgs = @("-jar", $apksignerJar, "sign", "--ks", $debugKeystore, "--ks-pass"
 & $java $signArgs
 
 if (Test-Path $finalApk) {
-    $v7Apk = Join-Path $outputDir "akai-custom-home-v7.apk"
-    Copy-Item $finalApk $v7Apk -Force
+    $v8Apk = Join-Path $outputDir "akai-custom-home-v8.apk"
+    Copy-Item $finalApk $v8Apk -Force
     $sha256 = (Get-FileHash -Path $finalApk -Algorithm SHA256).Hash
     $sizeKb = [Math]::Round((Get-Item $finalApk).Length / 1024, 2)
     Write-Host "`n========================================================" -ForegroundColor Green
-    Write-Host " AKAI CUSTOM HOME v7 COMPILATO CON SUCCESSO!" -ForegroundColor Green
+    Write-Host " AKAI CUSTOM HOME v8 LEANBACK COMPILATO CON SUCCESSO!" -ForegroundColor Green
     Write-Host "========================================================" -ForegroundColor Green
     Write-Host " APK File : $finalApk"
-    Write-Host " Copia v7 : $v7Apk" -ForegroundColor Cyan
+    Write-Host " Copia v8 : $v8Apk" -ForegroundColor Cyan
     Write-Host " Peso     : $sizeKb KB" -ForegroundColor Yellow
     Write-Host " SHA-256  : $sha256" -ForegroundColor Yellow
 } else {
