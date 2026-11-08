@@ -53,7 +53,7 @@ jobs:
           test -f akai-custom-home/app/src/main/java/it/akai/customhome/MainActivity.java || (echo "MainActivity.java missing!" && exit 1)
           echo "All mandatory launcher source files present."
 
-      - name: 4. Compile and Run Launcher Java Unit Tests (46 Tests: P0 D-Pad Key Handling, OEM Blacklist, Streaming & WCAG AAA Contrast)
+      - name: "4. Compile and Run Launcher Java Unit Tests (46 Tests - P0 D-Pad Key Handling, OEM Blacklist, Streaming and WCAG AAA Contrast)"
         run: |
           echo "=== Compiling and Running LauncherUnitTests (46 Tests) ==="
           mkdir -p test_bin
@@ -66,7 +66,7 @@ jobs:
           java -cp test_bin it.akai.customhome.LauncherUnitTests
           echo "All 46 Launcher unit tests passed successfully."
 
-      - name: 5. Compile Standalone AKAI Custom Home v8 Leanback APK with AAPT2, Javac & D8 (Target Android API 28)
+      - name: "5. Compile Standalone AKAI Custom Home v8 Leanback APK with AAPT2, Javac and D8 (Target Android API 28)"
         run: |
           echo "=== Building AKAI Custom Home v8 APK in CI ==="
           # Seleziona esplicitamente android-28 se presente, altrimenti fallback controllato
@@ -122,7 +122,7 @@ jobs:
           "$APKSIGNER" verify --verbose build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk
           echo "AKAI CUSTOM HOME v8 CI BUILD SUCCESSFUL (NON-DISTRIBUTABLE TEST ARTIFACT)."
 
-      - name: 6. Inspect APK Internal Contents
+      - name: "6. Inspect APK Internal Contents"
         run: |
           echo "=== Verifying internal contents of candidate Launcher APK ==="
           unzip -l build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk > build_launcher_ci/apk_contents.txt
