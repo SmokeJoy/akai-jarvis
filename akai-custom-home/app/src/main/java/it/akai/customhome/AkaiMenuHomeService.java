@@ -34,6 +34,7 @@ public class AkaiMenuHomeService extends AccessibilityService {
             "com.netflix.ninja",
             "it.rainet.androidtv",
             "it.rainet.raiplay",
+            "it.mediaset.infinitytv",
             "it.mediaset.vod",
             "com.disney.disneyplus",
             "com.amazon.amazonvideo.livingroom",
