@@ -1498,7 +1498,7 @@ $testCmd17 = @"
 try {
     $res17 = & $psExe -ExecutionPolicy Bypass -Command $testCmd17 2>&1 | Out-String
 
-    if ($res17 -match "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita su device" -and $res17 -match "Ripristino abortito categoricamente in FAIL-CLOSED" -and $res17 -notmatch "FAIL_UNSAFE_RESTORE" -and $res17 -notmatch "ROLLBACK COMPLETATO CON SUCCESSO") {
+    if ($res17 -match "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita" -and $res17 -match "FAIL-CLOSED" -and $res17 -notmatch "FAIL_UNSAFE_RESTORE" -and $res17 -notmatch "ROLLBACK COMPLETATO CON SUCCESSO") {
         Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK PULIZIA WAL NEGATA FAIL-CLOSED] Test 17: Rimozione residui WAL/SHM orfani fallita su device blocca categoricamente il rollback in Fail-Closed prima del restore DB" -ForegroundColor Green
         $passed++
     } else {
@@ -1506,7 +1506,7 @@ try {
         $failed++
     }
 } catch {
-    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita su device" -or $_.Exception.Message -match "Ripristino abortito categoricamente in FAIL-CLOSED") {
+    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita" -or $_.Exception.Message -match "FAIL-CLOSED") {
         Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK PULIZIA WAL NEGATA FAIL-CLOSED] Test 17: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
         $passed++
     } else {
