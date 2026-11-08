@@ -33,7 +33,7 @@ Tutti i file sono archiviati nella directory [`docs/launcher/screenshots/`](scre
 | [`mockup_01_dpad_focus_states.png`](screenshots/mockup_01_dpad_focus_states.png) | **Mockup Progettuale Dichiarato** | 1920×1080 | **Stati di Focus D-pad Multi-Riga**: Dimostrazione grafica dello stato attivo con bordo fluorescente ciano `#00E5FF` (2.5–3.5px) e background schiarito su: (1) Ingressi hardware (`HDMI 1`); (2) Preferiti (`RaiPlay`); (3) Griglia app (`YouTube`). | Mockup digitale simulato a scopo illustrativo. |
 | [`mockup_02_theme_dialog_and_palettes.png`](screenshots/mockup_02_theme_dialog_and_palettes.png) | **Mockup Progettuale Dichiarato** | 1920×1080 | **Dialogo Personalizzazione & Palette**: Riproduzione fedele di `MainActivity.java:showThemeDialog()` (titolo letterale `🎨 Personalizzazione AKAI Home v7`), confronto delle 5 palette di sfondo (`Midnight Dark`, `Deep Navy`, `Carbon Slate`, `Pure OLED Black`, `Ruby Dark`), 4 accenti e opzione di inversione layout. | Mockup digitale basato sui sorgenti v7. |
 | [`mockup_03_grid_scroll_and_empty_favs.png`](screenshots/mockup_03_grid_scroll_and_empty_favs.png) | **Mockup Progettuale Dichiarato** | 1920×1080 | **Comportamento Dinamico del Layout**: Scenario A (sezione preferiti vuota collassata a `View.GONE` a 0dp di altezza); Scenario B (griglia affollata con oltre 20 app in scorrimento). *Nota di schema:* disegnato a scopo illustrativo su 4 colonne per garantire leggibilità schematica nel render, mentre il launcher reale ne adotta 6. | Schema concettuale illustrativo (4 col. vs 6 col. reali). |
-| [`mockup_04_before_after_redesign_comparison.png`](screenshots/mockup_04_before_after_redesign_comparison.png) | **Mockup Progettuale Dichiarato** | 1920×1080 | **Tavola Comparativa PRIMA / DOPO**: Confronto visivo tra lo Stato Attuale Baseline v7 e le **Proposte di Rifinitura Leanback Target v8** (tipografia 14–16sp, contrasto WCAG AAA 7.5:1, filtro app OEM e badge ingressi bilanciati). Layout rifinito con margini protetti e wrapping sicuro privo di overflow. | Proposta progettuale dichiarata; feature target non ancora a runtime. |
+| [`mockup_04_before_after_redesign_comparison.png`](screenshots/mockup_04_before_after_redesign_comparison.png) | **Mockup Progettuale Dichiarato** | 1920×1080 | **Tavola Comparativa PRIMA / DOPO**: Confronto visivo tra lo Stato Attuale Baseline v7 e le **Proposte di Rifinitura Leanback Target v8** (tipografia 14–16sp, contrasto WCAG AAA calcolato ~13.3:1 con soglia minima ≥7:1, filtro app OEM e badge ingressi bilanciati). Layout rifinito con margini protetti e wrapping sicuro privo di overflow. | Proposta progettuale dichiarata; feature target non ancora a runtime. |
 
 ---
 
@@ -74,7 +74,7 @@ Dall'analisi fotometrica e colorimetrica dello standard sRGB applicato alla base
    - **Rapporto di Contrasto Effettivo**: **4.13:1** (calcolo WCAG 2.1 sRGB relativo).
    - **Valutazione di Accessibilità**:
      - La soglia minima WCAG AA per testo piccolo (< 18pt / 24px) è **4.5:1**. Il valore attuale di 4.13:1 risulta **sub-standard** per ambienti televisivi visti da divano (distanza media 2.5 – 3.5 metri).
-     - **Proposta Progettuale**: Adozione di `#CBD5E1` (contrasto **7.5:1**, conforme ai criteri WCAG AAA per schermi TV) ed elevazione della dimensione minima a **13–14sp**.
+     - **Proposta Progettuale**: Adozione di `#CBD5E1` (contrasto relativo sRGB nominale calcolato a **13.26:1**, largamente superiore alla soglia minima WCAG AAA di **≥7:1**) ed elevazione della dimensione minima a **13–14sp**. *Nota metodologica:* si precisa che i valori colorimetrici e le simulazioni di focus D-pad costituiscono stime e proposte di specifica visiva da mockup controllato, e non collaudi fotometrici eseguiti sul pannello fisico.
 2. **Titoli delle Sezioni (`11sp`)**:
    - Proprietà: `11sp bold`, maiuscolo spaziato in `#94A3B8` (contrasto 7.1:1).
    - Benché il contrasto cromatico sia sufficiente, la dimensione fisica di 11sp da 3 metri di distanza richiede sforzo visivo.
@@ -101,7 +101,7 @@ La tavola comparativa [`mockup_04_before_after_redesign_comparison.png`](screens
 ```mermaid
 graph TD
     subgraph Obiettivo: Proposte di Rifinitura Leanback AKAI Custom Home v8
-        A[1. Tipografia e Contrasto WCAG AAA] --> E[Titoli 14sp #F8FAFC, Aiuti 13sp #CBD5E1 7.5:1]
+        A[1. Tipografia e Contrasto WCAG AAA] --> E[Titoli 14sp #F8FAFC, Aiuti 13sp #CBD5E1 (AAA >=7:1, calcolato 13.3:1)]
         B[2. Riconoscibilita Focus D-pad] --> F[Bordo fluorescente 2.5-3dp ciano #00E5FF uniforme]
         C[3. Organizzazione App OEM/Servizio] --> G[Filtro opzionale: Multimediali vs Servizi OEM]
         D[4. Bilanciamento Ingressi Hardware] --> H[Indicatore di segnale attivo su sorgente corrente]
@@ -110,7 +110,7 @@ graph TD
 
 ### 4.1. Proposta 1: Tipografia Ottimizzata TV (14–16sp, Contrasto WCAG AAA)
 - **Titoli Sezione**: Elevazione proposta da 11sp a **14sp bold** (`tv_title_inputs`, `tv_title_favorites`, `tv_title_all_apps`).
-- **Testo di Supporto**: Elevazione proposta da 10sp a **13sp** con colore `#CBD5E1` (contrasto stimato **7.5:1** rispetto allo sfondo scuro `#0A0B10`).
+- **Testo di Supporto**: Elevazione proposta da 10sp a **13sp** con colore `#CBD5E1` (contrasto sRGB calcolato **13.26:1**, largamente superiore alla soglia minima WCAG AAA di **≥7:1** rispetto allo sfondo scuro `#0A0B10`).
 - **Etichette Applicazioni**: Elevazione proposta da 12sp a **14sp** con wrapping controllato.
 
 ### 4.2. Proposta 2: Riconoscibilità Universale del Focus D-pad
