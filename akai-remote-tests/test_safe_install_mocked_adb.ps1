@@ -1727,6 +1727,190 @@ try {
     Remove-Item $testDir19 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+
+# ==============================================================================
+# TEST 20: [TEST ISOLATO / CLASSIFICAZIONE RIGOROSA EXIT CODE PIDOF]
+# Verifica in isolamento di Get-ApplicationProcessState su tutti gli stati e combinazioni:
+# 1. exit=0 con PID (running = true)
+# 2. exit=1 senza PID (running = false / quiescenza lecita)
+# 3. exit=127 senza PID (binario assente -> blocco FAIL-CLOSED)
+# 4. exit=2 senza PID (errore anomalo -> blocco FAIL-CLOSED)
+# 5. exit=0 senza PID (combinazione incoerente -> blocco FAIL-CLOSED)
+# 6. exit=1 con PID (combinazione incoerente -> blocco FAIL-CLOSED)
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 20: Classificazione rigorosa exit code di pidof (6 condizioni) ---" -ForegroundColor Yellow
+$testDir20 = Join-Path $tempDir "akai_test_pidof_classification_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir20 | Out-Null
+
+$mockAdbJs20 = Join-Path $testDir20 "mock_adb_20.js"
+
+@"
+const fs = require('fs');
+const args = process.argv.slice(2).join(' ');
+const scenario = process.env.TEST_PIDOF_SCENARIO || '0_with_pid';
+
+if (args.includes('pidof') || args.includes('PIDOF_CHECK')) {
+    if (scenario === '0_with_pid') {
+        console.log('PIDOF_CHECK:pids=[12345]:exit=[0]');
+    } else if (scenario === '1_empty') {
+        console.log('PIDOF_CHECK:pids=[]:exit=[1]');
+    } else if (scenario === '127_missing') {
+        console.log('PIDOF_CHECK:pids=[]:exit=[127]');
+    } else if (scenario === '2_error') {
+        console.log('PIDOF_CHECK:pids=[]:exit=[2]');
+    } else if (scenario === '0_empty_incoherent') {
+        console.log('PIDOF_CHECK:pids=[]:exit=[0]');
+    } else if (scenario === '1_with_pid_incoherent') {
+        console.log('PIDOF_CHECK:pids=[12345]:exit=[1]');
+    } else {
+        process.exit(1);
+    }
+    process.exit(0);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs20 -Encoding ascii
+
+$mockAdbCmd20 = if ($isWin) { Join-Path $testDir20 "adb.cmd" } else { Join-Path $testDir20 "adb" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockAdbJs20`" %*" | Out-File -FilePath $mockAdbCmd20 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs20`" `"`$@`"" | Out-File -FilePath $mockAdbCmd20 -Encoding ascii
+    & chmod +x $mockAdbCmd20
+}
+
+$mockAdbEscaped20 = $mockAdbCmd20.Replace('\', '/')
+$subPassed20 = 0
+
+# 20a: exit=0 con PID -> IsRunning = true
+$cmd20a = @"
+`$env:NODE_EXE = '$nodeEscaped'
+. '$scriptEscaped' -Action plan | Out-Null
+`$st = Get-ApplicationProcessState -AdbExe '$mockAdbEscaped20' -TargetAdb '127.0.0.1' -PackageName 'it.akai.customremote'
+if (`$st.IsRunning -eq `$true -and `$st.Pids -eq '12345' -and `$st.PidofExit -eq 0) {
+    Write-Output 'OK_20A'
+} else {
+    Write-Output ('FAIL_20A: running=' + `$st.IsRunning)
+}
+"@
+$env:TEST_PIDOF_SCENARIO = '0_with_pid'
+$out20a = & $psExe -ExecutionPolicy Bypass -Command $cmd20a 2>&1 | Out-String
+if ($out20a -match "OK_20A") {
+    $subPassed20++
+    Write-Host "   [PASS] Sotto-test 20a: exit 0 con PID correttamente riconosciuto come processo in esecuzione (IsRunning=true)" -ForegroundColor Green
+} else {
+    Write-Host "   [FAIL] Sotto-test 20a fallito: $out20a" -ForegroundColor Red
+}
+
+# 20b: exit=1 senza PID -> IsRunning = false (quiescenza confermata)
+$cmd20b = @"
+`$env:NODE_EXE = '$nodeEscaped'
+. '$scriptEscaped' -Action plan | Out-Null
+`$st = Get-ApplicationProcessState -AdbExe '$mockAdbEscaped20' -TargetAdb '127.0.0.1' -PackageName 'it.akai.customremote'
+if (`$st.IsRunning -eq `$false -and `$st.Pids -eq '' -and `$st.PidofExit -eq 1) {
+    Write-Output 'OK_20B'
+} else {
+    Write-Output ('FAIL_20B: running=' + `$st.IsRunning)
+}
+"@
+$env:TEST_PIDOF_SCENARIO = '1_empty'
+$out20b = & $psExe -ExecutionPolicy Bypass -Command $cmd20b 2>&1 | Out-String
+if ($out20b -match "OK_20B") {
+    $subPassed20++
+    Write-Host "   [PASS] Sotto-test 20b: exit 1 con lista vuota correttamente riconosciuto come quiescenza confermata (IsRunning=false)" -ForegroundColor Green
+} else {
+    Write-Host "   [FAIL] Sotto-test 20b fallito: $out20b" -ForegroundColor Red
+}
+
+# 20c: exit=127 (pidof assente) -> THROW FAIL-CLOSED
+$cmd20c = @"
+`$env:NODE_EXE = '$nodeEscaped'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Get-ApplicationProcessState -AdbExe '$mockAdbEscaped20' -TargetAdb '127.0.0.1' -PackageName 'it.akai.customremote'
+    Write-Output 'FAIL_20C_NO_THROW'
+} catch {
+    Write-Output ('CAUGHT_20C: ' + `$_.Exception.Message)
+}
+"@
+$env:TEST_PIDOF_SCENARIO = '127_missing'
+$out20c = & $psExe -ExecutionPolicy Bypass -Command $cmd20c 2>&1 | Out-String
+if ($out20c -match "CAUGHT_20C: ERRORE FAIL-CLOSED: Binario o comando 'pidof' assente o non eseguibile") {
+    $subPassed20++
+    Write-Host "   [PASS] Sotto-test 20c: exit 127 (pidof assente) categoricamente bloccato in FAIL-CLOSED (nessun falso positivo di quiescenza)" -ForegroundColor Green
+} else {
+    Write-Host "   [FAIL] Sotto-test 20c fallito: $out20c" -ForegroundColor Red
+}
+
+# 20d: exit=2 (errore anomalo) -> THROW FAIL-CLOSED
+$cmd20d = @"
+`$env:NODE_EXE = '$nodeEscaped'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Get-ApplicationProcessState -AdbExe '$mockAdbEscaped20' -TargetAdb '127.0.0.1' -PackageName 'it.akai.customremote'
+    Write-Output 'FAIL_20D_NO_THROW'
+} catch {
+    Write-Output ('CAUGHT_20D: ' + `$_.Exception.Message)
+}
+"@
+$env:TEST_PIDOF_SCENARIO = '2_error'
+$out20d = & $psExe -ExecutionPolicy Bypass -Command $cmd20d 2>&1 | Out-String
+if ($out20d -match "CAUGHT_20D: ERRORE FAIL-CLOSED: Invocazione pidof fallita con codice anomalo") {
+    $subPassed20++
+    Write-Host "   [PASS] Sotto-test 20d: exit 2 (errore anomalo) categoricamente bloccato in FAIL-CLOSED" -ForegroundColor Green
+} else {
+    Write-Host "   [FAIL] Sotto-test 20d fallito: $out20d" -ForegroundColor Red
+}
+
+# 20e: incoerente: exit=0 senza PID -> THROW FAIL-CLOSED
+$cmd20e = @"
+`$env:NODE_EXE = '$nodeEscaped'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Get-ApplicationProcessState -AdbExe '$mockAdbEscaped20' -TargetAdb '127.0.0.1' -PackageName 'it.akai.customremote'
+    Write-Output 'FAIL_20E_NO_THROW'
+} catch {
+    Write-Output ('CAUGHT_20E: ' + `$_.Exception.Message)
+}
+"@
+$env:TEST_PIDOF_SCENARIO = '0_empty_incoherent'
+$out20e = & $psExe -ExecutionPolicy Bypass -Command $cmd20e 2>&1 | Out-String
+if ($out20e -match "CAUGHT_20E: ERRORE FAIL-CLOSED: Risultato incoerente del probe quiescenza.*exit code 0 ma nessun PID") {
+    $subPassed20++
+    Write-Host "   [PASS] Sotto-test 20e: combinazione incoerente (exit 0 senza PID) bloccata in FAIL-CLOSED" -ForegroundColor Green
+} else {
+    Write-Host "   [FAIL] Sotto-test 20e fallito: $out20e" -ForegroundColor Red
+}
+
+# 20f: incoerente: exit=1 con PID -> THROW FAIL-CLOSED
+$cmd20f = @"
+`$env:NODE_EXE = '$nodeEscaped'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Get-ApplicationProcessState -AdbExe '$mockAdbEscaped20' -TargetAdb '127.0.0.1' -PackageName 'it.akai.customremote'
+    Write-Output 'FAIL_20F_NO_THROW'
+} catch {
+    Write-Output ('CAUGHT_20F: ' + `$_.Exception.Message)
+}
+"@
+$env:TEST_PIDOF_SCENARIO = '1_with_pid_incoherent'
+$out20f = & $psExe -ExecutionPolicy Bypass -Command $cmd20f 2>&1 | Out-String
+if ($out20f -match "CAUGHT_20F: ERRORE FAIL-CLOSED: Risultato incoerente del probe quiescenza.*exit code 1 ma sono presenti PID") {
+    $subPassed20++
+    Write-Host "   [PASS] Sotto-test 20f: combinazione incoerente (exit 1 con PID) bloccata in FAIL-CLOSED" -ForegroundColor Green
+} else {
+    Write-Host "   [FAIL] Sotto-test 20f fallito: $out20f" -ForegroundColor Red
+}
+
+Remove-Item env:TEST_PIDOF_SCENARIO -ErrorAction SilentlyContinue
+
+if ($subPassed20 -eq 6) {
+    Write-Host "[PASS] [TEST ISOLATO / CLASSIFICAZIONE RIGOROSA EXIT CODE PIDOF] Test 20: Classificazione deterministica exit code di pidof verificata al 100% (6 condizioni: exit 0+PID, exit 1 vuoto, blocco 127, blocco 2, blocco 0 vuoto, blocco 1 con PID)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST ISOLATO / CLASSIFICAZIONE RIGOROSA EXIT CODE PIDOF] Test 20: Sotto-test superati: $subPassed20 / 6" -ForegroundColor Red
+    $failed++
+}
+Remove-Item $testDir20 -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 

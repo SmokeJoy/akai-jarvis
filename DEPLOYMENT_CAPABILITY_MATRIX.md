@@ -108,12 +108,13 @@ A seguito dell'audit condotto nell'ottava revisione tecnica, viene formalizzata 
    In caso di ripristino via root (`su`), lo script risolve dinamicamente l'identità numerica dell'applicazione (`userId` o `appId`) interrogando `dumpsys package <PackageName>` o `stat -c "%u" /data/data/<PackageName>`. Se la risoluzione non restituisce un valore strettamente numerico verificato, la procedura **solleva immediatamente eccezione `FAIL-CLOSED`**. È categoricamente vietato applicare permessi con UID arbitrari o fittizi (es. `10000:10000`).
 8. **Watchdog Post-Rollback Deterministic Exit (P1)**:
    I controlli di salute post-rollback eseguono un ciclo di verifica attivo: se l'endpoint `/api/status` non risponde con `status=ok`, la procedura dichiara esplicitamente lo stato `FAIL/UNKNOWN` e termina con eccezione bloccante ed exit code 1.
-9. **Suite di Test Offline Rigorosa (19/19 PASS)**:
-   La suite offline PowerShell `test_safe_install_mocked_adb.ps1` copre 19 scenari formali:
-   - Test 1-6, 9, 12, 13, 14, 16, 17, 18, 19: Test negativi e fail-closed categorici (inclusi Test 13: estrazione WAL fallita se presente, Test 14: checkpoint WAL bloccato con lettore concorrente `busy=1`, Test 16: writer non quiescente con PID attivo, Test 17: residui WAL/SHM non rimossi su storage pre-restore, Test 18: errore di trasporto ADB / assenza stdout durante la verifica della quiescenza, e Test 19: probe WAL/SHM fallito su entrambi i canali `run-as` e `su` con blocco categorico senza streaming restore);
+9. **Suite di Test Offline Rigorosa (20/20 PASS)**:
+   La suite offline PowerShell `test_safe_install_mocked_adb.ps1` copre 20 scenari formali:
+   - Test 1-6, 9, 12, 13, 14, 16, 17, 18, 19, 20: Test negativi e fail-closed categorici (inclusi Test 13: estrazione WAL fallita se presente, Test 14: checkpoint WAL bloccato con lettore concorrente `busy=1`, Test 16: writer non quiescente con PID attivo, Test 17: residui WAL/SHM non rimossi su storage pre-restore, Test 18: errore di trasporto ADB / assenza stdout durante la verifica della quiescenza, e Test 19: probe WAL/SHM fallito su entrambi i canali `run-as` e `su` con blocco categorico senza streaming restore);
    - Test 7-8: Test affermativi end-to-end con mock ADB (ciclo completo upgrade e rollback con streaming e parità hash);
    - Test 10-11: Regressioni baseline v5 e consistenza transazionale WAL;
-   - Test 15: Verifica isolata del percorso `sqlite3` CLI (4 condizioni: successo 0+ok, exit non-zero, corruzione, checkpoint busy).
+   - Test 15: Verifica isolata del percorso `sqlite3` CLI (4 condizioni: successo 0+ok, exit non-zero, corruzione, checkpoint busy);
+   - Test 20: Verifica isolata della classificazione deterministica exit code di `pidof` (6 condizioni: exit 0+PID, exit 1 vuoto, blocco fail-closed su 127 assente, blocco su 2 anomalo, blocco su incoerenze 0 vuoto / 1 con PID).
 10. **Correzione Predicato SQLite CLI e Verifica Isolata Backend CLI (P0 - Revisione 11)**:
     Corretto il typo invertito nella verifica con sqlite3 CLI (`$LASTEXITCODE -eq 0 -and $out.Trim() -eq "ok"`). Aggiunto Test 15 isolato con 4 condizioni formali che validano il comportamento corretto e fail-closed in isolamento.
 11. **Prova Attiva di Quiescenza Writer e Rimozione Verificata File Orfani `-wal`/`-shm` (P1 - Revisione 11)**:
@@ -126,4 +127,11 @@ A seguito dell'audit condotto nell'ottava revisione tecnica, viene formalizzata 
 13. **Verifica Quiescenza con Marcatore Shell Univoco per Errori ADB/Trasporto (P1 - Revisione 12)**:
     - **Helper `Get-ApplicationProcessState`**: Per evitare che errori di trasporto ADB o permessi negati vengano confusi con l'assenza di processi (poiché `pidof` esce con codice 1 quando nessun processo è attivo), il comando shell viene racchiuso in una sequenza con marcatore formattato: `pids=$(pidof $PackageName 2>/dev/null); code=$?; echo PIDOF_CHECK:pids=[$pids]:exit=[$code]`.
     - **Verifica Congiunta Exit Code ed Output**: Il comando `echo` garantisce exit code 0 dal lato shell in caso di funzionamento normale. Se ADB restituisce un codice diverso da 0 o se l'output stdout è vuoto o privo del marcatore formattato atteso, la procedura solleva immediatamente eccezione `ERRORE FAIL-CLOSED` prima di procedere all'estrazione del database (validato al 100% dal Test 18).
+    - **Classificazione Deterministica degli Exit Code di `pidof` (Revisione 13)**: In `Get-ApplicationProcessState`, lo stato `IsRunning` non dipende più unicamente dalla presenza/assenza di caratteri nella stringa PID:
+      - `exit=0` con PID: processo attivo confermato (`IsRunning = true`);
+      - `exit=1` senza PID: assenza processi confermata (`IsRunning = false`, quiescenza lecita);
+      - `exit=127` (comando `pidof` assente o non eseguibile nel binpath Android): **lancia eccezione bloccante FAIL-CLOSED** (impedendo categoricamente che un tool mancante venga interpretato come app non attiva);
+      - `exit=2` o qualsiasi codice diverso da 0 e 1: **lancia eccezione bloccante FAIL-CLOSED**;
+      - Combinazioni incoerenti (`exit=0` senza PID oppure `exit=1` con PID): **lancia eccezione bloccante FAIL-CLOSED**.
+      Tutti e 6 gli scenari sono formalmente testati e validati al 100% dal nuovo Test 20 in isolamento.
     - **Limiti Reali TV Fisica**: Si ribadisce formalmente che su dispositivo fisico AKAI Android TV non-debuggable (`android:debuggable="false"`), l'accesso ai file privati di `/data/data/it.akai.customremote/` per la baseline v5 richiede inderogabilmente privilegi di root (`su`). In assenza di tali privilegi verificati a runtime, la procedura scatta immediatamente nel pre-flight gate di sicurezza e rifiuta categoricamente l'installazione.

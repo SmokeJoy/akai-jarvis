@@ -193,10 +193,13 @@ function Get-ApplicationProcessState {
         [string]$PackageName
     )
     # Esecuzione comando shell con marcatore esplicito: echo PIDOF_CHECK:pids=[$pids]:exit=[$code]
-    # In una shell POSIX, echo ha successo (exit 0) anche se pidof esce con 1 (nessun processo trovato).
-    # Quindi ADB restituisce exit 0 e stampa PIDOF_CHECK:pids=[$pids]:exit=[$code].
-    # Se ADB fallisce (trasporto, timeout, demone terminato) o il comando fallisce senza stdout,
-    # il probe fallisce categoricamente in FAIL-CLOSED per prevenire estrazioni a caldo.
+    # In una shell POSIX:
+    # - Se il processo e' in esecuzione: pidof esce con 0 e stampa uno o piu' PID
+    # - Se il processo NON e' in esecuzione: pidof esce con 1 e non stampa nulla
+    # In entrambi i casi leciti, echo ha successo (exit 0) e stampa PIDOF_CHECK:pids=[$pids]:exit=[$code].
+    #
+    # Se ADB fallisce a monte (trasporto, timeout, demone terminato) o il comando fallisce senza stdout,
+    # il probe fallisce categoricamente in FAIL-CLOSED.
     $probeCmd = "pids=`$(pidof $PackageName 2>/dev/null); code=`$?; echo PIDOF_CHECK:pids=[`$pids]:exit=[`$code]"
     $raw = & $AdbExe -s $TargetAdb shell $probeCmd 2>&1
     $adbExit = $LASTEXITCODE
@@ -209,12 +212,32 @@ function Get-ApplicationProcessState {
     if ($rawStr -match "PIDOF_CHECK:pids=\[([^\]]*)\]:exit=\[(\d+)\]") {
         $foundPids = $Matches[1].Trim()
         $pidofExit = [int]$Matches[2]
-        $isRunning = (-not [string]::IsNullOrWhiteSpace($foundPids))
-        return @{
-            Success = $true
-            Pids = $foundPids
-            PidofExit = $pidofExit
-            IsRunning = $isRunning
+
+        # Classificazione deterministica e rigorosa degli exit code di pidof (Revisione 13)
+        if ($pidofExit -eq 0) {
+            if ([string]::IsNullOrWhiteSpace($foundPids)) {
+                throw "ERRORE FAIL-CLOSED: Risultato incoerente del probe quiescenza per ${PackageName}: pidof ha restituito exit code 0 ma nessun PID e' stato catturato. Operazione bloccata in FAIL-CLOSED."
+            }
+            return @{
+                Success = $true
+                Pids = $foundPids
+                PidofExit = $pidofExit
+                IsRunning = $true
+            }
+        } elseif ($pidofExit -eq 1) {
+            if (-not [string]::IsNullOrWhiteSpace($foundPids)) {
+                throw "ERRORE FAIL-CLOSED: Risultato incoerente del probe quiescenza per ${PackageName}: pidof ha restituito exit code 1 ma sono presenti PID ('$foundPids'). Operazione bloccata in FAIL-CLOSED."
+            }
+            return @{
+                Success = $true
+                Pids = ""
+                PidofExit = $pidofExit
+                IsRunning = $false
+            }
+        } elseif ($pidofExit -eq 127) {
+            throw "ERRORE FAIL-CLOSED: Binario o comando 'pidof' assente o non eseguibile su target device (exit: 127). Impossibile verificare lo stato dei processi per ${PackageName}."
+        } else {
+            throw "ERRORE FAIL-CLOSED: Invocazione pidof fallita con codice anomalo ($pidofExit) per ${PackageName}. Il fallimento del comando di controllo non puo' essere interpretato come assenza di processi."
         }
     } else {
         throw "ERRORE FAIL-CLOSED: Formato output probe quiescenza non valido per ${PackageName}: '$rawStr'. Impossibile confermare la quiescenza in modo deterministico."
