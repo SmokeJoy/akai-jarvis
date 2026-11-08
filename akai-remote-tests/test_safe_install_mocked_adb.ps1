@@ -279,9 +279,9 @@ process.exit(0);
 
 $mockSignerCmd7 = if ($isWin) { Join-Path $testDir7 "apksigner.cmd" } else { Join-Path $testDir7 "apksigner" }
 if ($isWin) {
-    "@echo off`n`"%NODE_EXE%`" `"%~dp0mock_signer_7.js`" %*" | Out-File -FilePath $mockSignerCmd7 -Encoding ascii
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs7`" %*" | Out-File -FilePath $mockSignerCmd7 -Encoding ascii
 } else {
-    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$(dirname `"`$0`")/mock_signer_7.js`" `"`$@`"" | Out-File -FilePath $mockSignerCmd7 -Encoding ascii
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs7`" `"`$@`"" | Out-File -FilePath $mockSignerCmd7 -Encoding ascii
     & chmod +x $mockSignerCmd7
 }
 
@@ -317,30 +317,37 @@ process.exit(0);
 
 $mockAdbCmd7 = if ($isWin) { Join-Path $testDir7 "adb.cmd" } else { Join-Path $testDir7 "adb" }
 if ($isWin) {
-    "@echo off`n`"%NODE_EXE%`" `"%~dp0mock_adb_7.js`" %*" | Out-File -FilePath $mockAdbCmd7 -Encoding ascii
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs7`" %*" | Out-File -FilePath $mockAdbCmd7 -Encoding ascii
 } else {
-    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$(dirname `"`$0`")/mock_adb_7.js`" `"`$@`"" | Out-File -FilePath $mockAdbCmd7 -Encoding ascii
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs7`" `"`$@`"" | Out-File -FilePath $mockAdbCmd7 -Encoding ascii
     & chmod +x $mockAdbCmd7
 }
 
 # 5. Mock HTTP Server (porta 18088)
 @'
 const http = require('http');
+const send = (res, code, ctype, body) => {
+  const buf = Buffer.from(body);
+  res.writeHead(code, {
+    'Content-Type': ctype,
+    'Content-Length': buf.length,
+    'Connection': 'close'
+  });
+  res.end(buf);
+};
 const server = http.createServer((req, res) => {
   if (req.url === '/api/status') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
+    send(res, 200, 'application/json', JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
   } else if (req.url === '/index.html') {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<!DOCTYPE html><html><body>AKAI Web Remote</body></html>');
+    send(res, 200, 'text/html', '<!DOCTYPE html><html><body>AKAI Web Remote</body></html>');
   } else if (req.url === '/api/ai/memory') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ procedures: [], preferences: {} }));
+    send(res, 200, 'application/json', JSON.stringify({ procedures: [], preferences: {} }));
   } else {
-    res.writeHead(404);
-    res.end();
+    send(res, 404, 'text/plain', 'Not Found');
   }
 });
+server.on('error', () => {});
+server.on('clientError', (err, socket) => { socket.destroy(); });
 server.listen(18088, '127.0.0.1');
 '@ | Out-File -FilePath $mockHttpScript7 -Encoding ascii
 
@@ -420,9 +427,9 @@ process.exit(0);
 
 $mockSignerCmd8 = if ($isWin) { Join-Path $testDir8 "apksigner.cmd" } else { Join-Path $testDir8 "apksigner" }
 if ($isWin) {
-    "@echo off`n`"%NODE_EXE%`" `"%~dp0mock_signer_8.js`" %*" | Out-File -FilePath $mockSignerCmd8 -Encoding ascii
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs8`" %*" | Out-File -FilePath $mockSignerCmd8 -Encoding ascii
 } else {
-    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$(dirname `"`$0`")/mock_signer_8.js`" `"`$@`"" | Out-File -FilePath $mockSignerCmd8 -Encoding ascii
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs8`" `"`$@`"" | Out-File -FilePath $mockSignerCmd8 -Encoding ascii
     & chmod +x $mockSignerCmd8
 }
 
@@ -438,12 +445,6 @@ if (args.includes('pull')) {
     const dest = process.argv[process.argv.length - 1];
     fs.copyFileSync(process.env.DEVICE_APK_FILE, dest);
     process.exit(0);
-}
-if (args.includes('exec-in')) {
-    const chunks = [];
-    process.stdin.on('data', chunk => chunks.push(chunk));
-    process.stdin.on('end', () => process.exit(0));
-    return;
 }
 if (args.includes('exec-in')) {
     const target = process.env.DEVICE_RESTORE_TARGET;
@@ -477,9 +478,9 @@ process.exit(0);
 
 $mockAdbCmd8 = if ($isWin) { Join-Path $testDir8 "adb.cmd" } else { Join-Path $testDir8 "adb" }
 if ($isWin) {
-    "@echo off`n`"%NODE_EXE%`" `"%~dp0mock_adb_8.js`" %*" | Out-File -FilePath $mockAdbCmd8 -Encoding ascii
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs8`" %*" | Out-File -FilePath $mockAdbCmd8 -Encoding ascii
 } else {
-    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$(dirname `"`$0`")/mock_adb_8.js`" `"`$@`"" | Out-File -FilePath $mockAdbCmd8 -Encoding ascii
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs8`" `"`$@`"" | Out-File -FilePath $mockAdbCmd8 -Encoding ascii
     & chmod +x $mockAdbCmd8
 }
 
@@ -487,32 +488,37 @@ if ($isWin) {
 @'
 const http = require('http');
 let attempts = 0;
+const send = (res, code, ctype, body) => {
+  const buf = Buffer.from(body);
+  res.writeHead(code, {
+    'Content-Type': ctype,
+    'Content-Length': buf.length,
+    'Connection': 'close'
+  });
+  res.end(buf);
+};
 const server = http.createServer((req, res) => {
   if (req.url === '/api/status') {
     attempts++;
     if (attempts <= 2) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'error', message: 'Simulated failure to trigger rollback' }));
+      send(res, 500, 'application/json', JSON.stringify({ status: 'error', message: 'Simulated failure to trigger rollback' }));
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
+    send(res, 200, 'application/json', JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
   } else if (req.url === '/index.html') {
     if (attempts <= 2) {
-      res.writeHead(503);
-      res.end('Service Unavailable');
+      send(res, 503, 'text/plain', 'Service Unavailable');
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<!DOCTYPE html><html><body>AKAI Web Remote Rollback OK</body></html>');
+    send(res, 200, 'text/html', '<!DOCTYPE html><html><body>AKAI Web Remote Rollback OK</body></html>');
   } else if (req.url === '/api/ai/memory') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ procedures: [], preferences: {} }));
+    send(res, 200, 'application/json', JSON.stringify({ procedures: [], preferences: {} }));
   } else {
-    res.writeHead(404);
-    res.end();
+    send(res, 404, 'text/plain', 'Not Found');
   }
 });
+server.on('error', () => {});
+server.on('clientError', (err, socket) => { socket.destroy(); });
 server.listen(18089, '127.0.0.1');
 '@ | Out-File -FilePath $mockHttpScript8 -Encoding ascii
 
