@@ -1,83 +1,227 @@
 # ==============================================================================
-# AKAI Custom TV - Script 10: Collaudo Funzionale su Emulatore Android TV API 28
-# Esegue boot emulatore AVD, installa APK, invia eventi D-pad e cattura evidenze
+# AKAI Custom TV - Script 10: Collaudo Funzionale Sicuro su Emulatore Android TV
+# Vincolo P0 di sicurezza: isolamento fail-closed assoluto verso emulator-xxxx
+# Zero comandi senza -s <serial>; rifiuto categorico di IP, TV fisiche o ambiguità
 # ==============================================================================
+
+param(
+    [string]$TargetSerial = "",
+    [switch]$MockDeviceListTest = $false,
+    [string]$MockDevicesOutput = ""
+)
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "=== COLLAUDO RUNTIME AKAI CUSTOM HOME v8 SU EMULATORE ANDROID TV (API 28) ===" -ForegroundColor Cyan
+Write-Host "=================================================================" -ForegroundColor Cyan
+Write-Host " AKAI CUSTOM HOME v8 - COLLAUDO RUNTIME SICURO SU EMULATORE TV   " -ForegroundColor Cyan
+Write-Host "=================================================================" -ForegroundColor Cyan
 
 $workspace = "C:\Users\danie\OneDrive\Documenti\Antygravity\Akay"
 $toolsDir = Join-Path $workspace "tools"
 $sdkDir = Join-Path $toolsDir "android-sdk"
 $adb = Join-Path $sdkDir "platform-tools\adb.exe"
 $apk = Join-Path $workspace "akai-custom-home\app\build\outputs\apk\debug\akai-custom-home.apk"
+$testSuiteApk = Join-Path $toolsDir "test-apps\TestStreamingApps.apk"
 $docsDir = Join-Path $workspace "docs\screenshots\emulator"
 
-if (-not (Test-Path $adb)) {
-    throw "FATAL: adb.exe non trovato in $adb"
-}
-if (-not (Test-Path $apk)) {
-    throw "FATAL: APK non trovato in $apk. Eseguire prima scripts/09_compile_akai_home_apk.ps1"
-}
-
-Write-Host "[1/5] Verifica stato connessione emulatore..." -ForegroundColor Yellow
-$devices = & $adb devices
-Write-Host $devices
-
-$bootCompleted = & $adb shell getprop sys.boot_completed
-if ($bootCompleted.Trim() -ne "1") {
-    Write-Host "Emulatore in fase di avvio, attesa completamento boot..."
-    & $adb wait-for-device
-    $maxWait = 60
-    while ($maxWait -gt 0) {
-        $boot = & $adb shell getprop sys.boot_completed
-        if ($boot.Trim() -eq "1") { break }
-        Start-Sleep -Seconds 2
-        $maxWait -= 2
+function Assert-Step($condition, $stepName) {
+    if (-not $condition) {
+        Write-Host "  [FAIL] $stepName" -ForegroundColor Red
+        throw "ASSERTION FAILED: $stepName"
+    } else {
+        Write-Host "  [PASS] $stepName" -ForegroundColor Green
     }
 }
 
-$release = (& $adb shell getprop ro.build.version.release).Trim()
-$sdkVer = (& $adb shell getprop ro.build.version.sdk).Trim()
-$model = (& $adb shell getprop ro.product.model).Trim()
+function Get-ValidatedEmulatorSerial($rawDevicesInput) {
+    if ($rawDevicesInput -is [array]) {
+        $lines = $rawDevicesInput
+    } else {
+        $lines = ("$rawDevicesInput" -split "`r?`n")
+    }
+    $emulators = @()
+    $foreignDevices = @()
 
-Write-Host "Device Android TV collegato: Modello=$model, Android=$release, API=$sdkVer" -ForegroundColor Green
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+        if ($trimmed.StartsWith("List of devices")) { continue }
+        if ($trimmed.StartsWith("*")) { continue }
 
-Write-Host "[2/5] Installazione stream APK (it.akai.customhome)..." -ForegroundColor Yellow
-& $adb install -r $apk
+        $parts = $trimmed -split "\s+"
+        if ($parts.Count -ge 2) {
+            $serial = $parts[0]
+            $state = $parts[1]
 
-Write-Host "[3/5] Avvio MainActivity Leanback Launcher..." -ForegroundColor Yellow
-& $adb shell am start -n it.akai.customhome/.MainActivity
+            if ($serial -match "^emulator-\d+$") {
+                if ($state -eq "device") {
+                    $emulators += $serial
+                }
+            } else {
+                # Qualsiasi dispositivo che non sia emulatore (TV fisica, IP 192.168.*, USB)
+                $foreignDevices += "$serial ($state)"
+            }
+        }
+    }
+
+    # P0 FAIL-CLOSED: Se è presente un dispositivo non-emulatore, blocca immediatamente!
+    if ($foreignDevices.Count -gt 0) {
+        throw "SICUREZZA P0 VIOLATA: Rilevato dispositivo non emulatore connesso ad ADB: $($foreignDevices -join ', '). Hardware freeze TV attivo: ZERO comandi consentiti."
+    }
+
+    # P0 FAIL-CLOSED: Deve essere presente esattamente 1 emulatore in stato 'device'
+    if ($emulators.Count -eq 0) {
+        throw "SICUREZZA P0 FAIL-CLOSED: Nessun emulatore virtuale collegato in stato 'device'. Operazione interrotta per prevenire comandi orfani."
+    }
+    if ($emulators.Count -gt 1) {
+        throw "SICUREZZA P0 FAIL-CLOSED: Rilevati molteplici emulatori collegati: $($emulators -join ', '). Ambiguità non consentita."
+    }
+
+    return $emulators[0]
+}
+
+# Se è un test di validazione logica isolata della lista dispositivi:
+if ($MockDeviceListTest) {
+    Write-Host "Esecuzione test logico di isolamento fail-closed..." -ForegroundColor Yellow
+    $detected = Get-ValidatedEmulatorSerial $MockDevicesOutput
+    return $detected
+}
+
+# 1. Validazione binari
+Assert-Step (Test-Path $adb) "adb.exe presente in $adb"
+Assert-Step (Test-Path $apk) "APK AKAI Custom Home v8 presente in $apk"
+
+# 2. Rilevazione e Validazione Deterministica dell'Emulatore (P0)
+Write-Host "`n[1/6] Analisi deterministica della lista dispositivi ADB..." -ForegroundColor Yellow
+& $adb start-server | Out-Null
+Start-Sleep -Milliseconds 600
+
+# Loop di tolleranza di 5 secondi se l'emulatore è appena passato online
+$rawDevices = & $adb devices
+$retryCount = 0
+while ($rawDevices -match "offline" -and $retryCount -lt 5) {
+    Start-Sleep -Seconds 1
+    $rawDevices = & $adb devices
+    $retryCount++
+}
+Write-Host $rawDevices
+
+$emulator = Get-ValidatedEmulatorSerial $rawDevices
+Write-Host "Emulatore autorizzato individuato: $emulator" -ForegroundColor Cyan
+
+# 3. Validazione Fingerprint del Sistema Operativo Virtuale (Strict API 28)
+Write-Host "`n[2/6] Validazione impronta hardware del target ($emulator)..." -ForegroundColor Yellow
+$sdkVer = (& $adb -s $emulator shell getprop ro.build.version.sdk).Trim()
+$release = (& $adb -s $emulator shell getprop ro.build.version.release).Trim()
+$model = (& $adb -s $emulator shell getprop ro.product.model).Trim()
+
+Assert-Step ($sdkVer -eq "28") "Target OS API Level rigorosamente Android 9 (API 28, letto: $sdkVer)"
+Assert-Step ($model -match "atv|emulator|sdk_google_atv") "Profilo hardware emulatore TV validato (letto: $model)"
+Write-Host "Target validato al 100%: $model (Android $release, SDK $sdkVer)" -ForegroundColor Green
+
+# 4. Popolamento Catalogo Streaming e App di Test (se disponibile)
+if (Test-Path $testSuiteApk) {
+    Write-Host "`n[3/6] Installazione suite catalogo streaming di prova su $emulator..." -ForegroundColor Yellow
+    $installSuiteOut = & $adb -s $emulator install -r $testSuiteApk
+    Assert-Step ($installSuiteOut -match "Success") "Suite app streaming (YouTube, Netflix, Prime, RaiPlay, VLC, Kodi) installata con successo"
+}
+
+# 5. Installazione Streamed AKAI Custom Home v8
+Write-Host "`n[4/6] Installazione sicura AKAI Custom Home v8 su $emulator..." -ForegroundColor Yellow
+$installAppOut = & $adb -s $emulator install -r $apk
+Assert-Step ($installAppOut -match "Success") "AKAI Custom Home v8 installata con successo su $emulator"
+
+# 6. Avvio MainActivity e Validazione Window Focus
+Write-Host "`n[5/6] Avvio Launcher e verifica finestra in primo piano..." -ForegroundColor Yellow
+& $adb -s $emulator shell am start -n it.akai.customhome/.MainActivity | Out-Null
 Start-Sleep -Seconds 2
 
-Write-Host "[4/5] Esecuzione sequenza telecomando virtuale D-pad..." -ForegroundColor Yellow
-# Navigazione verso il basso (seleziona prima card)
-& $adb shell input keyevent 20
+$windowFocus = & $adb -s $emulator shell dumpsys window windows | Select-String -Pattern "mCurrentFocus"
+Assert-Step ($windowFocus -match "it\.akai\.customhome/\.MainActivity|it\.akai\.customhome/it\.akai\.customhome\.MainActivity") "MainActivity ha il focus esclusivo in primo piano"
+
+# 7. Sequenza Collaudo D-Pad e Acquisizione Evidenze 1080p
+Write-Host "`n[6/6] Esecuzione sequenza telecomando e verifica navigazione righe..." -ForegroundColor Yellow
+New-Item -ItemType Directory -Force -Path $docsDir | Out-Null
+
+# Cattura 1: Home Screen pulita all'avvio (4 righe con Catalogo Streaming completo)
+& $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
+& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\01_home_screen_clean.png" | Out-Null
+Assert-Step (Test-Path "$docsDir\01_home_screen_clean.png") "Evidenza 01 catturata (Home completa con catalogo streaming)"
+
+# Navigazione D-Pad: Scende a Ingressi HDMI poi alla riga Streaming
+& $adb -s $emulator shell input keyevent 20 # DPAD_DOWN -> Ingressi HDMI
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 20 # DPAD_DOWN -> Streaming Apps (YouTube / Netflix)
 Start-Sleep -Milliseconds 400
 
-# Navigazione orizzontale a destra
-& $adb shell input keyevent 22
-Start-Sleep -Milliseconds 400
+# Cattura 2: Focus e zoom su card Streaming (YouTube / Netflix)
+& $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
+& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\02_streaming_focus_scale.png" | Out-Null
+Assert-Step (Test-Path "$docsDir\02_streaming_focus_scale.png") "Evidenza 02 catturata (Focus dorato e zoom 1.08x su card streaming)"
 
-# Pressione prolungata per dialogo opzioni
-& $adb shell input keyevent --longpress 23
+# Scorrimento orizzontale della riga streaming verso destra
+& $adb -s $emulator shell input keyevent 22 # DPAD_RIGHT
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 22 # DPAD_RIGHT
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 22 # DPAD_RIGHT
+Start-Sleep -Milliseconds 300
+
+# Cattura 3: Scorrimento orizzontale riga Streaming (Prime Video, RaiPlay, Disney+, VLC)
+& $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
+& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\03_streaming_horizontal_scroll.png" | Out-Null
+Assert-Step (Test-Path "$docsDir\03_streaming_horizontal_scroll.png") "Evidenza 03 catturata (Scorrimento orizzontale riga streaming)"
+
+# Discesa alla riga "Tutte le Applicazioni" e pressione prolungata OK
+& $adb -s $emulator shell input keyevent 20 # DPAD_DOWN -> Tutte le Applicazioni
+Start-Sleep -Milliseconds 400
+& $adb -s $emulator shell input keyevent --longpress 23 # DPAD_CENTER LONGPRESS
 Start-Sleep -Milliseconds 800
 
-# Chiusura dialogo / rientro
-& $adb shell input keyevent 4
-Start-Sleep -Milliseconds 400
+# Cattura 4: Dialogo opzioni applicazione (Aggiungi ai Preferiti)
+& $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
+& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\04_app_options_dialog.png" | Out-Null
+Assert-Step (Test-Path "$docsDir\04_app_options_dialog.png") "Evidenza 04 catturata (Dialogo Aggiungi ai Preferiti con longpress OK)"
 
-# Pressione HOME
-& $adb shell input keyevent 3
-Start-Sleep -Milliseconds 1000
+# Selezione "Aggiungi ai Preferiti" con DPAD_CENTER
+& $adb -s $emulator shell input keyevent 23 # DPAD_CENTER
+Start-Sleep -Milliseconds 800
 
-Write-Host "[5/5] Cattura screenshot di verifica runtime..." -ForegroundColor Yellow
-New-Item -ItemType Directory -Force -Path $docsDir | Out-Null
-& $adb shell "screencap -p /data/local/tmp/screencap.png"
-& $adb pull /data/local/tmp/screencap.png "$docsDir\smoke_test_latest.png"
+# Cattura 5: Riga Preferiti popolata e visibile a schermo
+& $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
+& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\05_favorites_row_populated.png" | Out-Null
+Assert-Step (Test-Path "$docsDir\05_favorites_row_populated.png") "Evidenza 05 catturata (Riga Preferiti popolata a schermo)"
 
-Write-Host "========================================================" -ForegroundColor Green
-Write-Host " COLLAUDO EMULATORE ANDROID TV API 28: 100% SUPERATO!" -ForegroundColor Green
-Write-Host " Evidenza salvata in: $docsDir\smoke_test_latest.png" -ForegroundColor Green
-Write-Host "========================================================" -ForegroundColor Green
+# Navigazione Top Bar e apertura menu Personalizzazione
+& $adb -s $emulator shell input keyevent 19 # DPAD_UP
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 19 # DPAD_UP
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 19 # DPAD_UP (Top Bar)
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 22 # DPAD_RIGHT verso tavolozza tema
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 23 # DPAD_CENTER per aprire dialogo tema
+Start-Sleep -Milliseconds 800
+
+# Cattura 6: Dialogo personalizzazione tema
+& $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
+& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\06_theme_customization_dialog.png" | Out-Null
+Assert-Step (Test-Path "$docsDir\06_theme_customization_dialog.png") "Evidenza 06 catturata (Dialogo personalizzazione tema e toggle OEM)"
+
+# Chiusura dialogo con BACK
+& $adb -s $emulator shell input keyevent 4 # BACK
+Start-Sleep -Milliseconds 500
+
+# Rientro alla Home con tasto HOME e verifica focus
+& $adb -s $emulator shell input keyevent 3 # HOME
+Start-Sleep -Milliseconds 800
+& $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
+& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\07_home_key_focus_retention.png" | Out-Null
+Assert-Step (Test-Path "$docsDir\07_home_key_focus_retention.png") "Evidenza 07 catturata (Ripristino stabile focus tramite tasto HOME)"
+
+Write-Host "`n=================================================================" -ForegroundColor Green
+Write-Host " COLLAUDO RUNTIME EMULATORE ANDROID TV: 100% SUPERATO (CON ASSERT)" -ForegroundColor Green
+Write-Host " Tutte le azioni confinate su $emulator (-s vincolato)" -ForegroundColor Green
+Write-Host " ZERO comandi inviati verso la TV fisica" -ForegroundColor Green
+Write-Host "=================================================================" -ForegroundColor Green

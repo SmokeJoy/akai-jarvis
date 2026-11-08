@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">AKAI Custom Home</string>
     <string name="brand_akai">AKAI</string>
-    <string name="brand_custom_tv">CUSTOM HOME v8 LEANBACK</string>
+    <string name="brand_custom_tv">CUSTOM HOME v8</string>
     <string name="section_inputs">INGRESSI HARDWARE</string>
     <string name="section_favorites">APP PREFERITE</string>
     <string name="section_streaming">STREAMING &amp; CINEMA</string>
