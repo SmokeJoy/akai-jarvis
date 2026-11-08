@@ -174,14 +174,26 @@ public class RemoteServerService extends Service {
 
     private void handleBackupDbIntent(Intent intent) {
         String targetPath = intent.getStringExtra("target_path");
-        File dest = (targetPath != null) ? new File(targetPath) : new File(getFilesDir(), "akai_memory_snapshot.db");
+        File dest;
+        if (targetPath != null) {
+            File f = new File(targetPath);
+            dest = f.isAbsolute() ? f : new File(getFilesDir(), targetPath);
+        } else {
+            dest = new File(getFilesDir(), "akai_memory_snapshot.db");
+        }
         boolean ok = AkaiMemoryEngine.getInstance(this).performConsistentSnapshot(dest);
         Log.i(TAG, "Consistent DB backup intent completed. Success=" + ok + " Destination=" + dest.getAbsolutePath());
     }
 
     private void handleRestoreDbIntent(Intent intent) {
         String sourcePath = intent.getStringExtra("source_path");
-        File src = (sourcePath != null) ? new File(sourcePath) : new File(getFilesDir(), "akai_memory_snapshot.db");
+        File src;
+        if (sourcePath != null) {
+            File f = new File(sourcePath);
+            src = f.isAbsolute() ? f : new File(getFilesDir(), sourcePath);
+        } else {
+            src = new File(getFilesDir(), "akai_memory_snapshot.db");
+        }
         boolean ok = AkaiMemoryEngine.getInstance(this).restoreConsistentSnapshot(src);
         Log.i(TAG, "Consistent DB restore intent completed. Success=" + ok + " Source=" + src.getAbsolutePath());
     }

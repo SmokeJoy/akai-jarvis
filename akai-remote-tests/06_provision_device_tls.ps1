@@ -5,14 +5,16 @@
 # Durante la fase di review tecnica, l'esecuzione su TV fisica è congelata (HARDWARE FREEZE).
 # Lo script richiede obbligatoriamente il flag: -AllowHardwareExecution
 #
-# Caratteristiche Tecniche di Sicurezza (Revisione 6):
+# Caratteristiche Tecniche di Sicurezza (Revisione 7):
 # 1. Zero Transito su /sdcard:
 #    I file di chiavi e password NON vengono mai scritti su storage condiviso pubblico (/sdcard).
-#    I byte vengono trasferiti direttamente tramite stdin pipe sicura (adb exec-in) nello storage privato.
-# 2. Verifica Fail-Closed ad ogni passaggio:
-#    Ogni comando controlla $LASTEXITCODE e verifica l'esistenza e dimensione dei file provisionati.
-# 3. Pulizia Garantita:
-#    I file temporanei locali vengono distrutti nel blocco finally con sovrascrittura.
+# 2. Streaming Binario Universale (Send-FileViaAdbExecIn):
+#    I byte vengono trasferiti tramite [System.IO.File]::ReadAllBytes su StandardInput.BaseStream (adb exec-in).
+#    Zero dipendenza da Get-Content -Encoding Byte (incompatibile con PowerShell 7 / pwsh).
+# 3. Verifica Fail-Closed ad ogni passaggio:
+#    Ogni comando controlla $LASTEXITCODE ed esegue verifica di presenza e leggibilita' di .p12 e .pass.
+# 4. Pulizia Crittografica Garantita:
+#    I file temporanei locali vengono sovrascritti con byte nulli e rimossi nel blocco finally.
 # ==============================================================================
 
 param(
@@ -30,6 +32,45 @@ if (-not $AllowHardwareExecution) {
     Write-Host "Per autorizzare l'esecuzione e' richiesto il parametro: -AllowHardwareExecution" -ForegroundColor Yellow
     Write-Host "================================================================================" -ForegroundColor Red
     exit 1
+}
+
+function Send-FileViaAdbExecIn {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$LocalFilePath,
+        [string]$RemoteCommand
+    )
+    if (-not (Test-Path $LocalFilePath)) {
+        throw "ERRORE: File locale non trovato: $LocalFilePath"
+    }
+
+    $bytes = [System.IO.File]::ReadAllBytes($LocalFilePath)
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $AdbExe
+    $psi.Arguments = "-s $TargetAdb exec-in `"$RemoteCommand`""
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $stream = $proc.StandardInput.BaseStream
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush()
+    $stream.Close()
+
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    $stderr = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+
+    return @{
+        ExitCode = $proc.ExitCode
+        Success = ($proc.ExitCode -eq 0)
+        Output = "$stdout $stderr".Trim()
+    }
 }
 
 $jdkDir = "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\jdk-17"
@@ -76,30 +117,41 @@ try {
     & $adb connect $TargetAdb | Out-Null
 
     Write-Host "[1/3] Streaming diretto keystore PKCS12 in /data/data/$PackageName/files/server_keystore.p12..."
-    Get-Content -Path $p12File -Encoding Byte -Raw | & $adb -s $TargetAdb exec-in "run-as $PackageName sh -c 'mkdir -p files && cat > files/server_keystore.p12 && chmod 600 files/server_keystore.p12'" 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    $p12Stream = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $p12File -RemoteCommand "run-as $PackageName sh -c 'mkdir -p files; cat > files/server_keystore.p12; chmod 600 files/server_keystore.p12'"
+    if (-not $p12Stream.Success) {
         # Fallback a su se run-as negato
-        Get-Content -Path $p12File -Encoding Byte -Raw | & $adb -s $TargetAdb exec-in "su -c 'mkdir -p /data/data/$PackageName/files && cat > /data/data/$PackageName/files/server_keystore.p12 && chmod 600 /data/data/$PackageName/files/server_keystore.p12'" 2>&1 | Out-Null
+        $p12Stream = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $p12File -RemoteCommand "su -c 'mkdir -p /data/data/$PackageName/files; cat > /data/data/$PackageName/files/server_keystore.p12; chown -R ${PackageName}:${PackageName} /data/data/$PackageName/files; chmod 600 /data/data/$PackageName/files/server_keystore.p12'"
+    }
+    if (-not $p12Stream.Success) {
+        throw "ERRORE FAIL-CLOSED: Impossibile effettuare lo streaming del keystore TLS su device ($($p12Stream.Output))."
     }
 
     Write-Host "[2/3] Streaming diretto password in /data/data/$PackageName/files/server_keystore.pass..."
-    Get-Content -Path $passFile -Encoding Byte -Raw | & $adb -s $TargetAdb exec-in "run-as $PackageName sh -c 'cat > files/server_keystore.pass && chmod 600 files/server_keystore.pass'" 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Get-Content -Path $passFile -Encoding Byte -Raw | & $adb -s $TargetAdb exec-in "su -c 'cat > /data/data/$PackageName/files/server_keystore.pass && chmod 600 /data/data/$PackageName/files/server_keystore.pass'" 2>&1 | Out-Null
+    $passStream = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $passFile -RemoteCommand "run-as $PackageName sh -c 'cat > files/server_keystore.pass; chmod 600 files/server_keystore.pass'"
+    if (-not $passStream.Success) {
+        $passStream = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $passFile -RemoteCommand "su -c 'cat > /data/data/$PackageName/files/server_keystore.pass; chown ${PackageName}:${PackageName} /data/data/$PackageName/files/server_keystore.pass; chmod 600 /data/data/$PackageName/files/server_keystore.pass'"
+    }
+    if (-not $passStream.Success) {
+        throw "ERRORE FAIL-CLOSED: Impossibile effettuare lo streaming del file password su device ($($passStream.Output))."
     }
 
-    # 3. Verifica Fail-Closed dell'installazione del file su device
+    # 3. Verifica Fail-Closed dell'installazione dei file su device
     Write-Host "[3/3] Verifica presenza e dimensione dei file provisionati su device..."
-    $checkLs = & $adb -s $TargetAdb shell "run-as $PackageName ls -l files/server_keystore.p12" 2>&1
+    $checkLsP12 = & $adb -s $TargetAdb shell "run-as $PackageName ls -l files/server_keystore.p12" 2>&1
     if ($LASTEXITCODE -ne 0) {
-        $checkLs = & $adb -s $TargetAdb shell "su -c 'ls -l /data/data/$PackageName/files/server_keystore.p12'" 2>&1
+        $checkLsP12 = & $adb -s $TargetAdb shell "su -c 'ls -l /data/data/$PackageName/files/server_keystore.p12'" 2>&1
     }
 
-    if ($LASTEXITCODE -ne 0 -or $checkLs -notmatch "server_keystore\.p12") {
-        throw "ERRORE FAIL-CLOSED: Verifica provisioning fallita! Il file server_keystore.p12 non e' presente nello storage privato della TV ($checkLs)."
+    $checkLsPass = & $adb -s $TargetAdb shell "run-as $PackageName ls -l files/server_keystore.pass" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $checkLsPass = & $adb -s $TargetAdb shell "su -c 'ls -l /data/data/$PackageName/files/server_keystore.pass'" 2>&1
     }
 
-    Write-Host "Verifica completata: Keystore presente e protetto in storage privato: $checkLs" -ForegroundColor Green
+    if ($LASTEXITCODE -ne 0 -or $checkLsP12 -notmatch "server_keystore\.p12" -or $checkLsPass -notmatch "server_keystore\.pass") {
+        throw "ERRORE FAIL-CLOSED: Verifica provisioning fallita! Keystore o password non presenti nello storage privato della TV."
+    }
+
+    Write-Host "Verifica completata: Keystore e password protetti in storage privato." -ForegroundColor Green
 
     # 4. Riavvio controllato del servizio
     Write-Host "Riavvio RemoteServerService per attivare listener HTTPS con il nuovo certificato..."
@@ -109,7 +161,7 @@ try {
     Write-Host "`nPROVISIONING TLS SPECIFICO COMPLETATO E VERIFICATO CON SUCCESSO AL 100%!" -ForegroundColor Green
 
 } finally {
-    # Pulizia garantita file temporanei locali
+    # Pulizia crittografica garantita file temporanei locali
     if (Test-Path $p12File) {
         [System.IO.File]::WriteAllBytes($p12File, (New-Object byte[] 512))
         Remove-Item $p12File -Force -ErrorAction SilentlyContinue

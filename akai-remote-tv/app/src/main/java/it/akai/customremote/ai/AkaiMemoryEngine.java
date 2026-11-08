@@ -771,16 +771,34 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
         if (destination == null) return false;
         SQLiteDatabase db = getWritableDatabase();
         Cursor c = null;
+        boolean checkpointOk = false;
         try {
             // Esegui checkpoint TRUNCATE per svuotare il file WAL e committare tutte le pagine sul DB principale
             c = db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE);", null);
             if (c != null && c.moveToFirst()) {
-                Log.d(TAG, "WAL checkpoint completed prior to snapshot: code=" + c.getInt(0));
+                int busy = c.getInt(0);
+                int logFrames = c.getInt(1);
+                int checkpointed = c.getInt(2);
+                Log.d(TAG, "WAL checkpoint status: busy=" + busy + " logFrames=" + logFrames + " checkpointed=" + checkpointed);
+                if (busy == 0) {
+                    checkpointOk = true;
+                } else {
+                    Log.e(TAG, "WAL checkpoint busy or blocked by concurrent transaction (busy=" + busy + "). Aborting snapshot.");
+                    return false;
+                }
+            } else {
+                Log.e(TAG, "WAL checkpoint returned null cursor. Aborting snapshot.");
+                return false;
             }
         } catch (Exception e) {
-            Log.w(TAG, "WAL checkpoint warning: " + e.getMessage());
+            Log.e(TAG, "WAL checkpoint fatal error: " + e.getMessage(), e);
+            return false;
         } finally {
             if (c != null) c.close();
+        }
+
+        if (!checkpointOk) {
+            return false;
         }
 
         try {
@@ -790,16 +808,58 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                 destination.getParentFile().mkdirs();
             }
             copyFile(currentDb, destination);
-            Log.i(TAG, "Consistent database snapshot created at: " + destination.getAbsolutePath() + " (" + destination.length() + " bytes)");
+
+            // Validazione Fail-Closed dell'integrità del database appena clonato
+            SQLiteDatabase testDb = SQLiteDatabase.openDatabase(destination.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
+            Cursor ic = null;
+            boolean valid = false;
+            try {
+                ic = testDb.rawQuery("PRAGMA integrity_check;", null);
+                if (ic != null && ic.moveToFirst()) {
+                    valid = "ok".equalsIgnoreCase(ic.getString(0));
+                }
+            } finally {
+                if (ic != null) ic.close();
+                testDb.close();
+            }
+
+            if (!valid) {
+                Log.e(TAG, "Cloned snapshot failed integrity_check. Removing corrupt snapshot.");
+                destination.delete();
+                return false;
+            }
+
+            Log.i(TAG, "Consistent database snapshot created and integrity-verified at: " + destination.getAbsolutePath() + " (" + destination.length() + " bytes)");
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Failed creating consistent snapshot: " + e.getMessage(), e);
+            if (destination.exists()) destination.delete();
             return false;
         }
     }
 
     public synchronized boolean restoreConsistentSnapshot(File source) {
         if (source == null || !source.exists() || source.length() < 512) return false;
+
+        // Validazione preventiva integrità del file sorgente
+        try {
+            SQLiteDatabase testSrc = SQLiteDatabase.openDatabase(source.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
+            Cursor ic = testSrc.rawQuery("PRAGMA integrity_check;", null);
+            boolean srcOk = false;
+            if (ic != null && ic.moveToFirst()) {
+                srcOk = "ok".equalsIgnoreCase(ic.getString(0));
+            }
+            if (ic != null) ic.close();
+            testSrc.close();
+            if (!srcOk) {
+                Log.e(TAG, "Source snapshot failed integrity_check. Refusing to restore corrupted file.");
+                return false;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Unable to verify source snapshot integrity: " + e.getMessage());
+            return false;
+        }
+
         try {
             close();
             File currentDb = mContext.getDatabasePath(DB_NAME);
