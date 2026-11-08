@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Base Deep Obsidian / Dark Navy -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#070A14" />
+        </shape>
+    </item>
+
+    <!-- Cinematic Ambient Flowing Light Wave (135° diagonal sweep) -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:startColor="#1E070D"
+                android:centerColor="#080D1A"
+                android:endColor="#1C1105"
+                android:type="linear" />
+        </shape>
+    </item>
+</layer-list>

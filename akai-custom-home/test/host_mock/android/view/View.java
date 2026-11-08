@@ -35,6 +35,8 @@ public class View {
     private int scrollX = 0;
     private int scrollY = 0;
 
+    public void setBackgroundResource(int resid) {}
+    public int getTop() { return 0; }
     public void setTag(Object tag) { this.tag = tag; }
     public Object getTag() { return tag; }
 

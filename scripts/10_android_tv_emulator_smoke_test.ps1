@@ -128,11 +128,15 @@ Assert-Step ($sdkVer -eq "28") "Target OS API Level rigorosamente Android 9 (API
 Assert-Step ($model -match "atv|emulator|sdk_google_atv") "Profilo hardware emulatore TV validato (letto: $model)"
 Write-Host "Target validato al 100%: $model (Android $release, SDK $sdkVer)" -ForegroundColor Green
 
-# 4. Popolamento Catalogo Streaming e App di Test (se disponibile)
-if (Test-Path $testSuiteApk) {
-    Write-Host "`n[3/6] Installazione suite catalogo streaming di prova su $emulator..." -ForegroundColor Yellow
-    $installSuiteOut = & $adb -s $emulator install -r $testSuiteApk
-    Assert-Step ($installSuiteOut -match "Success") "Suite app streaming (YouTube, Netflix, Prime, RaiPlay, VLC, Kodi) installata con successo"
+# 4. Popolamento Catalogo Streaming e App di Test (8 Pacchetti Indipendenti)
+$testSuiteDir = Join-Path $toolsDir "test-apps\output"
+if (Test-Path $testSuiteDir) {
+    Write-Host "`n[3/6] Installazione suite catalogo 8 app streaming indipendenti su $emulator..." -ForegroundColor Yellow
+    $apks = Get-ChildItem -Path $testSuiteDir -Filter "*.apk"
+    foreach ($testApk in $apks) {
+        $installSuiteOut = & $adb -s $emulator install -r $testApk.FullName
+        Assert-Step ($installSuiteOut -match "Success") "Installata app streaming di test: $($testApk.Name)"
+    }
 }
 
 # 5. Installazione Streamed AKAI Custom Home v8
@@ -152,23 +156,29 @@ Assert-Step ($windowFocus -match "it\.akai\.customhome/\.MainActivity|it\.akai\.
 Write-Host "`n[6/6] Esecuzione sequenza telecomando e verifica navigazione righe..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $docsDir | Out-Null
 
-# Cattura 1: Home Screen pulita all'avvio (4 righe con Catalogo Streaming completo)
+# Cattura 1: Home Screen pulita all'avvio (Premium UI con Sidebar, Top Bar e 4 Righe)
 & $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
 & $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\01_home_screen_clean.png" | Out-Null
-Assert-Step (Test-Path "$docsDir\01_home_screen_clean.png") "Evidenza 01 catturata (Home completa con catalogo streaming)"
+Assert-Step (Test-Path "$docsDir\01_home_screen_clean.png") "Evidenza 01 catturata (Home Premium completa a 4 righe con sidebar)"
 
-# Navigazione D-Pad: Scende a Ingressi HDMI poi alla riga Streaming
-& $adb -s $emulator shell input keyevent 20 # DPAD_DOWN -> Ingressi HDMI
-Start-Sleep -Milliseconds 300
-& $adb -s $emulator shell input keyevent 20 # DPAD_DOWN -> Streaming Apps (YouTube / Netflix)
+# Navigazione D-Pad: DPAD_LEFT sposta il focus nella Sidebar di navigazione a sinistra
+& $adb -s $emulator shell input keyevent 21 # DPAD_LEFT -> Focus su Sidebar (Home)
 Start-Sleep -Milliseconds 400
 
-# Cattura 2: Focus e zoom su card Streaming (YouTube / Netflix)
+# Cattura 2: Focus su Sidebar di navigazione a sinistra
 & $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
-& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\02_streaming_focus_scale.png" | Out-Null
-Assert-Step (Test-Path "$docsDir\02_streaming_focus_scale.png") "Evidenza 02 catturata (Focus dorato e zoom 1.08x su card streaming)"
+& $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\02_sidebar_navigation_focus.png" | Out-Null
+Assert-Step (Test-Path "$docsDir\02_sidebar_navigation_focus.png") "Evidenza 02 catturata (Navigazione Sidebar a sinistra attiva)"
 
-# Scorrimento orizzontale della riga streaming verso destra
+# Navigazione D-Pad: Dalla Sidebar preme DPAD_RIGHT per tornare a TV Digitale, poi scende a Streaming
+& $adb -s $emulator shell input keyevent 22 # DPAD_RIGHT -> TV Digitale
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 20 # DPAD_DOWN -> App Preferite
+Start-Sleep -Milliseconds 300
+& $adb -s $emulator shell input keyevent 20 # DPAD_DOWN -> Streaming Apps
+Start-Sleep -Milliseconds 400
+
+# Scorrimento orizzontale della riga streaming (8 app indipendenti)
 & $adb -s $emulator shell input keyevent 22 # DPAD_RIGHT
 Start-Sleep -Milliseconds 300
 & $adb -s $emulator shell input keyevent 22 # DPAD_RIGHT
@@ -176,10 +186,10 @@ Start-Sleep -Milliseconds 300
 & $adb -s $emulator shell input keyevent 22 # DPAD_RIGHT
 Start-Sleep -Milliseconds 300
 
-# Cattura 3: Scorrimento orizzontale riga Streaming (Prime Video, RaiPlay, Disney+, VLC)
+# Cattura 3: Scorrimento orizzontale riga Streaming popolata con 8 app indipendenti
 & $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
 & $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\03_streaming_horizontal_scroll.png" | Out-Null
-Assert-Step (Test-Path "$docsDir\03_streaming_horizontal_scroll.png") "Evidenza 03 catturata (Scorrimento orizzontale riga streaming)"
+Assert-Step (Test-Path "$docsDir\03_streaming_horizontal_scroll.png") "Evidenza 03 catturata (Scorrimento riga streaming con 8 app indipendenti)"
 
 # Discesa alla riga "Tutte le Applicazioni" e pressione prolungata OK
 & $adb -s $emulator shell input keyevent 20 # DPAD_DOWN -> Tutte le Applicazioni
@@ -187,10 +197,10 @@ Start-Sleep -Milliseconds 400
 & $adb -s $emulator shell input keyevent --longpress 23 # DPAD_CENTER LONGPRESS
 Start-Sleep -Milliseconds 800
 
-# Cattura 4: Dialogo opzioni applicazione (Aggiungi ai Preferiti)
+# Cattura 4: Dialogo opzioni in stile Dark Glassmorphic
 & $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
 & $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\04_app_options_dialog.png" | Out-Null
-Assert-Step (Test-Path "$docsDir\04_app_options_dialog.png") "Evidenza 04 catturata (Dialogo Aggiungi ai Preferiti con longpress OK)"
+Assert-Step (Test-Path "$docsDir\04_app_options_dialog.png") "Evidenza 04 catturata (Dialogo Dark Glassmorphic con accenti dorati)"
 
 # Selezione "Aggiungi ai Preferiti" con DPAD_CENTER
 & $adb -s $emulator shell input keyevent 23 # DPAD_CENTER
@@ -213,10 +223,10 @@ Start-Sleep -Milliseconds 300
 & $adb -s $emulator shell input keyevent 23 # DPAD_CENTER per aprire dialogo tema
 Start-Sleep -Milliseconds 800
 
-# Cattura 6: Dialogo personalizzazione tema
+# Cattura 6: Dialogo personalizzazione tema in stile Dark Glassmorphic
 & $adb -s $emulator shell "screencap -p /data/local/tmp/screencap.png"
 & $adb -s $emulator pull /data/local/tmp/screencap.png "$docsDir\06_theme_customization_dialog.png" | Out-Null
-Assert-Step (Test-Path "$docsDir\06_theme_customization_dialog.png") "Evidenza 06 catturata (Dialogo personalizzazione tema e toggle OEM)"
+Assert-Step (Test-Path "$docsDir\06_theme_customization_dialog.png") "Evidenza 06 catturata (Menu Personalizzazione Dark Glassmorphic)"
 
 # Chiusura dialogo con BACK
 & $adb -s $emulator shell input keyevent 4 # BACK

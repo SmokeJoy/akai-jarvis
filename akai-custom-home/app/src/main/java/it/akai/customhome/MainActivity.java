@@ -214,6 +214,13 @@ public class MainActivity extends Activity {
     private HorizontalScrollView scrollStreaming;
     private HorizontalScrollView scrollAllApps;
 
+    // Sidebar navigation rail
+    private View sidebarNavHome;
+    private View sidebarNavMovies;
+    private View sidebarNavApps;
+    private View sidebarNavLiveTv;
+    private View sidebarNavSettings;
+
     // Data lists
     private final List<AppItem> allApps = new ArrayList<AppItem>();
     private final List<AppItem> favoriteApps = new ArrayList<AppItem>();
@@ -276,6 +283,13 @@ public class MainActivity extends Activity {
         scrollStreaming = (HorizontalScrollView) findViewById(R.id.scroll_streaming);
         scrollAllApps = (HorizontalScrollView) findViewById(R.id.scroll_all_apps);
 
+        sidebarNavHome = findViewById(R.id.sidebar_nav_home);
+        sidebarNavMovies = findViewById(R.id.sidebar_nav_movies);
+        sidebarNavApps = findViewById(R.id.sidebar_nav_apps);
+        sidebarNavLiveTv = findViewById(R.id.sidebar_nav_livetv);
+        sidebarNavSettings = findViewById(R.id.sidebar_nav_settings);
+
+        setupSidebarNavigation();
         setupTopBar();
         setupHardwareInputs();
         loadInstalledApps();
@@ -404,7 +418,15 @@ public class MainActivity extends Activity {
         int accent = ACCENT_COLORS[currentAccentIndex];
 
         if (layoutMainRoot != null) {
-            layoutMainRoot.setBackgroundColor(bg);
+            if (currentBgIndex == 0) {
+                try {
+                    layoutMainRoot.setBackgroundResource(R.drawable.bg_cinematic_gradient);
+                } catch (Throwable t) {
+                    layoutMainRoot.setBackgroundColor(bg);
+                }
+            } else {
+                layoutMainRoot.setBackgroundColor(bg);
+            }
         }
         if (tvTitleFavorites != null) {
             tvTitleFavorites.setTextColor(accent);
@@ -572,8 +594,122 @@ public class MainActivity extends Activity {
         updateWifiStatus();
     }
 
+    private void setupSidebarNavigation() {
+        if (sidebarNavHome != null) {
+            attachFocusScale(sidebarNavHome, 1.12f);
+            sidebarNavHome.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (scrollMainBody != null) scrollMainBody.smoothScrollTo(0, 0);
+                    if (btnDtv != null) btnDtv.requestFocus();
+                }
+            });
+            sidebarNavHome.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (btnDtv != null) { btnDtv.requestFocus(); return true; }
+                    }
+                    return false;
+                }
+            });
+        }
+
+        if (sidebarNavMovies != null) {
+            attachFocusScale(sidebarNavMovies, 1.12f);
+            sidebarNavMovies.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (scrollMainBody != null && sectionStreamingContainer != null) {
+                        scrollMainBody.smoothScrollTo(0, sectionStreamingContainer.getTop());
+                    }
+                    if (llStreamingContainer != null && llStreamingContainer.getChildCount() > 0) {
+                        llStreamingContainer.getChildAt(0).requestFocus();
+                    }
+                }
+            });
+            sidebarNavMovies.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (llStreamingContainer != null && llStreamingContainer.getChildCount() > 0) {
+                            llStreamingContainer.getChildAt(0).requestFocus();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+        }
+
+        if (sidebarNavApps != null) {
+            attachFocusScale(sidebarNavApps, 1.12f);
+            sidebarNavApps.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (scrollMainBody != null && sectionAllAppsContainer != null) {
+                        scrollMainBody.smoothScrollTo(0, sectionAllAppsContainer.getTop());
+                    }
+                    if (llAllAppsContainer != null && llAllAppsContainer.getChildCount() > 0) {
+                        llAllAppsContainer.getChildAt(0).requestFocus();
+                    }
+                }
+            });
+            sidebarNavApps.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (llAllAppsContainer != null && llAllAppsContainer.getChildCount() > 0) {
+                            llAllAppsContainer.getChildAt(0).requestFocus();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+        }
+
+        if (sidebarNavLiveTv != null) {
+            attachFocusScale(sidebarNavLiveTv, 1.12f);
+            sidebarNavLiveTv.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchDtv();
+                }
+            });
+            sidebarNavLiveTv.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (btnDtv != null) { btnDtv.requestFocus(); return true; }
+                    }
+                    return false;
+                }
+            });
+        }
+
+        if (sidebarNavSettings != null) {
+            attachFocusScale(sidebarNavSettings, 1.12f);
+            sidebarNavSettings.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchSettings();
+                }
+            });
+            sidebarNavSettings.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (btnHomeSettings != null) { btnHomeSettings.requestFocus(); return true; }
+                    }
+                    return false;
+                }
+            });
+        }
+    }
+
     private void showThemeDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("🎨 Personalizzazione AKAI Home v8 Leanback");
 
         String[] options = {
@@ -622,7 +758,7 @@ public class MainActivity extends Activity {
     }
 
     private void showBackgroundSelectorDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("🎨 Scegli Sfondo TV");
 
         builder.setSingleChoiceItems(BG_NAMES, currentBgIndex, new DialogInterface.OnClickListener() {
@@ -640,7 +776,7 @@ public class MainActivity extends Activity {
     }
 
     private void showAccentSelectorDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("✨ Scegli Colore Evidenziazione Focus (WCAG AAA)");
 
         builder.setSingleChoiceItems(ACCENT_NAMES, currentAccentIndex, new DialogInterface.OnClickListener() {
@@ -658,7 +794,7 @@ public class MainActivity extends Activity {
     }
 
     private void showLayoutOrderSelectorDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("📐 Disposizione Sezioni Home");
 
         String[] layoutNames = {
@@ -1430,7 +1566,7 @@ public class MainActivity extends Activity {
     }
 
     public void showFavoriteOptionsDialog(final AppItem fav, final int index) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle(fav.label + " (Preferiti)");
 
         List<String> options = new ArrayList<String>();
@@ -1481,7 +1617,7 @@ public class MainActivity extends Activity {
     }
 
     public void showAppOptionsDialog(final AppItem item) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle(item.label);
 
         final boolean isFav = favoritePackages.contains(item.packageName);
@@ -1533,7 +1669,7 @@ public class MainActivity extends Activity {
             names.add((i + 1) + ". " + favoriteApps.get(i).label);
         }
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("Seleziona app da riordinare");
         builder.setItems(names.toArray(new CharSequence[names.size()]), new DialogInterface.OnClickListener() {
             @Override

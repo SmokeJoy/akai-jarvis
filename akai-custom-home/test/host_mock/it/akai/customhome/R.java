@@ -4,6 +4,12 @@ public class R {
         public static final int activity_main = 1;
         public static final int item_leanback_card = 2;
     }
+    public static class style {
+        public static final int Theme_Akai_Dialog = 100;
+    }
+    public static class drawable {
+        public static final int bg_cinematic_gradient = 200;
+    }
     public static class id {
         public static final int layout_main_root = 1;
         public static final int scroll_main_body = 2;
@@ -38,5 +44,10 @@ public class R {
         public static final int scroll_all_apps = 31;
         public static final int iv_card_icon = 32;
         public static final int tv_card_label = 33;
+        public static final int sidebar_nav_home = 34;
+        public static final int sidebar_nav_movies = 35;
+        public static final int sidebar_nav_apps = 36;
+        public static final int sidebar_nav_livetv = 37;
+        public static final int sidebar_nav_settings = 38;
     }
 }
