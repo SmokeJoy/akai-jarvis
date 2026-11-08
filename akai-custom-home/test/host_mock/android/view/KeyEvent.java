@@ -11,7 +11,9 @@ public class KeyEvent {
     public static final int KEYCODE_DPAD_LEFT = 21;
     public static final int KEYCODE_DPAD_RIGHT = 22;
     public static final int KEYCODE_DPAD_CENTER = 23;
+    public static final int KEYCODE_VOLUME_UP = 24;
     public static final int KEYCODE_ENTER = 66;
+    public static final int KEYCODE_MENU = 82;
 
     private final int action;
     private final int keyCode;

@@ -14,10 +14,13 @@ if (Test-Path $testBuildDir) { Remove-Item $testBuildDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $testBuildDir | Out-Null
 
 $mockSources = Get-ChildItem -Recurse -Path (Join-Path $workspace "akai-custom-home\test\host_mock") -Filter "*.java" | Select-Object -ExpandProperty FullName
-$appSources = Join-Path $workspace "akai-custom-home\app\src\main\java\it\akai\customhome\MainActivity.java"
+$appSources = Get-ChildItem -Path (Join-Path $workspace "akai-custom-home\app\src\main\java\it\akai\customhome") -Filter "*.java" | Select-Object -ExpandProperty FullName
 $testSources = Join-Path $workspace "akai-custom-home\test\it\akai\customhome\LauncherUnitTests.java"
 
-$allSources = @() + $mockSources + @($appSources, $testSources)
+$allSources = @()
+$allSources += $mockSources
+$allSources += $appSources
+$allSources += $testSources
 
 Write-Host "Compilazione test unitari Launcher v8..." -ForegroundColor Cyan
 & $javac -encoding UTF-8 -d $testBuildDir $allSources

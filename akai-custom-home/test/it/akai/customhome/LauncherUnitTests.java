@@ -621,6 +621,103 @@ public class LauncherUnitTests {
         return 0.2126 * rLin + 0.7152 * gLin + 0.0722 * bLin;
     }
 
+    // =========================================================================
+    // SUITE 6: AkaiMenuHomeService (Tasto MENU -> Home v8 e Anti-Collisione OEM)
+    // =========================================================================
+
+    private static void testMenuKeyOnThirdPartyAppTriggersGlobalHome() {
+        System.out.println("\nTest 6.1: Pressione Tasto MENU su App Terze (YouTube/Netflix/RaiPlay) -> Trigger GLOBAL_ACTION_HOME");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+
+        // Simula foreground YouTube
+        service.setCurrentPackageForTest("com.google.android.youtube.tv");
+
+        KeyEvent down = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU);
+        boolean downConsumed = service.onKeyEvent(down);
+        assertTrue("MENU DOWN su app streaming deve essere consumato (return true)", downConsumed);
+        assertEquals("Nessuna azione globale eseguita su ACTION_DOWN", 0, service.getGlobalActionsPerformed());
+
+        KeyEvent up = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
+        boolean upConsumed = service.onKeyEvent(up);
+        assertTrue("MENU UP su app streaming deve essere consumato (return true)", upConsumed);
+        assertEquals("Esattamente 1 azione globale eseguita su ACTION_UP", 1, service.getGlobalActionsPerformed());
+        assertEquals("Azione globale eseguita deve essere GLOBAL_ACTION_HOME", 2, service.getLastGlobalAction());
+
+        // Simula foreground Netflix
+        service.setCurrentPackageForTest("com.netflix.ninja");
+        service.resetGlobalActionsCount();
+        service.onKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU));
+        assertEquals("MENU UP su Netflix deve attivare GLOBAL_ACTION_HOME", 1, service.getGlobalActionsPerformed());
+
+        // Simula foreground RaiPlay
+        service.setCurrentPackageForTest("it.rainet.raiplay");
+        service.resetGlobalActionsCount();
+        service.onKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU));
+        assertEquals("MENU UP su RaiPlay deve attivare GLOBAL_ACTION_HOME", 1, service.getGlobalActionsPerformed());
+    }
+
+    private static void testMenuKeyOnOemDtvAppPassesThrough() {
+        System.out.println("\nTest 6.2: Pressione Tasto MENU su App OEM TV Digitale -> Passthrough Trasparente (Zero Intercettazione)");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+
+        // 1. Live TV Digitale terrestre
+        service.setCurrentPackageForTest("cn.cultraview.tv");
+        KeyEvent down = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU);
+        boolean downConsumed = service.onKeyEvent(down);
+        assertFalse("MENU DOWN su TV Digitale NON deve essere consumato (pass-through OEM)", downConsumed);
+
+        KeyEvent up = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
+        boolean upConsumed = service.onKeyEvent(up);
+        assertFalse("MENU UP su TV Digitale NON deve essere consumato (pass-through OEM)", upConsumed);
+        assertEquals("ZERO azioni globali eseguite su app TV OEM", 0, service.getGlobalActionsPerformed());
+
+        // 2. MStar TV Player
+        service.setCurrentPackageForTest("com.mstar.tv.tvplayer");
+        assertFalse("MENU su com.mstar.tv.tvplayer deve passare all'OEM", service.onKeyEvent(up));
+        assertEquals("ZERO azioni globali eseguite su MStar player", 0, service.getGlobalActionsPerformed());
+
+        // 3. Technical Open Launcher
+        service.setCurrentPackageForTest("cn.cultraview.launcher.technical.open");
+        assertFalse("MENU su impostazioni tecniche OEM deve passare all'OEM", service.onKeyEvent(up));
+        assertEquals("ZERO azioni globali eseguite su menu tecnico OEM", 0, service.getGlobalActionsPerformed());
+    }
+
+    private static void testNonMenuKeysPassThrough() {
+        System.out.println("\nTest 6.3: Altri Tasti (DPAD, OK, BACK, VOLUME) -> Nessuna Intercettazione");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+        service.setCurrentPackageForTest("com.google.android.youtube.tv");
+
+        KeyEvent dpadCenter = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
+        assertFalse("DPAD_CENTER non deve essere intercettato dal servizio", service.onKeyEvent(dpadCenter));
+
+        KeyEvent back = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK);
+        assertFalse("BACK non deve essere intercettato dal servizio", service.onKeyEvent(back));
+
+        KeyEvent volUp = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_VOLUME_UP);
+        assertFalse("VOLUME_UP non deve essere intercettato dal servizio", service.onKeyEvent(volUp));
+        assertEquals("ZERO azioni globali su tasti non-MENU", 0, service.getGlobalActionsPerformed());
+    }
+
+    private static void testWindowStateChangedUpdatesPackage() {
+        System.out.println("\nTest 6.4: Eventi TYPE_WINDOW_STATE_CHANGED -> Aggiornamento Sicuro Package Corrente");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+
+        android.view.accessibility.AccessibilityEvent event1 =
+                new android.view.accessibility.AccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED, "com.disney.disneyplus");
+        service.onAccessibilityEvent(event1);
+        assertEquals("Package aggiornato a Disney+", "com.disney.disneyplus", service.getCurrentPackage());
+
+        android.view.accessibility.AccessibilityEvent event2 =
+                new android.view.accessibility.AccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED, "cn.cultraview.tv");
+        service.onAccessibilityEvent(event2);
+        assertEquals("Package aggiornato a TV OEM", "cn.cultraview.tv", service.getCurrentPackage());
+        assertTrue("cn.cultraview.tv correttamente riconosciuto come OEM", service.isOemPassthroughPackage(service.getCurrentPackage()));
+    }
+
     public static void main(String[] args) {
         System.out.println("================================================================");
         System.out.println("  AKAI CUSTOM HOME v8 LEANBACK — SUITE DI TEST UNITARI");
@@ -653,6 +750,12 @@ public class LauncherUnitTests {
 
             // WCAG Contrast
             testColorContrastWCAG();
+
+            // Suite 6: AkaiMenuHomeService (Tasto MENU -> Home v8 e Anti-Collisione OEM)
+            testMenuKeyOnThirdPartyAppTriggersGlobalHome();
+            testMenuKeyOnOemDtvAppPassesThrough();
+            testNonMenuKeysPassThrough();
+            testWindowStateChangedUpdatesPackage();
 
             System.out.println("\n================================================================");
             System.out.println("  RISULTATO FINALE: " + testsPassed + "/" + testsRun + " TEST SUPERATI (100% PASS)");
