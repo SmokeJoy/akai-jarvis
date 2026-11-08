@@ -444,7 +444,7 @@ public class LauncherUnitTests {
     // -------------------------------------------------------------------------
 
     public static void testAppListsEqualDiffing() {
-        System.out.println("\nTest 3.1: Algoritmo di Diffing per Refresh Non Distruttivo");
+        System.out.println("\nTest 3.1: Algoritmo di Diffing per Refresh Non Distruttivo e Null-Safety (P1)");
         List<MainActivity.AppItem> listA = new ArrayList<MainActivity.AppItem>();
         listA.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", null));
         listA.add(new MainActivity.AppItem("App 2", "com.test.app2", "Act2", null));
@@ -473,6 +473,56 @@ public class LauncherUnitTests {
         listDifferentActivity.add(new MainActivity.AppItem("App 1", "com.test.app1", "NewActivity", null));
         listDifferentActivity.add(new MainActivity.AppItem("App 2", "com.test.app2", "Act2", null));
         assertFalse("Liste con activity name modificata devono risultare differenti", MainActivity.areAppListsEqual(listA, listDifferentActivity));
+
+        // 1. Confronto simmetrico null-safe per activityName e label (Review 4)
+        List<MainActivity.AppItem> listNullOldActivity = new ArrayList<MainActivity.AppItem>();
+        listNullOldActivity.add(new MainActivity.AppItem("App 1", "com.test.app1", null, null));
+        assertFalse("Vecchio record con activityName null vs nuovo non-null deve risultare differente", MainActivity.areAppListsEqual(listNullOldActivity, listA.subList(0, 1)));
+        assertFalse("Vecchio record non-null vs nuovo activityName null deve risultare differente", MainActivity.areAppListsEqual(listA.subList(0, 1), listNullOldActivity));
+
+        List<MainActivity.AppItem> listNullOldLabel = new ArrayList<MainActivity.AppItem>();
+        listNullOldLabel.add(new MainActivity.AppItem(null, "com.test.app1", "Act1", null));
+        assertFalse("Vecchio record con label null vs nuovo non-null deve risultare differente", MainActivity.areAppListsEqual(listNullOldLabel, listA.subList(0, 1)));
+        assertFalse("Vecchio record non-null vs nuovo label null deve risultare differente", MainActivity.areAppListsEqual(listA.subList(0, 1), listNullOldLabel));
+
+        List<MainActivity.AppItem> listBothNull = new ArrayList<MainActivity.AppItem>();
+        listBothNull.add(new MainActivity.AppItem(null, "com.test.app1", null, null));
+        List<MainActivity.AppItem> listBothNull2 = new ArrayList<MainActivity.AppItem>();
+        listBothNull2.add(new MainActivity.AppItem(null, "com.test.app1", null, null));
+        assertTrue("Entrambi i record con campi null devono risultare uguali", MainActivity.areAppListsEqual(listBothNull, listBothNull2));
+
+        // 2. Rilevazione variazione icona (stesso package, label e activity - Review 4)
+        android.graphics.drawable.Drawable icon1 = new android.graphics.drawable.Drawable();
+        android.graphics.drawable.Drawable icon2 = new android.graphics.drawable.Drawable();
+        List<MainActivity.AppItem> listIcon1 = new ArrayList<MainActivity.AppItem>();
+        listIcon1.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1));
+        List<MainActivity.AppItem> listIcon2 = new ArrayList<MainActivity.AppItem>();
+        listIcon2.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon2));
+        assertFalse("Stesso package/label/activity ma icona aggiornata deve risultare differente (rebuild richiesto)", MainActivity.areAppListsEqual(listIcon1, listIcon2));
+
+        List<MainActivity.AppItem> listIconNull = new ArrayList<MainActivity.AppItem>();
+        listIconNull.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", null));
+        assertFalse("Icona null vs icona non-null deve risultare differente", MainActivity.areAppListsEqual(listIconNull, listIcon1));
+        assertFalse("Icona non-null vs icona null deve risultare differente", MainActivity.areAppListsEqual(listIcon1, listIconNull));
+
+        List<MainActivity.AppItem> listSameIcon = new ArrayList<MainActivity.AppItem>();
+        listSameIcon.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1));
+        assertTrue("Stessa icona deve risultare uguale", MainActivity.areAppListsEqual(listIcon1, listSameIcon));
+
+        // 3. Rilevazione aggiornamento app tramite versionCode e lastUpdateTime (Review 4)
+        List<MainActivity.AppItem> listV1 = new ArrayList<MainActivity.AppItem>();
+        listV1.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1, 1, 1000L));
+        List<MainActivity.AppItem> listV2 = new ArrayList<MainActivity.AppItem>();
+        listV2.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1, 2, 1000L));
+        assertFalse("Variazione di versionCode deve essere rilevata come aggiornamento", MainActivity.areAppListsEqual(listV1, listV2));
+
+        List<MainActivity.AppItem> listTimeUpdated = new ArrayList<MainActivity.AppItem>();
+        listTimeUpdated.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1, 1, 2000L));
+        assertFalse("Variazione di lastUpdateTime deve essere rilevata come aggiornamento", MainActivity.areAppListsEqual(listV1, listTimeUpdated));
+
+        List<MainActivity.AppItem> listV1Clone = new ArrayList<MainActivity.AppItem>();
+        listV1Clone.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", icon1, 1, 1000L));
+        assertTrue("Versione e timestamp identici devono risultare uguali", MainActivity.areAppListsEqual(listV1, listV1Clone));
     }
 
     public static void testCardTagPackageAndSectionAssociation() {

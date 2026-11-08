@@ -6,4 +6,5 @@ public class PackageManager {
     public List<ResolveInfo> queryIntentActivities(Intent i, int f) { return new ArrayList<ResolveInfo>(); }
     public Intent getLaunchIntentForPackage(String p) { return new Intent(); }
     public Intent getLeanbackLaunchIntentForPackage(String p) { return new Intent(); }
+    public PackageInfo getPackageInfo(String packageName, int flags) throws Exception { return null; }
 }

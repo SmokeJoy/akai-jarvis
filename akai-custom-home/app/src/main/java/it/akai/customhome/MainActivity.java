@@ -9,6 +9,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
@@ -50,16 +51,27 @@ public class MainActivity extends Activity {
         public final String packageName;
         public final String activityName;
         public final Drawable icon;
+        public final int versionCode;
+        public final long lastUpdateTime;
 
         public AppItem(String label, String packageName, String activityName, Drawable icon) {
+            this(label, packageName, activityName, icon, 0, 0L);
+        }
+
+        public AppItem(String label, String packageName, String activityName, Drawable icon, int versionCode, long lastUpdateTime) {
             this.label = label;
             this.packageName = packageName;
             this.activityName = activityName;
             this.icon = icon;
+            this.versionCode = versionCode;
+            this.lastUpdateTime = lastUpdateTime;
         }
 
         @Override
         public int compareTo(AppItem other) {
+            if (this.label == null && other.label == null) return 0;
+            if (this.label == null) return -1;
+            if (other.label == null) return 1;
             return this.label.compareToIgnoreCase(other.label);
         }
     }
@@ -922,11 +934,38 @@ public class MainActivity extends Activity {
         for (int i = 0; i < list1.size(); i++) {
             AppItem a = list1.get(i);
             AppItem b = list2.get(i);
-            if (!a.packageName.equals(b.packageName)) return false;
-            if (a.activityName != null && !a.activityName.equals(b.activityName)) return false;
-            if (a.label != null && !a.label.equals(b.label)) return false;
+            if (!areAppItemsEqual(a, b)) return false;
         }
         return true;
+    }
+
+    public static boolean areAppItemsEqual(AppItem a, AppItem b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (!objectsEqual(a.packageName, b.packageName)) return false;
+        if (!objectsEqual(a.activityName, b.activityName)) return false;
+        if (!objectsEqual(a.label, b.label)) return false;
+        if (a.versionCode != b.versionCode) return false;
+        if (a.lastUpdateTime != b.lastUpdateTime) return false;
+        if (!areIconsEqual(a.icon, b.icon)) return false;
+        return true;
+    }
+
+    public static boolean areIconsEqual(Drawable i1, Drawable i2) {
+        if (i1 == i2) return true;
+        if (i1 == null || i2 == null) return false;
+        Drawable.ConstantState cs1 = i1.getConstantState();
+        Drawable.ConstantState cs2 = i2.getConstantState();
+        if (cs1 != null && cs2 != null) {
+            return cs1.equals(cs2);
+        }
+        return i1.equals(i2);
+    }
+
+    public static boolean objectsEqual(Object a, Object b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        return a.equals(b);
     }
 
     private void restoreFocusState(final String focusedPkg, final int focusedSection, final int focusedViewId) {
@@ -1043,7 +1082,17 @@ public class MainActivity extends Activity {
                     label = pkg;
                 }
                 Drawable icon = ri.loadIcon(pm);
-                AppItem item = new AppItem(label, pkg, act, icon);
+                int versionCode = 0;
+                long lastUpdateTime = 0L;
+                try {
+                    PackageInfo pi = pm.getPackageInfo(pkg, 0);
+                    if (pi != null) {
+                        versionCode = pi.versionCode;
+                        lastUpdateTime = pi.lastUpdateTime;
+                    }
+                } catch (Exception ignored) {
+                }
+                AppItem item = new AppItem(label, pkg, act, icon, versionCode, lastUpdateTime);
                 newAllApps.add(item);
                 if (isStreamingApp(item)) {
                     newStreamingApps.add(item);
