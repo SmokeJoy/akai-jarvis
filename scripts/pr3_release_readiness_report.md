@@ -2,8 +2,8 @@
 
 **Data**: 08 Novembre 2026  
 **PR Riferimento**: [#3 — AKAI Custom Home v8 Leanback UI](https://github.com/SmokeJoy/akai-jarvis/pull/3) (ramo `feature/launcher-ui-v8-leanback`)  
-**Stato Revisione**: Riscontro completo ai **4 rilievi P1 della Review 11** (`#issuecomment-6721919170`)  
-**Stato Codice Java/UI**: **FROZEN** al codice verificato su emulatore (`e193008` — nessuna modifica a `MainActivity.java`, XML UI o test Java). Aggiornati esclusivamente lo script di packaging ([`scripts/09_compile_akai_home_apk.ps1`](file:///c:/Users/danie/OneDrive/Documenti/Antygravity/Akay/scripts/09_compile_akai_home_apk.ps1)) e la pipeline CI ([`.github/workflows/ci-launcher.yml`](file:///c:/Users/danie/OneDrive/Documenti/Antygravity/Akay/.github/workflows/ci-launcher.yml)) per tracciabilità versione (`versionCode=9`, `8.1.0`), distinzione firma debug/release e verifica statica build parallela.  
+**Stato Revisione**: Riscontro completo ai **4 rilievi P1 della Review 11** (`#issuecomment-6721919170`) e al **P1 residuo di packaging della Review 12** (`#issuecomment-6722061255`)  
+**Stato Codice Java/UI**: **FROZEN** al codice verificato su emulatore (`e193008` — nessuna modifica a `MainActivity.java`, XML UI o test Java). Aggiornati esclusivamente lo script di packaging ([`scripts/09_compile_akai_home_apk.ps1`](file:///c:/Users/danie/OneDrive/Documenti/Antygravity/Akay/scripts/09_compile_akai_home_apk.ps1)) — eliminando qualsiasi password in chiaro sugli argomenti CLI di `apksigner` e PowerShell — e la pipeline CI ([`.github/workflows/ci-launcher.yml`](file:///c:/Users/danie/OneDrive/Documenti/Antygravity/Akay/.github/workflows/ci-launcher.yml)) per verifica statica della build parallela e dell'igiene credenziali.  
 **Stato Hardware TV (`192.168.1.8`)**: 🔒 **HARDWARE FREEZE ASSOLUTO** — zero comandi ADB, nessuna installazione/disinstallazione, nessun deploy autorizzato, nessun merge su `main`. [PR #1](https://github.com/SmokeJoy/akai-jarvis/pull/1) e [PR #2](https://github.com/SmokeJoy/akai-jarvis/pull/2) restano rigorosamente separate e aperte.
 
 ### Distinzione Esplicita delle Fonti di Verifica
@@ -30,25 +30,37 @@ Le build non vengono più confuse sotto un unico nome `debug`:
 | **`akai-custom-home-vc9-release-parallel[-nohome].apk`** (`-SigningMode release -PackageId it.akai.customhome.v8`) | `it.akai.customhome.v8` (`vc=9`, `8.1.0`) | Keystore **release dedicata** esterna al repo git (`-KeystorePath` fuori repo; script 09 **blocca** `debug.keystore` in mode `release`) | **Candidata tracciabile consigliata per Opzione A** (collaudo parallelo su TV indipendente dalla firma `v7`) |
 | **`akai-custom-home-vc9-release.apk`** (`-SigningMode release -PackageId it.akai.customhome`) | `it.akai.customhome` (`vc=9`, `8.1.0`) | Keystore **release dedicata** esterna al repo git | **Eventuale release definitiva**: installabile in-place *solo* con firma identica all'app già presente; se diversa dalla `v7`, richiede disinstallazione esplicita di `v7` (perdendo preferenze locali) |
 
-**Comandi offline tracciabili di generazione candidata (senza alcun segreto in git)**:
+**Comandi offline tracciabili con canale credenziali protetto (ZERO `pass:` negli argomenti CLI, nessuna chiave o password in git)**:
+`scripts/09_compile_akai_home_apk.ps1` accetta credenziali **solo** tramite `file:` (`-PassFile` esterno al repository, bloccato se dentro il repo), `env:` (`-StorePassEnvVar` / `-KeyPassEnvVar`) o prompt interattivo `Read-Host -AsSecureString` con pulizia garantita in `finally {}`. I parametri plaintext `-StorePass`/`-KeyPass` e l'argomento `--ks-pass pass:` sono stati eliminati e bloccati anche dal check statico in CI.
+
 ```powershell
 # 1. Generazione keystore release dedicata FUORI dal repo git (eseguire una sola volta dal proprietario)
 & tools\jdk-17\bin\keytool.exe -genkeypair -v -keystore "$env:USERPROFILE\.akai-keys\akai_home_release.jks" `
-  -alias akai_home_release -keyalg RSA -keysize 2048 -validity 3650 `
+  -storetype PKCS12 -alias akai_home_release -keyalg RSA -keysize 2048 -validity 3650 `
   -dname "CN=AKAI Custom Home Release, O=AKAI Custom, C=IT"
 
-# 2A. Candidata Opzione A (parallela isolata per test via am start, senza alterare resolver HOME)
+# 2A. Candidata Opzione A (parallela isolata senza HOME intent, firmata release via file: o env:)
 powershell -ExecutionPolicy Bypass -File scripts\09_compile_akai_home_apk.ps1 `
   -PackageId "it.akai.customhome.v8" -VersionCode 9 -VersionName "8.1.0" `
   -SigningMode release -KeystorePath "$env:USERPROFILE\.akai-keys\akai_home_release.jks" `
-  -KeyAlias "akai_home_release" -ExcludeHomeIntent -AppLabel "AKAI Home v8 Preview"
+  -KeyAlias "akai_home_release" -PassFile "$env:USERPROFILE\.akai-keys\akai_home_release.pass" `
+  -ExcludeHomeIntent -AppLabel "AKAI Home v8 Preview"
 
-# 2B. Candidata standard v8 (eventuale sostituzione/test HOME completo post-validazione)
+# 2B. Variante con canale variabile d'ambiente (senza file password) oppure prompt SecureString interattivo
+# (impostando AKAI_RELEASE_KS_PASS oppure omettendo -PassFile per prompt interattivo protetto)
 powershell -ExecutionPolicy Bypass -File scripts\09_compile_akai_home_apk.ps1 `
   -PackageId "it.akai.customhome" -VersionCode 9 -VersionName "8.1.0" `
   -SigningMode release -KeystorePath "$env:USERPROFILE\.akai-keys\akai_home_release.jks" `
-  -KeyAlias "akai_home_release"
+  -KeyAlias "akai_home_release" -StorePassEnvVar "AKAI_RELEASE_KS_PASS"
 ```
+
+### Evidenza Verifica Offline Candidata Parallela Release (`Windows PC`, post-Review 12)
+Compilata e verificata **esclusivamente offline** sul PC Windows mediante `scripts/09_compile_akai_home_apk.ps1` (canali `file:` ed `env:` testati entrambi; verifica fail-closed confermata su `PassFile` interno al repo e su `debug.keystore` in mode `release`):
+- **Artefatto generato (locale gitignored)**: `akai-custom-home/app/build/outputs/apk/release/akai-custom-home-vc9-release-parallel-nohome.apk` (`53.57 KB`)
+- **APK SHA-256 (`Get-FileHash`)**: `2814C564255C8DAD9F1E81322325BB2F439A151B6AD2B5226C55147C3B48220E`
+- **`apksigner verify --verbose --print-certs`**: `Verifies` (`v1=true`, `v2=true`), RSA 2048, Signer DN `CN=AKAI Custom Home Release, O=AKAI Custom, C=IT`, **Cert SHA-256**: `8e38a852651aa8ab6f43badb0480f700e388cfcaeef12be5e0fe81bdd1eb1bff`
+- **`aapt dump xmltree` / `badging`**: `package="it.akai.customhome.v8"`, `versionCode=9`, `versionName="8.1.0"`, `minSdkVersion=21`, `targetSdkVersion=28`, label `"AKAI Home v8 Preview"`, attività esportata `it.akai.customhome.MainActivity` (componente avviabile: **`it.akai.customhome.v8/it.akai.customhome.MainActivity`**), **`CATEGORY_HOME` = Assente (`False`)**, **`<provider>` = Assenti (`False`)**.
+
 **Gate 1 aperto**: la firma effettiva e il `versionCode` della `v7` residente su `192.168.1.8` **non risultano in alcun backup offline** e restano **non verificati** finché non verrà autorizzato l'audit ADB read-only.
 
 ---
@@ -142,9 +154,15 @@ Nell'audit `05/11/2026` (`backups/audit_20261105_225521/`) risultavano `/system/
 
 ## 5. Autorizzazioni Separate Richieste al Proprietario (Tutte Attualmente Sospese)
 
-1. **[ ] Autorizzazione 1 — Solo Audit ADB Read-Only su `192.168.1.8:5555`** *(zero scritture/installazioni)*:
-   - Lettura `resolve-activity` & `query-activities HOME`, `dumpsys package it.akai.customhome`, `adb pull` binario `v7` per confronto firma/versionCode offline, baseline RAM `dumpsys meminfo`, verifica menu `App Home` OEM e inventario preferiti a schermo.
-2. **[ ] Autorizzazione 2 — Generazione / Conferma Keystore Release Dedicata & Scelta Percorso (Opzione A vs B)**:
-   - Scelta tra **Opzione A (Consigliata: prova parallela `it.akai.customhome.v8` con `-ExcludeHomeIntent`, firmata release dedicata, senza toccare `v7` né `HOME`)** oppure **Opzione B** (solo se preflight firma compatibile e inventario dati completato).
-3. **[ ] Autorizzazione 3 — Eventuale Cambio Temporaneo `HOME`** *(solo dopo test visuale/D-Pad/RAM positivo in Opzione A)*.
-4. **[ ] Autorizzazione 4 — Eventuale Merge PR #3 su `main`** *(separato da PR #1 e PR #2, solo dopo validazione su TV reale)*.
+1. **[ ] Autorizzazione 1 (Prossimo Passo Unico Consigliato) — Solo Audit ADB Read-Only su `192.168.1.8:5555`** *(zero scritture, zero installazioni, zero cambi HOME)*:
+   Comandi previsti esclusivamente in sola lettura / pull diagnostico:
+   - `adb -s 192.168.1.8:5555 shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME`
+   - `adb -s 192.168.1.8:5555 shell cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.HOME`
+   - `adb -s 192.168.1.8:5555 shell dumpsys package it.akai.customhome` e `dumpsys package com.leanbitlab.ltvL`
+   - `adb -s 192.168.1.8:5555 shell pm path it.akai.customhome` + `adb -s 192.168.1.8:5555 pull` dell'APK `v7` per verifica offline `apksigner verify --print-certs` / `aapt`
+   - `adb -s 192.168.1.8:5555 shell dumpsys meminfo` + `free -m` (baseline memoria prima di qualsiasi prova)
+   - Censimento manuale preferiti `v7` visibili sullo schermo TV e verifica visiva/Settings della presenza del menu OEM `App Home`
+2. **[ ] Autorizzazione 2 — Scelta Modalità Prova / Installazione su TV (Subordinata all'Esito dell'Autorizzazione 1)**:
+   - **Opzione A (Consigliata)**: installazione parallela della build release verificata `it.akai.customhome.v8` (`vc=9`, `-ExcludeHomeIntent`, SHA-256 `2814C564...48220E`) e avvio esplicito `am start -n it.akai.customhome.v8/it.akai.customhome.MainActivity` senza toccare `v7` né `HOME`; **oppure Opzione B** (solo se preflight firma compatibile e inventario completato).
+3. **[ ] Autorizzazione 3 — Eventuale Cambio Temporaneo `HOME`** *(solo dopo esito positivo di Opzione A su UI, telecomando e RAM TV)*.
+4. **[ ] Autorizzazione 4 — Eventuale Merge PR #3 su `main`** *(separato da PR #1 e PR #2, solo dopo collaudo TV reale positivo)*.

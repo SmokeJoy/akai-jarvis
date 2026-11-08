@@ -32,7 +32,7 @@ jobs:
           node --check scripts/capture_leanback_screenshot.js
           echo "JavaScript syntax check passed."
 
-      - name: 2. Secrets Leak Detection
+      - name: 2. Secrets Leak Detection & Signing Hygiene Check
         run: |
           echo "=== Scanning for leaked credentials ==="
           FORBIDDEN_FILES=$(find . -type f \( -name "*.p12" -o -name "*.jks" -o -name "*.keystore" \) -not -path "*/.*")
@@ -41,7 +41,15 @@ jobs:
             echo "$FORBIDDEN_FILES"
             exit 1
           fi
-          echo "Secrets scan passed: zero private keystores or unmasked API keys detected."
+          if grep -Eq '(--ks-pass|--key-pass).{0,24}pass:' scripts/09_compile_akai_home_apk.ps1; then
+            echo "ERROR: Plaintext 'pass:' CLI argument detected in scripts/09_compile_akai_home_apk.ps1!"
+            exit 1
+          fi
+          if grep -Eq '\$StorePass|\$KeyPass\b' scripts/09_compile_akai_home_apk.ps1; then
+            echo "ERROR: Plaintext -StorePass/-KeyPass parameter detected in scripts/09_compile_akai_home_apk.ps1!"
+            exit 1
+          fi
+          echo "Secrets scan passed: zero private keystores or CLI password literals detected."
 
       - name: 3. Verify Android Assets and Layout Structure
         run: |
