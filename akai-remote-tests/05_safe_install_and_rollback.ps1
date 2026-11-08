@@ -251,8 +251,8 @@ function Verify-SQLiteIntegrityOffline($dbFile) {
     if ($validNode) {
         $dbEscaped = $dbFile.Replace('\', '/')
         $jsCheck = @"
-const { DatabaseSync } = require('node:sqlite');
 try {
+    const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync('$dbEscaped');
     const row = db.prepare('PRAGMA integrity_check;').get();
     db.close();
@@ -264,17 +264,19 @@ try {
     process.exit(2);
 }
 "@
-        $res = & $validNode -e $jsCheck 2>&1
+        $res = & $validNode --no-warnings -e $jsCheck 2>&1
         if ($LASTEXITCODE -eq 0) {
             return $true
-        } else {
-            throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito con Node (exit $LASTEXITCODE) su $dbFile : $res"
+        } elseif ($LASTEXITCODE -eq 1) {
+            throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito (database corrotto) su $dbFile : $res"
         }
+        # Se LASTEXITCODE == 2, la versione corrente di Node.js non include node:sqlite (es. Node < 22).
+        # Fall-through trasparente verso Python 3 / sqlite3 CLI.
     }
 
     # 2. Prova con Python
-    $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
-    if (-not $pythonCmd) { $pythonCmd = Get-Command python -ErrorAction SilentlyContinue }
+    $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1
+    if (-not $pythonCmd) { $pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1 }
     if ($pythonCmd) {
         $pyCheck = "import sqlite3, sys; con = sqlite3.connect(r'$dbFile'); res = con.execute('PRAGMA integrity_check;').fetchone()[0]; con.close(); sys.exit(0 if res == 'ok' else 1)"
         $res = & $pythonCmd.Source -c $pyCheck 2>&1

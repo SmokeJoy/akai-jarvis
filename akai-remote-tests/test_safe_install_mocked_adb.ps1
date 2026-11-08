@@ -28,6 +28,46 @@ if ($validNode) {
     $env:PATH = $nodeDir + [System.IO.Path]::PathSeparator + $env:PATH
 }
 
+function New-MockRealDatabase {
+    param([string]$FilePath)
+    $fpEscaped = $FilePath.Replace('\', '/')
+    
+    # 1. Prova con Node.js (se node:sqlite è supportato, es. Node 22+)
+    if ($validNode) {
+        $nodeInit = @"
+try {
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync('$fpEscaped');
+    db.exec('CREATE TABLE IF NOT EXISTS ai_memory (id INTEGER PRIMARY KEY, note TEXT);');
+    db.prepare('INSERT INTO ai_memory VALUES (?, ?)').run(1, 'golden_upgrade_data');
+    db.close();
+} catch (e) {}
+"@
+        & $validNode --no-warnings -e $nodeInit *>$null
+        if ((Test-Path $FilePath) -and (Get-Item $FilePath).Length -ge 512) { return }
+    }
+    
+    # 2. Prova con Python 3 / Python reale (escludendo WindowsApps shim)
+    $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1
+    if (-not $pythonCmd) {
+        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1
+    }
+    if ($pythonCmd) {
+        $pyInit = "import sqlite3; con = sqlite3.connect(r'$FilePath'); con.execute('CREATE TABLE IF NOT EXISTS ai_memory (id INTEGER PRIMARY KEY, note TEXT);'); con.execute('INSERT INTO ai_memory VALUES (?, ?)', (1, 'golden_upgrade_data')); con.commit(); con.close()"
+        & $pythonCmd.Source -c $pyInit 2>$null | Out-Null
+        if ((Test-Path $FilePath) -and (Get-Item $FilePath).Length -ge 512) { return }
+    }
+    
+    # 3. Prova con sqlite3 CLI
+    $sqlite3 = Get-Command sqlite3 -ErrorAction SilentlyContinue
+    if ($sqlite3) {
+        & $sqlite3.Source $FilePath "CREATE TABLE IF NOT EXISTS ai_memory (id INTEGER PRIMARY KEY, note TEXT); INSERT INTO ai_memory VALUES (1, 'golden_upgrade_data');" 2>$null | Out-Null
+        if ((Test-Path $FilePath) -and (Get-Item $FilePath).Length -ge 512) { return }
+    }
+    
+    throw "Impossibile creare database SQLite di mock: nessun interprete disponibile (Python, sqlite3, Node.js)."
+}
+
 # -----------------------------------------------------------------------------
 # PARTE 1: TEST NEGATIVI / FAIL-CLOSED
 # -----------------------------------------------------------------------------
@@ -258,14 +298,7 @@ $candidateApk7 = Join-Path $testDir7 "candidate_release.apk"
 $backupDir7 = Join-Path $testDir7 "backup_target"
 
 # 1. Creazione DB SQLite reale con tabella e record verificato
-$dbInitJs = @"
-const { DatabaseSync } = require('node:sqlite');
-const db = new DatabaseSync('$($realDb7.Replace('\', '/'))');
-db.exec('CREATE TABLE IF NOT EXISTS ai_memory (id INTEGER PRIMARY KEY, note TEXT);');
-db.prepare('INSERT INTO ai_memory VALUES (?, ?)').run(1, 'golden_upgrade_data');
-db.close();
-"@
-& $validNode -e $dbInitJs
+New-MockRealDatabase -FilePath $realDb7
 
 # 2. File APK dummy non vuoti
 [System.IO.File]::WriteAllText($deviceApk7, "PK_DEVICE_BACKUP_APK_MOCK")
@@ -407,14 +440,7 @@ $backupDir8 = Join-Path $testDir8 "backup_target"
 $restoredTargetDb8 = Join-Path $testDir8 "restored_on_device.sqlite"
 
 # 1. Creazione DB SQLite reale per baseline
-$dbInitJs8 = @"
-const { DatabaseSync } = require('node:sqlite');
-const db = new DatabaseSync('$($realDb8.Replace('\', '/'))');
-db.exec('CREATE TABLE IF NOT EXISTS akai_config (key TEXT PRIMARY KEY, val TEXT);');
-db.prepare('INSERT INTO akai_config VALUES (?, ?)').run('channel_last', '505');
-db.close();
-"@
-& $validNode -e $dbInitJs8
+New-MockRealDatabase -FilePath $realDb8
 
 [System.IO.File]::WriteAllText($deviceApk8, "PK_DEVICE_BACKUP_APK_MOCK_8")
 [System.IO.File]::WriteAllText($candidateApk8, "PK_CANDIDATE_FAULTY_APK_MOCK_8")
