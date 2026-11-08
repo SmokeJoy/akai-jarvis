@@ -45,7 +45,7 @@ jobs:
             echo "ERROR: Plaintext 'pass:' CLI argument detected in scripts/09_compile_akai_home_apk.ps1!"
             exit 1
           fi
-          if grep -Eq '\$StorePass|\$KeyPass\b' scripts/09_compile_akai_home_apk.ps1; then
+          if grep -Eq '(\$StorePass|\$KeyPass)\b' scripts/09_compile_akai_home_apk.ps1; then
             echo "ERROR: Plaintext -StorePass/-KeyPass parameter detected in scripts/09_compile_akai_home_apk.ps1!"
             exit 1
           fi
