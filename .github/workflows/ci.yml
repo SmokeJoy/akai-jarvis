@@ -225,7 +225,7 @@ jobs:
           grep "AndroidManifest.xml" build_ci/apk_contents.txt || (echo "FATAL: AndroidManifest.xml missing from APK!" && exit 1)
           echo "ALL MANDATORY ARTIFACTS VERIFIED INSIDE APK (DEX, ARMv7 SO, Web Assets, TLS Keystore)."
 
-      - name: 8. PowerShell Safe Install & Rollback Mock ADB Verification (8 Tests: Fail-Closed & E2E Success)
+      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (8 Tests: Fail-Closed & E2E Success)"
         shell: pwsh
         run: |
           ./akai-remote-tests/test_safe_install_mocked_adb.ps1
