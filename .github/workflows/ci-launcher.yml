@@ -79,7 +79,14 @@ jobs:
           java -cp test_bin it.akai.customhome.LauncherUnitTests
           echo "All 113 Launcher unit tests passed successfully."
 
-      - name: "5. Compile Standalone AKAI Custom Home v8 Leanback APK with AAPT2, Javac and D8 (Strict Android API 28)"
+      - name: "5. Run ADB Isolation & Safety Unit Tests (Script 11 - 7 Fail-Closed Scenarios)"
+        shell: pwsh
+        run: |
+          Write-Host "=== Running ADB Fail-Closed Isolation Safety Tests (P0 Suite) ==="
+          pwsh -File scripts/11_test_emulator_smoke_script_isolation.ps1
+          Write-Host "ADB Fail-Closed Isolation Safety Suite passed 100% in CI."
+
+      - name: "6. Compile Standalone AKAI Custom Home v8 Leanback APK with AAPT2, Javac and D8 (Strict Android API 28)"
         run: |
           echo "=== Building AKAI Custom Home v8 APK in CI ==="
           # Vincolo tassativo: DEVE essere la piattaforma Android API 28 (Android 9)
@@ -135,7 +142,7 @@ jobs:
           "$APKSIGNER" verify --verbose build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk
           echo "AKAI CUSTOM HOME v8 CI BUILD SUCCESSFUL (NON-DISTRIBUTABLE TEST ARTIFACT)."
 
-      - name: "6. Inspect APK Internal Contents"
+      - name: "7. Inspect APK Internal Contents"
         run: |
           echo "=== Verifying internal contents of candidate Launcher APK ==="
           unzip -l build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk > build_launcher_ci/apk_contents.txt

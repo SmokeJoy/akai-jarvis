@@ -16,10 +16,16 @@ Write-Host "=================================================================" -
 Write-Host " AKAI CUSTOM HOME v8 - COLLAUDO RUNTIME SICURO SU EMULATORE TV   " -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 
-$workspace = "C:\Users\danie\OneDrive\Documenti\Antygravity\Akay"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $scriptDir) { $scriptDir = $PSScriptRoot }
+if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
+$workspace = (Resolve-Path (Join-Path $scriptDir "..")).Path
 $toolsDir = Join-Path $workspace "tools"
 $sdkDir = Join-Path $toolsDir "android-sdk"
 $adb = Join-Path $sdkDir "platform-tools\adb.exe"
+if (-not (Test-Path $adb) -and (Get-Command adb -ErrorAction SilentlyContinue)) {
+    $adb = (Get-Command adb).Source
+}
 $apk = Join-Path $workspace "akai-custom-home\app\build\outputs\apk\debug\akai-custom-home.apk"
 $testSuiteApk = Join-Path $toolsDir "test-apps\TestStreamingApps.apk"
 $docsDir = Join-Path $workspace "docs\screenshots\emulator"
@@ -43,7 +49,8 @@ function Get-ValidatedEmulatorSerial($rawDevicesInput) {
     $foreignDevices = @()
 
     foreach ($line in $lines) {
-        $trimmed = $line.Trim()
+        $normalized = $line -replace '\\t', "`t"
+        $trimmed = $normalized.Trim()
         if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
         if ($trimmed.StartsWith("List of devices")) { continue }
         if ($trimmed.StartsWith("*")) { continue }
@@ -61,6 +68,8 @@ function Get-ValidatedEmulatorSerial($rawDevicesInput) {
                 # Qualsiasi dispositivo che non sia emulatore (TV fisica, IP 192.168.*, USB)
                 $foreignDevices += "$serial ($state)"
             }
+        } elseif ($parts.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace($parts[0])) {
+            $foreignDevices += "$($parts[0]) (unknown)"
         }
     }
 
