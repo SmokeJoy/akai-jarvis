@@ -107,7 +107,7 @@ jobs:
           # 1. AAPT2 compile resources
           "$AAPT2" compile --dir akai-custom-home/app/src/main/res -o build_launcher_ci/compiled_res.zip
 
-          # 2. AAPT2 link manifest and generate R.java
+          # 2. AAPT2 link manifest and generate R.java (candidate versionCode=9, 8.1.0)
           "$AAPT2" link -I "$ANDROID_JAR" \
             --manifest akai-custom-home/app/src/main/AndroidManifest.xml \
             -o build_launcher_ci/base.apk \
@@ -116,8 +116,8 @@ jobs:
             --auto-add-overlay \
             --min-sdk-version 21 \
             --target-sdk-version 28 \
-            --version-code 8 \
-            --version-name "8.0.0"
+            --version-code 9 \
+            --version-name "8.1.0"
 
           # 3. Compile Java sources
           JAVA_SRC=$(find akai-custom-home/app/src/main/java build_launcher_ci/gen -name "*.java")
@@ -136,19 +136,88 @@ jobs:
 
           # 7. Ephemeral test key sign (NON-DISTRIBUTABLE CI TEST BUILD)
           keytool -genkey -v -keystore /tmp/ci_launcher.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Launcher CI,O=AKAI Home,C=IT"
-          "$APKSIGNER" sign --ks /tmp/ci_launcher.keystore --ks-pass pass:android --key-pass pass:android --out build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk build_launcher_ci/aligned.apk
+          "$APKSIGNER" sign --ks /tmp/ci_launcher.keystore --ks-pass pass:android --key-pass pass:android --out build_launcher_ci/akai-custom-home-v8-vc9-ci-test-nondistributable.apk build_launcher_ci/aligned.apk
 
           # 8. Verify
-          "$APKSIGNER" verify --verbose build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk
-          echo "AKAI CUSTOM HOME v8 CI BUILD SUCCESSFUL (NON-DISTRIBUTABLE TEST ARTIFACT)."
+          "$APKSIGNER" verify --verbose --print-certs build_launcher_ci/akai-custom-home-v8-vc9-ci-test-nondistributable.apk
+          echo "AKAI CUSTOM HOME v8 (vc=9) CI BUILD SUCCESSFUL (NON-DISTRIBUTABLE TEST ARTIFACT)."
 
-      - name: "7. Inspect APK Internal Contents"
+      - name: "7. Inspect APK Internal Contents & Manifest Metadata"
         run: |
           echo "=== Verifying internal contents of candidate Launcher APK ==="
-          unzip -l build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk > build_launcher_ci/apk_contents.txt
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
+          APK="build_launcher_ci/akai-custom-home-v8-vc9-ci-test-nondistributable.apk"
+          unzip -l "$APK" > build_launcher_ci/apk_contents.txt
           cat build_launcher_ci/apk_contents.txt
           grep "classes.dex" build_launcher_ci/apk_contents.txt || (echo "FATAL: classes.dex missing from Launcher APK!" && exit 1)
           grep "AndroidManifest.xml" build_launcher_ci/apk_contents.txt || (echo "FATAL: AndroidManifest.xml missing from Launcher APK!" && exit 1)
           grep "res/layout/activity_main.xml" build_launcher_ci/apk_contents.txt || (echo "FATAL: activity_main.xml missing from Launcher APK!" && exit 1)
           grep "res/layout/item_leanback_card.xml" build_launcher_ci/apk_contents.txt || (echo "FATAL: item_leanback_card.xml missing from Launcher APK!" && exit 1)
-          echo "ALL MANDATORY LAUNCHER ARTIFACTS VERIFIED INSIDE APK."
+          ("$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" 2>/dev/null || "$AAPT2" dump --file AndroidManifest.xml "$APK") > build_launcher_ci/manifest_tree.txt
+          cat build_launcher_ci/manifest_tree.txt
+          grep -q 'package="it.akai.customhome"' build_launcher_ci/manifest_tree.txt || (echo "FATAL: unexpected package in manifest!" && exit 1)
+          grep -Eq 'versionCode.*=9|versionCode.*0x9' build_launcher_ci/manifest_tree.txt || (echo "FATAL: versionCode=9 missing in manifest!" && exit 1)
+          if grep -q 'E: provider' build_launcher_ci/manifest_tree.txt; then
+            echo "FATAL: unexpected ContentProvider found!" && exit 1
+          fi
+          echo "ALL MANDATORY LAUNCHER ARTIFACTS VERIFIED INSIDE APK (vc=9, zero providers)."
+
+      - name: "8. Verify Parallel Candidate Packaging & Static Isolation (it.akai.customhome.v8)"
+        run: |
+          echo "=== Building & Statically Validating Parallel Preview APK (it.akai.customhome.v8, no HOME intent) ==="
+          ANDROID_JAR="$ANDROID_HOME/platforms/android-28/android.jar"
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
+          D8=$(find "$ANDROID_HOME/build-tools" -name "d8" 2>/dev/null | sort -V | tail -n 1)
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign" 2>/dev/null | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" 2>/dev/null | sort -V | tail -n 1)
+
+          mkdir -p build_parallel_ci/gen build_parallel_ci/classes build_parallel_ci/dex
+          python3 - << 'PY'
+          import xml.etree.ElementTree as ET
+          NS = "http://schemas.android.com/apk/res/android"
+          ET.register_namespace("android", NS)
+          tree = ET.parse("akai-custom-home/app/src/main/AndroidManifest.xml")
+          root = tree.getroot()
+          act = root.find("./application/activity")
+          for flt in list(act.findall("intent-filter")):
+              cats = [c.get(f"{{{NS}}}name") for c in flt.findall("category")]
+              if "android.intent.category.HOME" in cats:
+                  act.remove(flt)
+          tree.write("build_parallel_ci/AndroidManifest.xml", encoding="utf-8", xml_declaration=True)
+          PY
+
+          "$AAPT2" compile --dir akai-custom-home/app/src/main/res -o build_parallel_ci/compiled_res.zip
+          "$AAPT2" link -I "$ANDROID_JAR" \
+            --manifest build_parallel_ci/AndroidManifest.xml \
+            -o build_parallel_ci/base.apk \
+            --java build_parallel_ci/gen \
+            build_parallel_ci/compiled_res.zip \
+            --auto-add-overlay \
+            --min-sdk-version 21 \
+            --target-sdk-version 28 \
+            --version-code 9 \
+            --version-name "8.1.0" \
+            --rename-manifest-package it.akai.customhome.v8 \
+            --custom-package it.akai.customhome
+
+          JAVA_SRC=$(find akai-custom-home/app/src/main/java build_parallel_ci/gen -name "*.java")
+          javac -encoding UTF-8 -source 1.8 -target 1.8 -bootclasspath "$ANDROID_JAR" -cp "$ANDROID_JAR" -d build_parallel_ci/classes $JAVA_SRC
+          CLASS_FILES=$(find build_parallel_ci/classes -name "*.class")
+          "$D8" --min-api 21 --lib "$ANDROID_JAR" --output build_parallel_ci/dex $CLASS_FILES
+          (cd build_parallel_ci/dex && zip -u ../base.apk classes.dex)
+          "$ZIPALIGN" -f -v 4 build_parallel_ci/base.apk build_parallel_ci/aligned.apk
+          "$APKSIGNER" sign --ks /tmp/ci_launcher.keystore --ks-pass pass:android --key-pass pass:android --out build_parallel_ci/akai-custom-home-parallel-vc9-ci-test-nondistributable.apk build_parallel_ci/aligned.apk
+          "$APKSIGNER" verify --verbose build_parallel_ci/akai-custom-home-parallel-vc9-ci-test-nondistributable.apk
+
+          ("$AAPT2" dump xmltree --file AndroidManifest.xml build_parallel_ci/akai-custom-home-parallel-vc9-ci-test-nondistributable.apk 2>/dev/null || "$AAPT2" dump --file AndroidManifest.xml build_parallel_ci/akai-custom-home-parallel-vc9-ci-test-nondistributable.apk) > build_parallel_ci/manifest_tree.txt
+          cat build_parallel_ci/manifest_tree.txt
+          grep -q 'package="it.akai.customhome.v8"' build_parallel_ci/manifest_tree.txt || (echo "FATAL: parallel package rename failed!" && exit 1)
+          grep -q '"it.akai.customhome.MainActivity"' build_parallel_ci/manifest_tree.txt || (echo "FATAL: MainActivity component resolution failed!" && exit 1)
+          grep -Eq 'versionCode.*=9|versionCode.*0x9' build_parallel_ci/manifest_tree.txt || (echo "FATAL: parallel versionCode=9 missing!" && exit 1)
+          if grep -q 'android.intent.category.HOME' build_parallel_ci/manifest_tree.txt; then
+            echo "FATAL: CATEGORY_HOME was NOT removed from parallel preview manifest!" && exit 1
+          fi
+          if grep -q 'E: provider' build_parallel_ci/manifest_tree.txt; then
+            echo "FATAL: unexpected ContentProvider in parallel APK!" && exit 1
+          fi
+          echo "PARALLEL CANDIDATE STATIC ISOLATION VERIFIED (package=it.akai.customhome.v8, vc=9, no HOME filter, exact component it.akai.customhome.v8/it.akai.customhome.MainActivity)."
