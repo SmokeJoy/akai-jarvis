@@ -32,6 +32,7 @@ param(
     [string]$BackupDir = ".\backup_tv",
     [string]$TargetTv = "192.168.1.8",
     [int]$HttpPort = 8088,
+    [string]$AuthToken = $null,
     [switch]$AllowHardwareExecution = $false
 )
 
@@ -369,12 +370,14 @@ switch ($Action) {
         # 2. Snapshot logico preventivo REST (se server HTTP e' online)
         $logicalBackupPath = Join-Path $sessionDir "akai_memory_logical_backup.json"
         try {
-            $memResp = Invoke-RestMethod -Uri $MemoryUrl -Method Get -TimeoutSec 4 -ErrorAction Stop
+            $headers = @{}
+            if ($AuthToken) { $headers["Authorization"] = "Bearer $AuthToken" }
+            $memResp = Invoke-RestMethod -Uri $MemoryUrl -Method Get -Headers $headers -TimeoutSec 4 -ErrorAction Stop
             $memJson = $memResp | ConvertTo-Json -Depth 10
             [System.IO.File]::WriteAllText($logicalBackupPath, $memJson, [System.Text.Encoding]::UTF8)
-            Write-Host "      Backup logico REST /api/ai/memory salvato: $logicalBackupPath" -ForegroundColor Green
+            Write-Host "      Snapshot logico parziale REST salvato: $logicalBackupPath (cronologia/preferenze)" -ForegroundColor Green
         } catch {
-            Write-Host "      Endpoint REST non raggiungibile per backup logico ($($_.Exception.Message)) - continuo con snapshot binario..." -ForegroundColor Yellow
+            Write-Host "      Endpoint REST non raggiungibile o autenticazione 401 richiesta ($($_.Exception.Message)) - continuo con snapshot binario..." -ForegroundColor Yellow
         }
 
         # 3. Snapshot consistente SQLite
@@ -448,12 +451,14 @@ switch ($Action) {
             # 1.2 Backup logico preventivo REST (se server e' attivo)
             $logicalBackupPath = Join-Path $sessionDir "akai_memory_logical_backup.json"
             try {
-                $memResp = Invoke-RestMethod -Uri $MemoryUrl -Method Get -TimeoutSec 4 -ErrorAction Stop
+                $headers = @{}
+            if ($AuthToken) { $headers["Authorization"] = "Bearer $AuthToken" }
+            $memResp = Invoke-RestMethod -Uri $MemoryUrl -Method Get -Headers $headers -TimeoutSec 4 -ErrorAction Stop
                 $memJson = $memResp | ConvertTo-Json -Depth 10
                 [System.IO.File]::WriteAllText($logicalBackupPath, $memJson, [System.Text.Encoding]::UTF8)
-                Write-Host "      Backup logico REST /api/ai/memory salvato: $logicalBackupPath" -ForegroundColor Green
+                Write-Host "      Snapshot logico parziale REST salvato: $logicalBackupPath (cronologia/preferenze)" -ForegroundColor Green
             } catch {
-                Write-Host "      Endpoint REST non raggiungibile per backup logico ($($_.Exception.Message)) - continuo con snapshot binario..." -ForegroundColor Yellow
+                Write-Host "      Endpoint REST non raggiungibile o autenticazione 401 richiesta ($($_.Exception.Message)) - continuo con snapshot binario..." -ForegroundColor Yellow
             }
 
             # 1.3 Backup OBBLIGATORIO del database SQLite (FAIL-CLOSED)
@@ -593,14 +598,15 @@ switch ($Action) {
                         $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $verifyRestoreDb
                     }
 
-                    if ((Test-Path $verifyRestoreDb) -and ((Get-Item $verifyRestoreDb).Length -ge 512)) {
-                        Verify-SQLiteIntegrityOffline $verifyRestoreDb | Out-Null
-                        $restHash = Get-Sha256Hex $verifyRestoreDb
-                        if ($backupDbHash -and $restHash -ne $backupDbHash) {
-                            throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 post-ripristino! Orig: $backupDbHash, Device: $restHash"
-                        }
-                        Write-Host "      Parita' hash SHA-256 ($restHash) e integrita' SQLite post-rollback verificate con successo." -ForegroundColor Green
+                    if (-not (Test-Path $verifyRestoreDb) -or (Get-Item $verifyRestoreDb).Length -lt 512) {
+                        throw "ERRORE FAIL-CLOSED: Verifica post-rollback fallita: impossibile rileggere il database ripristinato dal dispositivo per validarne l'integrita'."
                     }
+                    Verify-SQLiteIntegrityOffline $verifyRestoreDb | Out-Null
+                    $restHash = Get-Sha256Hex $verifyRestoreDb
+                    if (-not $backupDbHash -or $restHash -ne $backupDbHash) {
+                        throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 post-ripristino! Orig: $backupDbHash, Device: $restHash"
+                    }
+                    Write-Host "      Parita' hash SHA-256 ($restHash) e integrita' SQLite post-rollback verificate con successo." -ForegroundColor Green
 
                     Write-Host "      Database SQLite v5 ripristinato con successo." -ForegroundColor Green
                 }
@@ -672,15 +678,16 @@ switch ($Action) {
             if (-not $rx.Success) {
                 $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $verifyRestoreDb
             }
-            if ((Test-Path $verifyRestoreDb) -and ((Get-Item $verifyRestoreDb).Length -ge 512)) {
-                Verify-SQLiteIntegrityOffline $verifyRestoreDb | Out-Null
-                $origHash = Get-Sha256Hex $backupDb
-                $restHash = Get-Sha256Hex $verifyRestoreDb
-                if ($origHash -ne $restHash) {
-                    throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 post-ripristino! Orig: $origHash, Device: $restHash"
-                }
-                Write-Host "      Parita' hash SHA-256 ($origHash) e integrita' SQLite verificate con successo." -ForegroundColor Green
+            if (-not (Test-Path $verifyRestoreDb) -or (Get-Item $verifyRestoreDb).Length -lt 512) {
+                throw "ERRORE FAIL-CLOSED: Verifica post-rollback fallita: impossibile rileggere il database ripristinato dal dispositivo ($($rx.Output))."
             }
+            Verify-SQLiteIntegrityOffline $verifyRestoreDb | Out-Null
+            $origHash = Get-Sha256Hex $backupDb
+            $restHash = Get-Sha256Hex $verifyRestoreDb
+            if ($origHash -ne $restHash) {
+                throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 post-ripristino! Orig: $origHash, Device: $restHash"
+            }
+            Write-Host "      Parita' hash SHA-256 ($origHash) e integrita' SQLite verificate con successo." -ForegroundColor Green
 
             Write-Host "      Database SQLite ripristinato." -ForegroundColor Green
         }

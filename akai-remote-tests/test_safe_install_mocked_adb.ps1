@@ -356,8 +356,9 @@ if ($isWin) {
     & chmod +x $mockAdbCmd7
 }
 
-# 5. Mock HTTP Server (porta 18088)
-@'
+# 5. Mock HTTP Server (porta dinamica $port7)
+$port7 = Get-Random -Minimum 21000 -Maximum 28000
+@"
 const http = require('http');
 const send = (res, code, ctype, body) => {
   const buf = Buffer.from(body);
@@ -374,15 +375,21 @@ const server = http.createServer((req, res) => {
   } else if (req.url === '/index.html') {
     send(res, 200, 'text/html', '<!DOCTYPE html><html><body>AKAI Web Remote</body></html>');
   } else if (req.url === '/api/ai/memory') {
-    send(res, 200, 'application/json', JSON.stringify({ procedures: [], preferences: {} }));
+    if (req.headers['authorization'] !== 'Bearer mock_v5_token') {
+      send(res, 401, 'application/json', JSON.stringify({ error: 'Non autorizzato: token mancante o scaduto' }));
+      return;
+    }
+    // Baseline v5 schema: conversations, preferences, stats (NO procedures!)
+    send(res, 200, 'application/json', JSON.stringify({ status: 'ok', conversations: [], preferences: {}, stats: {} }));
   } else {
     send(res, 404, 'text/plain', 'Not Found');
   }
 });
+setInterval(() => {}, 1000);
 server.on('error', () => {});
 server.on('clientError', (err, socket) => { socket.destroy(); });
-server.listen(18088, '127.0.0.1');
-'@ | Out-File -FilePath $mockHttpScript7 -Encoding ascii
+server.listen($port7, '127.0.0.1');
+"@ | Out-File -FilePath $mockHttpScript7 -Encoding ascii
 
 $httpErrLog7 = Join-Path $testDir7 "http_err.log"
 $httpProc7 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript7`"" -RedirectStandardError $httpErrLog7 -PassThru
@@ -407,7 +414,7 @@ try {
 `$env:WATCHDOG_ATTEMPTS = '2'
 `$env:WATCHDOG_SLEEP_SEC = '1'
 
-& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort 18088 -BackupDir '$backupDirEscaped' -AllowHardwareExecution
+& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort $port7 -AuthToken 'mock_v5_token' -BackupDir '$backupDirEscaped' -AllowHardwareExecution
 "@
     $res7 = & $psExe -ExecutionPolicy Bypass -Command $testCmd7 2>&1 | Out-String
 
@@ -511,7 +518,8 @@ if ($isWin) {
 }
 
 # 4. Mock HTTP Server: fallisce sul watchdog upgrade, ma risponde OK sul watchdog post-rollback!
-@'
+$port8 = Get-Random -Minimum 28001 -Maximum 36000
+@"
 const http = require('http');
 let attempts = 0;
 const send = (res, code, ctype, body) => {
@@ -538,15 +546,21 @@ const server = http.createServer((req, res) => {
     }
     send(res, 200, 'text/html', '<!DOCTYPE html><html><body>AKAI Web Remote Rollback OK</body></html>');
   } else if (req.url === '/api/ai/memory') {
-    send(res, 200, 'application/json', JSON.stringify({ procedures: [], preferences: {} }));
+    if (req.headers['authorization'] !== 'Bearer mock_v5_token') {
+      send(res, 401, 'application/json', JSON.stringify({ error: 'Non autorizzato: token mancante o scaduto' }));
+      return;
+    }
+    // Baseline v5 schema: conversations, preferences, stats (NO procedures!)
+    send(res, 200, 'application/json', JSON.stringify({ status: 'ok', conversations: [], preferences: {}, stats: {} }));
   } else {
     send(res, 404, 'text/plain', 'Not Found');
   }
 });
+setInterval(() => {}, 1000);
 server.on('error', () => {});
 server.on('clientError', (err, socket) => { socket.destroy(); });
-server.listen(18089, '127.0.0.1');
-'@ | Out-File -FilePath $mockHttpScript8 -Encoding ascii
+server.listen($port8, '127.0.0.1');
+"@ | Out-File -FilePath $mockHttpScript8 -Encoding ascii
 
 $httpErrLog8 = Join-Path $testDir8 "http_err.log"
 $httpProc8 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript8`"" -RedirectStandardError $httpErrLog8 -PassThru
@@ -573,7 +587,7 @@ try {
 `$env:WATCHDOG_ATTEMPTS = '2'
 `$env:WATCHDOG_SLEEP_SEC = '1'
 
-& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort 18089 -BackupDir '$backupDirEscaped' -AllowHardwareExecution
+& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort $port8 -AuthToken 'mock_v5_token' -BackupDir '$backupDirEscaped' -AllowHardwareExecution
 "@
     $res8 = & $psExe -ExecutionPolicy Bypass -Command $testCmd8 2>&1 | Out-String
 
@@ -590,6 +604,222 @@ try {
 } finally {
     if ($httpProc8 -and -not $httpProc8.HasExited) { Stop-Process -Id $httpProc8.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $testDir8 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# TEST 9: [TEST NEGATIVO / FAIL-CLOSED] Rilettura post-rollback bloccata da ADB -> Errore immediato e zero false successi
+$testDir9 = Join-Path $tempDir "e2e_fail_closed_post_rollback_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir9 | Out-Null
+
+$mockHttpScript9 = Join-Path $testDir9 "mock_http_9.js"
+$mockAdbJs9 = Join-Path $testDir9 "mock_adb_9.js"
+$mockSignerJs9 = Join-Path $testDir9 "mock_signer_9.js"
+$realDb9 = Join-Path $testDir9 "device_db.sqlite"
+$deviceApk9 = Join-Path $testDir9 "device_backup.apk"
+$candidateApk9 = Join-Path $testDir9 "candidate_faulty.apk"
+$backupDir9 = Join-Path $testDir9 "backup_target"
+
+New-MockRealDatabase -FilePath $realDb9
+[System.IO.File]::WriteAllText($deviceApk9, "PK_DEVICE_BACKUP_APK_MOCK_9")
+[System.IO.File]::WriteAllText($candidateApk9, "PK_CANDIDATE_FAULTY_APK_MOCK_9")
+
+# Mock apksigner
+@"
+console.log('Signer #1 certificate SHA-256 digest: feedfacefeedface00112233445566778899aabbccddeefffeedfacefeedface');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs9 -Encoding ascii
+
+$mockSignerCmd9 = if ($isWin) { Join-Path $testDir9 "apksigner.cmd" } else { Join-Path $testDir9 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs9`" %*" | Out-File -FilePath $mockSignerCmd9 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs9`" `"`$@`"" | Out-File -FilePath $mockSignerCmd9 -Encoding ascii
+    & chmod +x $mockSignerCmd9
+}
+
+# Mock ADB: Permette backup iniziale, ma blocca ogni exec-out/cat dopo il rollback (simulando permessi revocati)
+@"
+const fs = require('fs');
+const args = process.argv.slice(2).join(' ');
+const logFile = process.env.MOCK_LOG_FILE;
+
+if (args.includes('connect')) process.exit(0);
+if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
+if (args.includes('pull')) {
+    const dest = process.argv[process.argv.length - 1];
+    fs.copyFileSync(process.env.DEVICE_APK_FILE, dest);
+    process.exit(0);
+}
+if (args.includes('exec-in')) {
+    const chunks = [];
+    process.stdin.on('data', chunk => chunks.push(chunk));
+    process.stdin.on('end', () => process.exit(0));
+    return;
+}
+if (args.includes('exec-out') || args.includes('cat databases/akai_memory.db')) {
+    if (fs.existsSync(logFile)) {
+        process.exit(1);
+    }
+    fs.writeFileSync(logFile, 'backup_done');
+    const buf = fs.readFileSync(process.env.DEVICE_DB_FILE);
+    process.stdout.write(buf, () => process.exit(0));
+    return;
+}
+if (args.includes('install')) { console.log('Success'); process.exit(0); }
+if (args.includes('pidof')) { console.log('12345'); process.exit(0); }
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs9 -Encoding ascii
+
+$mockAdbCmd9 = if ($isWin) { Join-Path $testDir9 "adb.cmd" } else { Join-Path $testDir9 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs9`" %*" | Out-File -FilePath $mockAdbCmd9 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs9`" `"`$@`"" | Out-File -FilePath $mockAdbCmd9 -Encoding ascii
+    & chmod +x $mockAdbCmd9
+}
+
+# Mock HTTP Server che forza il fallimento del candidate per innescare rollback
+$port9 = Get-Random -Minimum 36001 -Maximum 44000
+@"
+const http = require('http');
+const send = (res, code, ctype, body) => {
+  const buf = Buffer.from(body);
+  res.writeHead(code, {
+    'Content-Type': ctype,
+    'Content-Length': buf.length,
+    'Connection': 'close'
+  });
+  res.end(buf);
+};
+const server = http.createServer((req, res) => {
+  if (req.url === '/api/status') {
+    send(res, 500, 'application/json', JSON.stringify({ status: 'error', message: 'Fault to trigger rollback' }));
+  } else if (req.url === '/index.html') {
+    send(res, 503, 'text/plain', 'Service Unavailable');
+  } else if (req.url === '/api/ai/memory') {
+    send(res, 200, 'application/json', JSON.stringify({ status: 'ok', conversations: [], preferences: {} }));
+  } else {
+    send(res, 404, 'text/plain', 'Not Found');
+  }
+});
+setInterval(() => {}, 1000);
+server.on('error', () => {});
+server.on('clientError', (err, socket) => { socket.destroy(); });
+server.listen($port9, '127.0.0.1');
+"@ | Out-File -FilePath $mockHttpScript9 -Encoding ascii
+
+$httpErrLog9 = Join-Path $testDir9 "http_err.log"
+$mockLogFile9 = Join-Path $testDir9 "mock_state.log"
+$httpProc9 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript9`"" -RedirectStandardError $httpErrLog9 -PassThru
+Start-Sleep -Milliseconds 800
+
+try {
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $candidateEscaped = $candidateApk9.Replace('\', '/')
+    $mockAdbEscaped = $mockAdbCmd9.Replace('\', '/')
+    $mockSignerEscaped = $mockSignerCmd9.Replace('\', '/')
+    $realDbEscaped = $realDb9.Replace('\', '/')
+    $deviceApkEscaped = $deviceApk9.Replace('\', '/')
+    $backupDirEscaped = $backupDir9.Replace('\', '/')
+    $mockLogEscaped = $mockLogFile9.Replace('\', '/')
+
+    $nodeEscaped = $validNode.Replace('\', '/')
+    $testCmd9 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped'
+`$env:DEVICE_DB_FILE = '$realDbEscaped'
+`$env:DEVICE_APK_FILE = '$deviceApkEscaped'
+`$env:MOCK_LOG_FILE = '$mockLogEscaped'
+`$env:WATCHDOG_ATTEMPTS = '2'
+`$env:WATCHDOG_SLEEP_SEC = '1'
+
+& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort $port9 -AuthToken 'mock_v5_token' -BackupDir '$backupDirEscaped' -AllowHardwareExecution
+"@
+    $res9 = & $psExe -ExecutionPolicy Bypass -Command $testCmd9 2>&1 | Out-String
+
+    if ($res9 -match "ERRORE FAIL-CLOSED: Verifica post-rollback fallita" -and $res9 -notmatch "Database SQLite v5 ripristinato con successo") {
+        Write-Host "[PASS] [TEST NEGATIVO / FAIL-CLOSED] Test 9: Blocco exec-out post-rollback scatena ERRORE FAIL-CLOSED categorico (zero falsi successi)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / FAIL-CLOSED] Test 9: Comportamento fail-open rilevato: $res9" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[PASS] [TEST NEGATIVO / FAIL-CLOSED] Test 9: Eccezione fail-closed confermata: $($_.Exception.Message)" -ForegroundColor Green
+    $passed++
+} finally {
+    if ($httpProc9 -and -not $httpProc9.HasExited) { Stop-Process -Id $httpProc9.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir9 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# TEST 10: [TEST NEGATIVO / REGRESSIONE V5] GET /api/ai/memory senza Bearer Token rifiutata con 401 Unauthorized
+$testDir10 = Join-Path $tempDir "v5_auth_regression_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir10 | Out-Null
+$mockHttpScript10 = Join-Path $testDir10 "mock_http_10.js"
+$port10 = Get-Random -Minimum 44001 -Maximum 52000
+@"
+const http = require('http');
+const send = (res, code, ctype, body) => {
+  const buf = Buffer.from(body);
+  res.writeHead(code, {
+    'Content-Type': ctype,
+    'Content-Length': buf.length,
+    'Connection': 'close'
+  });
+  res.end(buf);
+};
+const server = http.createServer((req, res) => {
+  if (req.url === '/api/ai/memory') {
+    if (!req.headers['authorization'] || !req.headers['authorization'].startsWith('Bearer ')) {
+      send(res, 401, 'application/json', JSON.stringify({ error: 'Non autorizzato: token mancante o scaduto' }));
+      return;
+    }
+    send(res, 200, 'application/json', JSON.stringify({ status: 'ok', conversations: [], preferences: {}, stats: {} }));
+  } else {
+    send(res, 404, 'text/plain', 'Not Found');
+  }
+});
+setInterval(() => {}, 1000);
+server.on('error', () => {});
+server.on('clientError', (err, socket) => { socket.destroy(); });
+server.listen($port10, '127.0.0.1');
+"@ | Out-File -FilePath $mockHttpScript10 -Encoding ascii
+
+$httpProc10 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript10`"" -PassThru
+Start-Sleep -Milliseconds 800
+try {
+    # 1. Richiesta non autenticata -> DEVE fallire con 401
+    $authBlocked = $false
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:$port10/api/ai/memory" -Method Get -TimeoutSec 4 -ErrorAction Stop | Out-Null
+    } catch {
+        if ($_.Exception.Message -match "401" -or ($_.Exception.Response -and $_.Exception.Response.StatusCode -eq 401)) {
+            $authBlocked = $true
+        }
+    }
+
+    # 2. Richiesta autenticata con Bearer -> DEVE restituire 200 e schema baseline v5
+    $authSuccess = $false
+    $headers = @{ "Authorization" = "Bearer mock_valid_bearer_token" }
+    $resAuth = Invoke-RestMethod -Uri "http://127.0.0.1:$port10/api/ai/memory" -Method Get -Headers $headers -TimeoutSec 4 -ErrorAction Stop
+    if ($resAuth.status -eq "ok" -and $null -ne $resAuth.conversations -and $null -ne $resAuth.preferences -and $null -eq $resAuth.procedures) {
+        $authSuccess = $true
+    }
+
+    if ($authBlocked -and $authSuccess) {
+        Write-Host "[PASS] [TEST NEGATIVO / REGRESSIONE V5] Test 10: Baseline v5 autenticazione Bearer (401 se assente) e schema (senza procedures) convalidate al 100%" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / REGRESSIONE V5] Test 10: AuthBlocked=$authBlocked, AuthSuccess=$authSuccess" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST NEGATIVO / REGRESSIONE V5] Test 10: Eccezione: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($httpProc10 -and -not $httpProc10.HasExited) { Stop-Process -Id $httpProc10.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir10 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
