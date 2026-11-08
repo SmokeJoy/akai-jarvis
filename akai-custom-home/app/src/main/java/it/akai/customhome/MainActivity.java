@@ -2,10 +2,12 @@ package it.akai.customhome;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -69,13 +71,14 @@ public class MainActivity extends Activity {
     private static final String KEY_THEME_ACCENT = "theme_accent_index";
     private static final String KEY_LAYOUT_ORDER = "theme_layout_order";
     private static final String KEY_SHOW_SYSTEM_APPS = "pref_show_system_apps";
+    private static final String KEY_SHOW_NETWORK_DETAILS = "pref_show_network_details";
 
-    private static final int SECTION_FAVORITES = 1;
-    private static final int SECTION_STREAMING = 2;
-    private static final int SECTION_ALL_APPS = 3;
+    public static final int SECTION_FAVORITES = 1;
+    public static final int SECTION_STREAMING = 2;
+    public static final int SECTION_ALL_APPS = 3;
 
     // Theme Palettes
-    private static final int[] BG_COLORS = {
+    public static final int[] BG_COLORS = {
         0xFF0A0B10, // 0: Midnight Dark (Default)
         0xFF081225, // 1: Deep Navy Blue
         0xFF0F172A, // 2: Carbon Slate
@@ -83,7 +86,7 @@ public class MainActivity extends Activity {
         0xFF18080C  // 4: Ruby Dark
     };
 
-    private static final int[] SURFACE_COLORS = {
+    public static final int[] SURFACE_COLORS = {
         0xFF141B2D,
         0xFF0F2244,
         0xFF1E293B,
@@ -91,7 +94,7 @@ public class MainActivity extends Activity {
         0xFF2D1016
     };
 
-    private static final int[] FOCUSED_SURFACE_COLORS = {
+    public static final int[] FOCUSED_SURFACE_COLORS = {
         0xFF1E3A8A,
         0xFF1E40AF,
         0xFF334155,
@@ -99,21 +102,21 @@ public class MainActivity extends Activity {
         0xFF4C1D24
     };
 
-    private static final int[] ACCENT_COLORS = {
+    public static final int[] ACCENT_COLORS = {
         0xFFF59E0B, // 0: Oro AKAI (#F59E0B) - WCAG AAA 13.3:1
         0xFF00E5FF, // 1: Ciano Neon (#00E5FF)
         0xFFE50914, // 2: Rosso AKAI (#E50914)
         0xFF10B981  // 3: Smeraldo (#10B981)
     };
 
-    private static final String[] ACCENT_NAMES = {
+    public static final String[] ACCENT_NAMES = {
         "Oro AKAI (#F59E0B)",
         "Ciano Neon (#00E5FF)",
         "Rosso AKAI (#E50914)",
         "Smeraldo (#10B981)"
     };
 
-    private static final String[] BG_NAMES = {
+    public static final String[] BG_NAMES = {
         "Midnight Dark (Default)",
         "Deep Navy Blue (Blu Notte)",
         "Carbon Slate (Ardesia Scuro)",
@@ -122,7 +125,7 @@ public class MainActivity extends Activity {
     };
 
     // Filtro applicazioni tecniche e diagnostiche OEM da nascondere di default
-    private static final String[] SYSTEM_FILTER_PACKAGES = {
+    public static final String[] SYSTEM_FILTER_PACKAGES = {
         "it.akai.customhome",
         "it.akai.customremote",
         "com.airoha.",
@@ -136,7 +139,7 @@ public class MainActivity extends Activity {
         "com.mstar.android.video"
     };
 
-    private static final String[] SYSTEM_FILTER_LABELS = {
+    public static final String[] SYSTEM_FILTER_LABELS = {
         "a2dpsinkplayer",
         "boot video",
         "cultraview",
@@ -147,13 +150,13 @@ public class MainActivity extends Activity {
     };
 
     // Keyword per identificare app di streaming e cinema
-    private static final String[] STREAMING_PACKAGE_KEYWORDS = {
+    public static final String[] STREAMING_PACKAGE_KEYWORDS = {
         "youtube", "netflix", "amazonvideo", "primevideo", "raiplay", "it.rai",
         "mediaset", "disney", "spotify", "kodi", "vlc", "pluto", "dazn",
         "timvision", "discovery", "crunchyroll", "twitch", "appletv", "paramount", "nowtv"
     };
 
-    private static final String[] STREAMING_LABEL_KEYWORDS = {
+    public static final String[] STREAMING_LABEL_KEYWORDS = {
         "youtube", "netflix", "prime video", "raiplay", "mediaset", "infinity",
         "disney", "spotify", "kodi", "vlc", "pluto tv", "dazn", "timvision",
         "discovery", "crunchyroll", "twitch", "apple tv", "paramount", "now tv"
@@ -179,6 +182,13 @@ public class MainActivity extends Activity {
     private Button btnHomeRemote;
     private Button btnHomeSettings;
 
+    // Hardware input buttons
+    private Button btnDtv;
+    private Button btnHdmi1;
+    private Button btnHdmi2;
+    private Button btnHdmi3;
+    private Button btnSrcAll;
+
     // Horizontal Row Containers
     private LinearLayout llInputsContainer;
     private LinearLayout llFavContainer;
@@ -203,6 +213,9 @@ public class MainActivity extends Activity {
     private int currentAccentIndex = 0;
     private int currentLayoutOrder = 0; // 0: Ingressi prima, 1: Preferiti prima
     private boolean showSystemApps = false;
+    private boolean showNetworkDetails = false;
+
+    private BroadcastReceiver packageReceiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -232,6 +245,12 @@ public class MainActivity extends Activity {
         btnHomeRemote = (Button) findViewById(R.id.btn_home_remote);
         btnHomeSettings = (Button) findViewById(R.id.btn_home_settings);
 
+        btnDtv = (Button) findViewById(R.id.btn_src_dtv);
+        btnHdmi1 = (Button) findViewById(R.id.btn_src_hdmi1);
+        btnHdmi2 = (Button) findViewById(R.id.btn_src_hdmi2);
+        btnHdmi3 = (Button) findViewById(R.id.btn_src_hdmi3);
+        btnSrcAll = (Button) findViewById(R.id.btn_src_all);
+
         llInputsContainer = (LinearLayout) findViewById(R.id.ll_inputs_container);
         llFavContainer = (LinearLayout) findViewById(R.id.ll_fav_container);
         llStreamingContainer = (LinearLayout) findViewById(R.id.ll_streaming_container);
@@ -254,12 +273,47 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        registerPackageReceiver();
         updateWifiStatus();
+        loadInstalledApps();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        unregisterPackageReceiver();
     }
 
     @Override
     public void onBackPressed() {
         Toast.makeText(this, "Premi HOME sul telecomando per la schermata principale", Toast.LENGTH_SHORT).show();
+    }
+
+    private void registerPackageReceiver() {
+        if (packageReceiver != null) return;
+        packageReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                loadInstalledApps();
+            }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_PACKAGE_ADDED);
+        filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        filter.addAction(Intent.ACTION_PACKAGE_REPLACED);
+        filter.addDataScheme("package");
+        try {
+            registerReceiver(packageReceiver, filter);
+        } catch (Exception ignored) {}
+    }
+
+    private void unregisterPackageReceiver() {
+        if (packageReceiver != null) {
+            try {
+                unregisterReceiver(packageReceiver);
+            } catch (Exception ignored) {}
+            packageReceiver = null;
+        }
     }
 
     private void loadPreferences() {
@@ -271,6 +325,7 @@ public class MainActivity extends Activity {
 
         currentLayoutOrder = prefs.getInt(KEY_LAYOUT_ORDER, 0);
         showSystemApps = prefs.getBoolean(KEY_SHOW_SYSTEM_APPS, false);
+        showNetworkDetails = prefs.getBoolean(KEY_SHOW_NETWORK_DETAILS, false);
 
         favoritePackages.clear();
         String savedOrdered = prefs.getString(KEY_FAVORITES_ORDERED, null);
@@ -309,6 +364,7 @@ public class MainActivity extends Activity {
         editor.putInt(KEY_THEME_ACCENT, currentAccentIndex);
         editor.putInt(KEY_LAYOUT_ORDER, currentLayoutOrder);
         editor.putBoolean(KEY_SHOW_SYSTEM_APPS, showSystemApps);
+        editor.putBoolean(KEY_SHOW_NETWORK_DETAILS, showNetworkDetails);
         editor.apply();
     }
 
@@ -326,10 +382,52 @@ public class MainActivity extends Activity {
             btnFavReorder.setTextColor(accent);
         }
 
+        // Applica selector dinamico coerente anche agli ingressi hardware e ai pulsanti header
+        updateHeaderAndInputsSelectors();
+
         applySectionOrder(currentLayoutOrder == 1);
         updateFavoritesList();
         updateStreamingList();
         updateAllAppsList();
+    }
+
+    private void updateHeaderAndInputsSelectors() {
+        float density = getResources().getDisplayMetrics().density;
+        StateListDrawable chipSelector = createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex],
+            FOCUSED_SURFACE_COLORS[currentBgIndex],
+            ACCENT_COLORS[currentAccentIndex],
+            (int) (12 * density),
+            3.5f * density
+        );
+
+        if (btnDtv != null) btnDtv.setBackground(chipSelector);
+        if (btnHdmi1 != null) btnHdmi1.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
+        if (btnHdmi2 != null) btnHdmi2.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
+        if (btnHdmi3 != null) btnHdmi3.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
+        if (btnSrcAll != null) btnSrcAll.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
+
+        // Header buttons selector
+        StateListDrawable headerSelector = createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex],
+            FOCUSED_SURFACE_COLORS[currentBgIndex],
+            ACCENT_COLORS[currentAccentIndex],
+            (int) (10 * density),
+            3.0f * density
+        );
+        if (btnWifi != null) btnWifi.setBackground(headerSelector);
+        if (btnHomeRemote != null) btnHomeRemote.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(10 * density), 3.0f * density));
+        if (btnTheme != null) btnTheme.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(10 * density), 3.0f * density));
+        if (btnHomeSettings != null) btnHomeSettings.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(10 * density), 3.0f * density));
+        if (btnFavReorder != null) btnFavReorder.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(10 * density), 3.0f * density));
     }
 
     private void applySectionOrder(boolean favsFirst) {
@@ -346,22 +444,14 @@ public class MainActivity extends Activity {
         }
     }
 
-    private StateListDrawable createDynamicCardSelector() {
-        float density = getResources().getDisplayMetrics().density;
-        int cornerPx = (int) (14 * density);
-        int strokeWidthPx = (int) (3.5f * density);
-
-        int normalBg = SURFACE_COLORS[currentBgIndex];
-        int focusedBg = FOCUSED_SURFACE_COLORS[currentBgIndex];
-        int accent = ACCENT_COLORS[currentAccentIndex];
-
+    public StateListDrawable createDynamicSelector(int normalBg, int focusedBg, int accent, int cornerPx, float strokeWidthPx) {
         StateListDrawable sld = new StateListDrawable();
 
         // Focused state (bordo evidente con contrasto elevato WCAG AAA)
         GradientDrawable focused = new GradientDrawable();
         focused.setColor(focusedBg);
         focused.setCornerRadius(cornerPx);
-        focused.setStroke(strokeWidthPx, accent);
+        focused.setStroke((int) strokeWidthPx, accent);
         sld.addState(new int[]{android.R.attr.state_focused}, focused);
 
         // Pressed state
@@ -374,10 +464,21 @@ public class MainActivity extends Activity {
         GradientDrawable normal = new GradientDrawable();
         normal.setColor(normalBg);
         normal.setCornerRadius(cornerPx);
-        normal.setStroke((int) (1 * density), 0xFF1E293B);
+        normal.setStroke((int) (1 * getResources().getDisplayMetrics().density), 0xFF1E293B);
         sld.addState(new int[]{}, normal);
 
         return sld;
+    }
+
+    private StateListDrawable createDynamicCardSelector() {
+        float density = getResources().getDisplayMetrics().density;
+        return createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex],
+            FOCUSED_SURFACE_COLORS[currentBgIndex],
+            ACCENT_COLORS[currentAccentIndex],
+            (int) (14 * density),
+            3.5f * density
+        );
     }
 
     private void setupTopBar() {
@@ -449,6 +550,7 @@ public class MainActivity extends Activity {
             "✨ Colore Evidenziazione Focus (" + ACCENT_NAMES[currentAccentIndex] + ")",
             "📐 Disposizione Sezioni (" + (currentLayoutOrder == 0 ? "Ingressi prima" : "Preferiti prima") + ")",
             "🛠️ App Tecniche OEM: " + (showSystemApps ? "Visibili" : "Nascoste (Consigliato)"),
+            "📶 Dettagli Rete: " + (showNetworkDetails ? "Visibili (SSID/IP)" : "Nascosti (Privacy)"),
             "🔄 Ripristina Impostazioni Predefinite"
         };
 
@@ -467,10 +569,16 @@ public class MainActivity extends Activity {
                     loadInstalledApps();
                     Toast.makeText(MainActivity.this, "App tecniche: " + (showSystemApps ? "Visibili" : "Nascoste"), Toast.LENGTH_SHORT).show();
                 } else if (which == 4) {
+                    showNetworkDetails = !showNetworkDetails;
+                    saveThemePreferences();
+                    updateWifiStatus();
+                    Toast.makeText(MainActivity.this, "Dettagli rete: " + (showNetworkDetails ? "Visibili" : "Nascosti"), Toast.LENGTH_SHORT).show();
+                } else if (which == 5) {
                     currentBgIndex = 0;
                     currentAccentIndex = 0;
                     currentLayoutOrder = 0;
                     showSystemApps = false;
+                    showNetworkDetails = false;
                     saveThemePreferences();
                     loadInstalledApps();
                     applyTheme();
@@ -573,7 +681,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String getLocalIpAddress() {
+    public static String getLocalIpAddress() {
         try {
             for (Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces(); en.hasMoreElements();) {
                 NetworkInterface intf = en.nextElement();
@@ -591,8 +699,9 @@ public class MainActivity extends Activity {
     private void updateWifiStatus() {
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            boolean isEnabled = (wm != null && wm.isWifiEnabled());
             String ssid = "Wi-Fi";
-            if (wm != null && wm.isWifiEnabled()) {
+            if (isEnabled) {
                 WifiInfo info = wm.getConnectionInfo();
                 if (info != null && info.getSSID() != null) {
                     String cleanSsid = info.getSSID().replace("\"", "");
@@ -601,19 +710,29 @@ public class MainActivity extends Activity {
                     }
                 }
             }
+
+            if (!showNetworkDetails) {
+                // Modalità Privacy: mostra solo lo stato generale senza SSID né IP
+                if (btnWifi != null) {
+                    btnWifi.setText(isEnabled ? "📶 Wi-Fi Connesso" : "📶 Rete Disconnessa");
+                }
+                return;
+            }
+
             String ip = getLocalIpAddress();
-            if (ip != null && !ip.isEmpty()) {
-                btnWifi.setText("📶 " + ssid + " (" + ip + ")");
-            } else {
-                btnWifi.setText("📶 " + ssid);
+            if (btnWifi != null) {
+                if (ip != null && !ip.isEmpty()) {
+                    btnWifi.setText("📶 " + ssid + " (" + ip + ")");
+                } else {
+                    btnWifi.setText("📶 " + ssid);
+                }
             }
         } catch (Exception e) {
-            btnWifi.setText("📶 Rete");
+            if (btnWifi != null) btnWifi.setText("📶 Rete");
         }
     }
 
     private void setupHardwareInputs() {
-        Button btnDtv = (Button) findViewById(R.id.btn_src_dtv);
         if (btnDtv != null) {
             btnDtv.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -625,7 +744,6 @@ public class MainActivity extends Activity {
             btnDtv.requestFocus();
         }
 
-        Button btnHdmi1 = (Button) findViewById(R.id.btn_src_hdmi1);
         if (btnHdmi1 != null) {
             btnHdmi1.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -636,7 +754,6 @@ public class MainActivity extends Activity {
             attachFocusScale(btnHdmi1, 1.05f);
         }
 
-        Button btnHdmi2 = (Button) findViewById(R.id.btn_src_hdmi2);
         if (btnHdmi2 != null) {
             btnHdmi2.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -647,7 +764,6 @@ public class MainActivity extends Activity {
             attachFocusScale(btnHdmi2, 1.05f);
         }
 
-        Button btnHdmi3 = (Button) findViewById(R.id.btn_src_hdmi3);
         if (btnHdmi3 != null) {
             btnHdmi3.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -658,9 +774,8 @@ public class MainActivity extends Activity {
             attachFocusScale(btnHdmi3, 1.05f);
         }
 
-        Button btnAll = (Button) findViewById(R.id.btn_src_all);
-        if (btnAll != null) {
-            btnAll.setOnClickListener(new View.OnClickListener() {
+        if (btnSrcAll != null) {
+            btnSrcAll.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     try {
@@ -679,7 +794,7 @@ public class MainActivity extends Activity {
                     }
                 }
             });
-            attachFocusScale(btnAll, 1.05f);
+            attachFocusScale(btnSrcAll, 1.05f);
         }
     }
 
@@ -724,40 +839,51 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean isSystemOrTechnicalApp(ResolveInfo ri, PackageManager pm) {
-        String pkg = ri.activityInfo.packageName != null ? ri.activityInfo.packageName.toLowerCase(Locale.ROOT) : "";
-        String act = ri.activityInfo.name != null ? ri.activityInfo.name.toLowerCase(Locale.ROOT) : "";
-        String label = "";
-        try {
-            CharSequence cs = ri.loadLabel(pm);
-            if (cs != null) label = cs.toString().toLowerCase(Locale.ROOT);
-        } catch (Exception ignored) {}
+    public static boolean isSystemOrTechnicalApp(String pkg, String act, String label) {
+        String p = pkg != null ? pkg.toLowerCase(Locale.ROOT) : "";
+        String a = act != null ? act.toLowerCase(Locale.ROOT) : "";
+        String l = label != null ? label.toLowerCase(Locale.ROOT) : "";
 
-        for (String p : SYSTEM_FILTER_PACKAGES) {
-            if (pkg.equals(p.toLowerCase(Locale.ROOT)) || pkg.startsWith(p.toLowerCase(Locale.ROOT))) {
+        for (String filterPkg : SYSTEM_FILTER_PACKAGES) {
+            if (p.equals(filterPkg.toLowerCase(Locale.ROOT)) || p.startsWith(filterPkg.toLowerCase(Locale.ROOT))) {
                 return true;
             }
         }
 
-        for (String l : SYSTEM_FILTER_LABELS) {
-            if (act.contains(l) || label.contains(l)) {
+        for (String filterLbl : SYSTEM_FILTER_LABELS) {
+            if (a.contains(filterLbl) || l.contains(filterLbl)) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean isStreamingApp(AppItem item) {
-        String pkg = item.packageName != null ? item.packageName.toLowerCase(Locale.ROOT) : "";
-        String label = item.label != null ? item.label.toLowerCase(Locale.ROOT) : "";
+    private boolean isSystemOrTechnicalApp(ResolveInfo ri, PackageManager pm) {
+        String pkg = ri.activityInfo.packageName;
+        String act = ri.activityInfo.name;
+        String label = "";
+        try {
+            CharSequence cs = ri.loadLabel(pm);
+            if (cs != null) label = cs.toString();
+        } catch (Exception ignored) {}
+        return isSystemOrTechnicalApp(pkg, act, label);
+    }
+
+    public static boolean isStreamingApp(String packageName, String label) {
+        String p = packageName != null ? packageName.toLowerCase(Locale.ROOT) : "";
+        String l = label != null ? label.toLowerCase(Locale.ROOT) : "";
 
         for (String kw : STREAMING_PACKAGE_KEYWORDS) {
-            if (pkg.contains(kw)) return true;
+            if (p.contains(kw)) return true;
         }
         for (String kw : STREAMING_LABEL_KEYWORDS) {
-            if (label.contains(kw)) return true;
+            if (l.contains(kw)) return true;
         }
         return false;
+    }
+
+    private boolean isStreamingApp(AppItem item) {
+        return isStreamingApp(item.packageName, item.label);
     }
 
     private void loadInstalledApps() {
@@ -807,6 +933,22 @@ public class MainActivity extends Activity {
         Collections.sort(allApps);
         Collections.sort(streamingApps);
 
+        // Pulizia preferiti: se un package preferito non esiste più sulla TV, rimuovilo
+        boolean favsCleaned = false;
+        List<String> validFavs = new ArrayList<String>();
+        for (String favPkg : favoritePackages) {
+            if (seen.contains(favPkg)) {
+                validFavs.add(favPkg);
+            } else {
+                favsCleaned = true;
+            }
+        }
+        if (favsCleaned) {
+            favoritePackages.clear();
+            favoritePackages.addAll(validFavs);
+            saveFavoritePreferences();
+        }
+
         updateFavoritesList();
         updateStreamingList();
         updateAllAppsList();
@@ -825,6 +967,63 @@ public class MainActivity extends Activity {
         });
     }
 
+    /**
+     * Gestore tasti D-Pad per le card: risolve formalmente il P0 (prevenzione doppio avvio
+     * su pressione prolungata). Traccia rigorosamente lo stato di longPressHandled:
+     * al rilascio (ACTION_UP), se la pressione prolungata è stata consumata per aprire il
+     * dialogo opzioni, l'evento viene consumato senza lanciare l'app.
+     */
+    public static class CardKeyHandler implements View.OnKeyListener {
+        private final MainActivity activity;
+        private final AppItem item;
+        private final int sectionType;
+        private final int index;
+        private boolean longPressHandled = false;
+
+        public CardKeyHandler(MainActivity activity, AppItem item, int sectionType, int index) {
+            this.activity = activity;
+            this.item = item;
+            this.sectionType = sectionType;
+            this.index = index;
+        }
+
+        public boolean isLongPressHandled() {
+            return longPressHandled;
+        }
+
+        @Override
+        public boolean onKey(View v, int keyCode, KeyEvent event) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                    if (event.getRepeatCount() == 0) {
+                        longPressHandled = false;
+                        event.startTracking();
+                        return true;
+                    } else if (event.isLongPress()) {
+                        longPressHandled = true;
+                        if (sectionType == SECTION_FAVORITES) {
+                            activity.showFavoriteOptionsDialog(item, index);
+                        } else {
+                            activity.showAppOptionsDialog(item);
+                        }
+                        return true;
+                    }
+                } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                    if (longPressHandled) {
+                        // Consuma il rilascio: il menu contestuale è già aperto, ZERO lanci dell'app!
+                        longPressHandled = false;
+                        return true;
+                    }
+                    if (!event.isCanceled()) {
+                        activity.launchApp(item);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     private View createCardView(ViewGroup parent, final AppItem item, final int sectionType, final int index) {
         LayoutInflater inflater = LayoutInflater.from(this);
         View card = inflater.inflate(R.layout.item_leanback_card, parent, false);
@@ -838,6 +1037,7 @@ public class MainActivity extends Activity {
 
         attachFocusScale(card, 1.08f);
 
+        // Click standard per touch / mouse
         card.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -845,33 +1045,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        card.setOnKeyListener(new View.OnKeyListener() {
-            @Override
-            public boolean onKey(View v, int keyCode, KeyEvent event) {
-                if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                        if (event.getRepeatCount() == 0) {
-                            event.startTracking();
-                            return true;
-                        } else if (event.isLongPress()) {
-                            if (sectionType == SECTION_FAVORITES) {
-                                showFavoriteOptionsDialog(item, index);
-                            } else {
-                                showAppOptionsDialog(item);
-                            }
-                            return true;
-                        }
-                    } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                        if (!event.isCanceled()) {
-                            launchApp(item);
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            }
-        });
-
+        // Long click standard per touch / mouse
         card.setOnLongClickListener(new View.OnLongClickListener() {
             @Override
             public boolean onLongClick(View v) {
@@ -883,6 +1057,9 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
+
+        // Gestione rigorosa del D-Pad del telecomando TV (P0 risolto)
+        card.setOnKeyListener(new CardKeyHandler(this, item, sectionType, index));
 
         return card;
     }
@@ -957,7 +1134,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void launchApp(AppItem item) {
+    public void launchApp(AppItem item) {
         try {
             PackageManager pm = getPackageManager();
             Intent intent = pm.getLeanbackLaunchIntentForPackage(item.packageName);
@@ -979,7 +1156,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showFavoriteOptionsDialog(final AppItem fav, final int index) {
+    public void showFavoriteOptionsDialog(final AppItem fav, final int index) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
         builder.setTitle(fav.label + " (Preferiti)");
 
@@ -1034,7 +1211,7 @@ public class MainActivity extends Activity {
         builder.show();
     }
 
-    private void showAppOptionsDialog(final AppItem item) {
+    public void showAppOptionsDialog(final AppItem item) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
         builder.setTitle(item.label);
 

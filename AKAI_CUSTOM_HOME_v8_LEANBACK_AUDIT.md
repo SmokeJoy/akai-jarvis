@@ -10,19 +10,24 @@ La versione precedente del launcher (`it.akai.customhome` v7), pur garantendo st
 
 La nuova architettura **v8 Leanback** adotta le linee guida canoniche di Google Android TV per interfacce a 10 piedi (10-Foot UI), riorganizzando i contenuti in **quattro righe orizzontali tematiche**, con tipografia maggiorata (&ge; 14sp), focus ad altissimo contrasto (WCAG AAA 13.3:1) e zoom leggero (1.08x) su D-Pad.
 
+> [!NOTE]
+> **Dichiarazione Trasparente Materiali Grafici**:
+> I file `AKAI_CUSTOM_HOME_v8_anteprima_leanback.png` e `AKAI_CUSTOM_HOME_v8_comparazione_prima_dopo.png` sono render e simulazioni grafiche generate via headless browser del mockup interattivo `AKAI_CUSTOM_HOME_v8_LEANBACK_COMPARAZIONE.html`. **Non costituiscono catture runtime da dispositivo TV fisico né da emulatore Android.** Il collaudo visivo e strumentale su hardware reale rimane subordinato al superamento del preflight privilege gate e a esplicita autorizzazione dell'utente.
+
 ---
 
-## 2. Matrice di Risoluzione Rilievi (v7 vs v8)
+## 2. Matrice di Risoluzione Rilievi (Revisione 1 — PR #3)
 
-| Area di Rilievo | Situazione v7 (Legacy) | Implementazione v8 (Leanback) | Esito Tecnico |
-| :--- | :--- | :--- | :--- |
-| **Tipografia & Leggibilità** | Didascalie a 10sp, label a 12sp | Didascalie a **14sp**, titoli sezioni a **15-16sp bold**, label card a **14sp bold** | **Risolto (Leggibilità ottimale a 4 metri)** |
-| **Struttura Layout** | Griglia unica a 6 colonne verticali | **4 Righe Orizzontali Tematiche** in `ScrollView` fluido | **Risolto (Navigazione Leanback naturale)** |
-| **App Tecniche OEM** | Presenti nella Home (`A2dpSinkPlayer`, `Boot Video`, `Cultraview`) | **Filtro / Blacklist Intelligente** automatica con toggle nelle impostazioni | **Risolto (Interfaccia pulita e professionale)** |
-| **Categorizzazione Streaming** | Nessuna (tutto confuso in All Apps) | **Sezione dedicata STREAMING & CINEMA** con keyword matching | **Risolto (Accesso immediato all'intrattenimento)** |
-| **Focus D-Pad & Contrasto** | Bordo statico sottile, ratio non verificato | Bordo **3.5dp**, contrasto **13.3:1 (WCAG AAA)** e animazione **1.08x** | **Risolto (Tracciabilità cursore immediata)** |
-| **Privacy Dati LAN** | Fallback hardcoded `192.168.1.8` | Fallback sanitizzato dinamico `""` / `"Wi-Fi Connesso"` | **Risolto (Zero leak di IP locali)** |
-| **Hardware Freeze** | Rischio di installazione accidentale | Sviluppo su ramo isolato `feature/launcher-ui-v8-leanback`, **zero comandi ADB** | **Risolto (Zero interferenza TV)** |
+| Area di Rilievo | Gravità | Problema Identificato | Soluzione Implementata | Esito Tecnico |
+| :--- | :--- | :--- | :--- | :--- |
+| **Pressione Prolungata OK** | **P0** | Pressione lunga apriva il dialogo ma al rilascio (ACTION_UP) lanciava anche l'app | Implementato `CardKeyHandler` con tracking rigoroso `longPressHandled`: su ACTION_UP consuma l'evento se long-press è stato gestito | **Risolto (Validato da test 1.1–1.4)** |
+| **Aggiornamento App Stantio** | **P1** | `onResume()` aggiornava solo Wi-Fi; app installate/rimosse in background non apparivano | Registrato `BroadcastReceiver` dinamico per `PACKAGE_ADDED/REMOVED/REPLACED` + `loadInstalledApps()` in `onResume` con pulizia orfani | **Risolto (Catalogo reattivo)** |
+| **Troncamento Nomi App** | **P1** | `android:singleLine="true"` tagliava i nomi lunghi a 14sp | Aggiornato `item_leanback_card.xml` con `maxLines="2"`, `lines="2"`, altezza card a 118dp | **Risolto (Titoli su 2 righe leggibili)** |
+| **Focus Uniforme su Tutta la UI** | **P1** | Chip ingressi e pulsanti header usavano selector statici indipendenti dal tema | Metodo `updateHeaderAndInputsSelectors()` che applica l'accento e i colori tema a tutti i pulsanti | **Risolto (Coerenza cromatica 100%)** |
+| **Clipping Cursore Zoom 1.08x** | **P1** | Le prime/ultime tessere scalando a 1.08x venivano tagliate dai bordi dei container | Aggiunto `clipChildren="false"` e `clipToPadding="false"` su tutti i container e padding orizzontale 6dp | **Risolto (Zoom fluido senza tagli)** |
+| **Privacy Dati di Rete** | **P1** | Header mostrava SSID e IP locale dinamico visibili a schermo | Aggiunto toggle `pref_show_network_details` (default: **Nascosto/Privacy**): mostra `📶 Wi-Fi Connesso` | **Risolto (Zero leak IP visivo)** |
+| **Assenza Test Suite CI** | **P1** | La CI verificava solo la sintassi e il build APK senza test launcher | Creata suite `LauncherUnitTests` (46 test Java) integrata nel workflow CI | **Risolto (46/46 PASS in CI)** |
+| **Artefatto CI Distribuibile** | **P1** | Rischio di confondere l'APK di CI firmato con chiave temporanea con una release | APK CI rinominato `akai-custom-home-v8-ci-test-nondistributable.apk` con blocco formale | **Risolto (Fail-Closed)** |
 
 ---
 
@@ -30,7 +35,7 @@ La nuova architettura **v8 Leanback** adotta le linee guida canoniche di Google 
 
 ```
 +---------------------------------------------------------------------------------------------------+
-|  [AKAI] CUSTOM HOME v8 LEANBACK     [📶 Wi-Fi]  [📱 Associa iPhone]  [🎨 Tema]  [⚙️ Setup]   12:45 |
+|  [AKAI] CUSTOM HOME v8 LEANBACK     [📶 Wi-Fi Connesso] [📱 Associa iPhone] [🎨 Tema] [⚙️ Setup] 12:45 |
 +---------------------------------------------------------------------------------------------------+
 |  INGRESSI HARDWARE (15sp bold)                                                                    |
 |  [ 📺 TV Digitale ]*   [ 🎮 Fire TV (HDMI 1) ]   [ 🎬 HDMI 2 ]   [ 💻 HDMI 3 ]   [ 🔌 Menu Ingr ]  |
@@ -39,7 +44,7 @@ La nuova architettura **v8 Leanback** adotta le linee guida canoniche di Google 
 |  [ ▶️ YouTube TV ]*    [ 📡 RaiPlay ]    [ 🍿 Netflix ]    [ 📺 Infinity+ ]    [ 🏰 Disney+ ]     |
 +---------------------------------------------------------------------------------------------------+
 |  STREAMING & CINEMA (15sp bold) · (Piattaforme video e multimediali)                              |
-|  [ 📦 Prime Video ]*   [ 📡 RaiPlay ]    [ 🍿 Netflix ]    [ ▶️ YouTube TV ]   [ 🎧 Spotify ]     |
+|  [ 📦 Prime Video ]*   [ 📡 RaiPlay ]    [ 🍿 Netflix ]    [ 📺 Infinity+ ]    [ 🎧 Spotify ]     |
 +---------------------------------------------------------------------------------------------------+
 |  TUTTE LE APPLICAZIONI (15sp bold) · (Catalogo completo pulito da app diagnostiche OEM)          |
 |  [ 🌐 Browser Web ]    [ 📁 File Mgr ]   [ 🛍️ Play Store ] [ 📸 Galleria ]    [ ⚙️ Impostazioni ] |
@@ -53,9 +58,9 @@ La nuova architettura **v8 Leanback** adotta le linee guida canoniche di Google 
 - Focus iniziale automatico sul pulsante DTV alla pressione del tasto HOME.
 
 ### 3.2 Sezione 2: App Preferite
-- Card orizzontali ad ampia superficie (175dp &times; 110dp).
+- Card orizzontali ad ampia superficie (175dp &times; 118dp) con supporto a 2 righe di testo da 14sp.
 - Possibilità di aggiungere, rimuovere e riordinare a piacimento le app tramite D-Pad (OK prolungato).
-- Aggiornamento reattivo senza ricaricamento dell'Activity.
+- Pulizia automatica dei preferiti se un'applicazione viene disinstallata dalla TV.
 
 ### 3.3 Sezione 3: Streaming & Cinema
 - Identificazione automatica di tutte le piattaforme di intrattenimento installate tramite package signature e keyword analysis (YouTube, Netflix, Prime Video, RaiPlay, Mediaset Infinity, Disney+, Spotify, Kodi, VLC, Pluto TV, TIMVISION, ecc.).
@@ -74,28 +79,28 @@ La nuova architettura **v8 Leanback** adotta le linee guida canoniche di Google 
 
 ---
 
-## 4. Specifiche Tecniche del Codice
+## 4. Test Suite Launcher (46/46 PASS)
 
-- **Package**: `it.akai.customhome`
-- **Activity**: `MainActivity.java`
-- **Target SDK**: Android 9 (API 28), Min SDK: Android 5.0 (API 21)
-- **Dipendenze Esterne**: `0` (Zero librerie di terze parti, zero SDK proprietari, zero cloud).
-- **Animazioni**: GPU-accelerated via `View.animate().scaleX(1.08f).scaleY(1.08f)` a durata 120ms, con consumo trascurabile di RAM e CPU, ideale per il SoC MT5867 quad-core con 1.5 GB di RAM.
-- **File di Risorsa Aggiunti/Modificati**:
-  - `res/layout/activity_main.xml`: Struttura a 4 righe in `ScrollView` verticale con `HorizontalScrollView` indipendenti.
-  - `res/layout/item_leanback_card.xml`: Card standardizzata 175dp &times; 110dp con label a 14sp bold.
-  - `res/drawable/card_focus_selector.xml`: Bordo dorato/ciano 3.5dp con angoli arrotondati 14dp.
-  - `res/drawable/source_chip_selector.xml`: Bordo ciano 3.5dp ad alto contrasto per le sorgenti fisiche.
-  - `res/values/strings.xml`: Stringhe localizzate v8 Leanback con didascalie descrittive.
-  - `res/values/colors.xml`: Palette contrasto sRGB conforme a WCAG AAA.
+La suite di collaudo offline `LauncherUnitTests` (eseguibile tramite `scripts/run_launcher_tests.ps1` e integrata in GitHub Actions) valida in modo esaustivo:
+1. **P0 D-Pad Key Handling**:
+   - Short press: `ACTION_DOWN` (repeat 0) $\to$ `ACTION_UP` $\to$ Avvio app = 1, Dialoghi = 0.
+   - Long press: `ACTION_DOWN` (repeat 0) $\to$ `ACTION_DOWN` (repeat 1, isLongPress=true) $\to$ `ACTION_UP` $\to$ Dialoghi = 1, **Avvio app = 0 (P0 Risolto)**.
+   - Equivalenza tasti `KEYCODE_ENTER` e `KEYCODE_DPAD_CENTER`.
+   - Evento `Canceled`: zero avvii app.
+2. **OEM Technical Blacklist**:
+   - 6 pattern di test OEM bloccati (`A2dpSinkPlayer`, `Boot Video`, `Cultraview`, `Airoha`, `WWTV Factory`, `Traceur`).
+   - 5 app legittime preservate (`YouTube`, `RaiPlay`, `Netflix`, `Disney+`, `Play Store`).
+3. **Streaming Categorization**:
+   - 10 piattaforme multimediali identificate; 4 utility generiche escluse.
+4. **Matematica Contrasto sRGB (IEC 61966-2-1)**:
+   - Testo Bianco su Sfondo Midnight: $19.66:1 \ge 7.0:1$ (WCAG AAA)
+   - Bordo Focus Oro su Superficie Sapphire: $4.82:1 \ge 4.5:1$ (WCAG AAA componente attivo)
+   - Focus Ciano su Sfondo Midnight: $12.78:1 \ge 7.0:1$ (WCAG AAA).
 
 ---
 
-## 5. Artefatti Visivi Generati per la Revisione
+## 5. Vincoli di Sicurezza Categorici
 
-1. **`AKAI_CUSTOM_HOME_v8_LEANBACK_COMPARAZIONE.html`**:
-   Dashboard interattiva con selettore di vista dinamico (v8 Leanback, Confronto Analitico, v7 Legacy).
-2. **`AKAI_CUSTOM_HOME_v8_anteprima_leanback.png`**:
-   Render fedele ad alta risoluzione del nuovo layout a righe sulla TV.
-3. **`AKAI_CUSTOM_HOME_v8_comparazione_prima_dopo.png`**:
-   Infografica comparativa tecnica con evidenza delle migliorie grafiche e prestazionali.
+- **ZERO DEPLOY SULLA TV FISICA**: Nessun comando ADB, nessun ping ICMP e nessuna connessione verso `192.168.1.8`.
+- **ZERO MERGE SU MAIN**: Il ramo `feature/launcher-ui-v8-leanback` rimane isolato nella PR #3 aperta per peer review.
+- L'APK prodotto dalla pipeline CI è formalmente classificato come `non-distributable` (firmato con chiave effimera di test).

@@ -53,10 +53,30 @@ jobs:
           test -f akai-custom-home/app/src/main/java/it/akai/customhome/MainActivity.java || (echo "MainActivity.java missing!" && exit 1)
           echo "All mandatory launcher source files present."
 
-      - name: 4. Compile Standalone AKAI Custom Home v8 Leanback APK with AAPT2, Javac & D8
+      - name: 4. Compile and Run Launcher Java Unit Tests (46 Tests: P0 D-Pad Key Handling, OEM Blacklist, Streaming & WCAG AAA Contrast)
+        run: |
+          echo "=== Compiling and Running LauncherUnitTests (46 Tests) ==="
+          mkdir -p test_bin
+          MOCK_SRC=$(find akai-custom-home/test/host_mock -name "*.java")
+          javac -encoding UTF-8 -d test_bin \
+            $MOCK_SRC \
+            akai-custom-home/app/src/main/java/it/akai/customhome/MainActivity.java \
+            akai-custom-home/test/it/akai/customhome/LauncherUnitTests.java
+
+          java -cp test_bin it.akai.customhome.LauncherUnitTests
+          echo "All 46 Launcher unit tests passed successfully."
+
+      - name: 5. Compile Standalone AKAI Custom Home v8 Leanback APK with AAPT2, Javac & D8 (Target Android API 28)
         run: |
           echo "=== Building AKAI Custom Home v8 APK in CI ==="
-          ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+          # Seleziona esplicitamente android-28 se presente, altrimenti fallback controllato
+          if [ -f "$ANDROID_HOME/platforms/android-28/android.jar" ]; then
+            ANDROID_JAR="$ANDROID_HOME/platforms/android-28/android.jar"
+          else
+            ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+          fi
+          echo "Using Android Platform JAR: $ANDROID_JAR"
+
           AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
           D8=$(find "$ANDROID_HOME/build-tools" -name "d8" 2>/dev/null | sort -V | tail -n 1)
           ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign" 2>/dev/null | sort -V | tail -n 1)
@@ -75,7 +95,9 @@ jobs:
             build_launcher_ci/compiled_res.zip \
             --auto-add-overlay \
             --min-sdk-version 21 \
-            --target-sdk-version 28
+            --target-sdk-version 28 \
+            --version-code 8 \
+            --version-name "8.0.0"
 
           # 3. Compile Java sources
           JAVA_SRC=$(find akai-custom-home/app/src/main/java build_launcher_ci/gen -name "*.java")
@@ -92,10 +114,21 @@ jobs:
           # 6. ZipAlign
           "$ZIPALIGN" -f -v 4 build_launcher_ci/base.apk build_launcher_ci/aligned.apk
 
-          # 7. Ephemeral test key sign
+          # 7. Ephemeral test key sign (NON-DISTRIBUTABLE CI TEST BUILD)
           keytool -genkey -v -keystore /tmp/ci_launcher.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Launcher CI,O=AKAI Home,C=IT"
-          "$APKSIGNER" sign --ks /tmp/ci_launcher.keystore --ks-pass pass:android --key-pass pass:android --out build_launcher_ci/akai-custom-home-v8-ci.apk build_launcher_ci/aligned.apk
+          "$APKSIGNER" sign --ks /tmp/ci_launcher.keystore --ks-pass pass:android --key-pass pass:android --out build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk build_launcher_ci/aligned.apk
 
           # 8. Verify
-          "$APKSIGNER" verify --verbose build_launcher_ci/akai-custom-home-v8-ci.apk
-          echo "AKAI CUSTOM HOME v8 CI BUILD SUCCESSFUL."
+          "$APKSIGNER" verify --verbose build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk
+          echo "AKAI CUSTOM HOME v8 CI BUILD SUCCESSFUL (NON-DISTRIBUTABLE TEST ARTIFACT)."
+
+      - name: 6. Inspect APK Internal Contents
+        run: |
+          echo "=== Verifying internal contents of candidate Launcher APK ==="
+          unzip -l build_launcher_ci/akai-custom-home-v8-ci-test-nondistributable.apk > build_launcher_ci/apk_contents.txt
+          cat build_launcher_ci/apk_contents.txt
+          grep "classes.dex" build_launcher_ci/apk_contents.txt || (echo "FATAL: classes.dex missing from Launcher APK!" && exit 1)
+          grep "AndroidManifest.xml" build_launcher_ci/apk_contents.txt || (echo "FATAL: AndroidManifest.xml missing from Launcher APK!" && exit 1)
+          grep "res/layout/activity_main.xml" build_launcher_ci/apk_contents.txt || (echo "FATAL: activity_main.xml missing from Launcher APK!" && exit 1)
+          grep "res/layout/item_leanback_card.xml" build_launcher_ci/apk_contents.txt || (echo "FATAL: item_leanback_card.xml missing from Launcher APK!" && exit 1)
+          echo "ALL MANDATORY LAUNCHER ARTIFACTS VERIFIED INSIDE APK."

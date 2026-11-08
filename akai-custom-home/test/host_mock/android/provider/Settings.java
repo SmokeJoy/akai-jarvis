@@ -1,0 +1,6 @@
+package android.provider;
+public class Settings {
+    public static final String ACTION_SETTINGS = "settings";
+    public static final String ACTION_WIFI_SETTINGS = "wifi";
+    public static final String ACTION_APPLICATION_DETAILS_SETTINGS = "app_details";
+}

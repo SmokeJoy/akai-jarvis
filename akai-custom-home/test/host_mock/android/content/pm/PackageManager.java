@@ -1,0 +1,9 @@
+package android.content.pm;
+import android.content.Intent;
+import java.util.ArrayList;
+import java.util.List;
+public class PackageManager {
+    public List<ResolveInfo> queryIntentActivities(Intent i, int f) { return new ArrayList<ResolveInfo>(); }
+    public Intent getLaunchIntentForPackage(String p) { return new Intent(); }
+    public Intent getLeanbackLaunchIntentForPackage(String p) { return new Intent(); }
+}
