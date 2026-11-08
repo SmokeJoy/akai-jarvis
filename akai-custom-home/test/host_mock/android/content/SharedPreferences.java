@@ -12,5 +12,6 @@ public interface SharedPreferences {
     Set<String> getStringSet(String k, Set<String> d);
     int getInt(String k, int d);
     boolean getBoolean(String k, boolean d);
+    boolean contains(String k);
     Editor edit();
 }

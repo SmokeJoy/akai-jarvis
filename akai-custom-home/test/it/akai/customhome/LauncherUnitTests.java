@@ -2,6 +2,13 @@ package it.akai.customhome;
 
 import android.view.KeyEvent;
 import android.view.View;
+import android.content.SharedPreferences;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
 
 public class LauncherUnitTests {
 
@@ -32,12 +39,80 @@ public class LauncherUnitTests {
         assertEquals(message, false, condition);
     }
 
-    // Mock Activity Harness per intercettare le chiamate del CardKeyHandler
-    private static class MockActivityHarness extends MainActivity {
+    // Mock SharedPreferences in memoria per test di persistenza
+    public static class MockSharedPreferences implements SharedPreferences {
+        public final Map<String, Object> data = new HashMap<String, Object>();
+
+        public void put(String k, Object v) { data.put(k, v); }
+
+        @Override public String getString(String k, String d) { Object v = data.get(k); return (v instanceof String) ? (String) v : d; }
+        @Override public Set<String> getStringSet(String k, Set<String> d) { Object v = data.get(k); return (v instanceof Set) ? (Set<String>) v : d; }
+        @Override public int getInt(String k, int d) { Object v = data.get(k); return (v instanceof Integer) ? (Integer) v : d; }
+        @Override public boolean getBoolean(String k, boolean d) { Object v = data.get(k); return (v instanceof Boolean) ? (Boolean) v : d; }
+        @Override public boolean contains(String k) { return data.containsKey(k); }
+
+        @Override
+        public Editor edit() {
+            return new Editor() {
+                public Editor putString(String k, String v) { data.put(k, v); return this; }
+                public Editor putStringSet(String k, Set<String> v) { data.put(k, v); return this; }
+                public Editor putInt(String k, int v) { data.put(k, v); return this; }
+                public Editor putBoolean(String k, boolean v) { data.put(k, v); return this; }
+                public void apply() {}
+            };
+        }
+    }
+
+    // Mock Activity Harness per intercettare chiamate D-Pad, dialoghi e lifecycle
+    public static class MockActivityHarness extends MainActivity {
         int launchAppCalls = 0;
         int showFavDialogCalls = 0;
         int showAppDialogCalls = 0;
         AppItem lastLaunchedItem = null;
+        public final MockSharedPreferences mockPrefs = new MockSharedPreferences();
+
+        public MockActivityHarness() {
+            // Inizializza lista preferiti vuota
+        }
+
+        public List<String> getFavoritePackagesList() {
+            // Espone la lista interna per verifica
+            try {
+                java.lang.reflect.Field field = MainActivity.class.getDeclaredField("favoritePackages");
+                field.setAccessible(true);
+                return (List<String>) field.get(this);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public void invokeLoadPreferences() {
+            try {
+                java.lang.reflect.Field prefsField = MainActivity.class.getDeclaredField("prefs");
+                prefsField.setAccessible(true);
+                prefsField.set(this, mockPrefs);
+
+                java.lang.reflect.Method method = MainActivity.class.getDeclaredMethod("loadPreferences");
+                method.setAccessible(true);
+                method.invoke(this);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public void invokeSaveFavoritePreferences() {
+            try {
+                java.lang.reflect.Field prefsField = MainActivity.class.getDeclaredField("prefs");
+                prefsField.setAccessible(true);
+                prefsField.set(this, mockPrefs);
+
+                java.lang.reflect.Method method = MainActivity.class.getDeclaredMethod("saveFavoritePreferences");
+                method.setAccessible(true);
+                method.invoke(this);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
 
         @Override
         public void launchApp(AppItem item) {
@@ -57,7 +132,7 @@ public class LauncherUnitTests {
     }
 
     // -------------------------------------------------------------------------
-    // TEST SUITE
+    // TEST SUITE D-PAD KEY HANDLING & P0 REGRESSION
     // -------------------------------------------------------------------------
 
     public static void testP0ShortPressLaunchesApp() {
@@ -67,21 +142,21 @@ public class LauncherUnitTests {
         MainActivity.CardKeyHandler handler = new MainActivity.CardKeyHandler(harness, testItem, MainActivity.SECTION_STREAMING, 0);
         View mockView = new View();
 
-        // 1. ACTION_DOWN repeat 0
         KeyEvent downEvent = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0);
         boolean downResult = handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, downEvent);
         assertTrue("DOWN deve essere consumato (return true)", downResult);
         assertEquals("Nessun lancio dell'app durante il DOWN", 0, harness.launchAppCalls);
         assertEquals("Nessun dialogo durante il DOWN breve", 0, harness.showAppDialogCalls);
+        assertTrue("downReceived deve essere true", handler.isDownReceived());
         assertFalse("longPressHandled deve essere false", handler.isLongPressHandled());
 
-        // 2. ACTION_UP repeat 0
         KeyEvent upEvent = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0);
         boolean upResult = handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, upEvent);
         assertTrue("UP deve essere consumato (return true)", upResult);
         assertEquals("L'app deve essere lanciata esattamente 1 volta al rilascio", 1, harness.launchAppCalls);
         assertEquals("Nessun dialogo aperto", 0, harness.showAppDialogCalls);
         assertEquals("L'app lanciata deve essere YouTube TV", "com.google.android.youtube.tv", harness.lastLaunchedItem.packageName);
+        assertFalse("downReceived resettato dopo UP", handler.isDownReceived());
     }
 
     public static void testP0LongPressOpensDialogAndPreventsAppLaunch() {
@@ -91,11 +166,9 @@ public class LauncherUnitTests {
         MainActivity.CardKeyHandler handler = new MainActivity.CardKeyHandler(harness, testItem, MainActivity.SECTION_FAVORITES, 2);
         View mockView = new View();
 
-        // 1. ACTION_DOWN repeat 0
         KeyEvent down0 = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0);
         handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, down0);
 
-        // 2. ACTION_DOWN repeat 1 (isLongPress = true)
         KeyEvent downLong = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 1, true, false);
         boolean downLongResult = handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, downLong);
         assertTrue("DOWN LongPress deve essere consumato", downLongResult);
@@ -103,7 +176,6 @@ public class LauncherUnitTests {
         assertEquals("Nessun avvio app durante long press", 0, harness.launchAppCalls);
         assertTrue("longPressHandled deve essere true", handler.isLongPressHandled());
 
-        // 3. ACTION_UP (Rilascio tasto dopo long press)
         KeyEvent upAfterLong = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0);
         boolean upResult = handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, upAfterLong);
         assertTrue("UP dopo long press deve essere consumato per non propagarsi", upResult);
@@ -112,6 +184,7 @@ public class LauncherUnitTests {
         assertEquals("ZERO lanci dell'app al rilascio dopo long press (P0 Risolto!)", 0, harness.launchAppCalls);
         assertEquals("Dialoghi aperti rimangono 1", 1, harness.showFavDialogCalls);
         assertFalse("longPressHandled deve essere resettato a false per eventi successivi", handler.isLongPressHandled());
+        assertFalse("downReceived deve essere resettato a false", handler.isDownReceived());
     }
 
     public static void testP0EnterKeyEquivalence() {
@@ -142,10 +215,176 @@ public class LauncherUnitTests {
         assertEquals("Evento cancellato non deve avviare alcuna app", 0, harness.launchAppCalls);
     }
 
-    public static void testOemTechnicalAppsFilter() {
-        System.out.println("\nTest 2: Filtro / Blacklist Applicazioni Tecniche OEM");
+    public static void testOrphanedUpEventDoesNotLaunchApp() {
+        System.out.println("\nTest 1.5: Evento ACTION_UP Orfano (senza previo DOWN) -> Ignora e Previene Avvio App");
+        MockActivityHarness harness = new MockActivityHarness();
+        MainActivity.AppItem testItem = new MainActivity.AppItem("Kodi", "org.xbmc.kodi", "MainActivity", null);
+        MainActivity.CardKeyHandler handler = new MainActivity.CardKeyHandler(harness, testItem, MainActivity.SECTION_STREAMING, 0);
+        View mockView = new View();
 
-        // Utility OEM e factory che DEVONO essere nascoste
+        // Invio diretto di ACTION_UP senza ACTION_DOWN (es. cambio rapido focus o evento orfano)
+        KeyEvent orphanedUp = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0);
+        boolean handled = handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, orphanedUp);
+        assertTrue("UP orfano deve essere consumato", handled);
+        assertEquals("ZERO lanci app su evento UP orfano", 0, harness.launchAppCalls);
+        assertEquals("ZERO dialoghi aperti", 0, harness.showAppDialogCalls);
+        assertFalse("downReceived deve restare false", handler.isDownReceived());
+    }
+
+    public static void testRepeatedDownOnlyTriggersDialogOnceAndConsumesRepeats() {
+        System.out.println("\nTest 1.6: Ripetizioni Multiple ACTION_DOWN Long Press -> Apre Dialogo 1 Sola Volta e Consuma Repeat");
+        MockActivityHarness harness = new MockActivityHarness();
+        MainActivity.AppItem testItem = new MainActivity.AppItem("Disney+", "com.disney.disneyplus", "MainActivity", null);
+        MainActivity.CardKeyHandler handler = new MainActivity.CardKeyHandler(harness, testItem, MainActivity.SECTION_FAVORITES, 1);
+        View mockView = new View();
+
+        // 1. Initial DOWN repeat 0
+        handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+
+        // 2. DOWN repeat 1 (scatta long press)
+        KeyEvent longPress1 = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 1, true, false);
+        boolean r1 = handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, longPress1);
+        assertTrue("Primo repeat long-press deve essere consumato", r1);
+        assertEquals("Dialogo aperto 1 sola volta", 1, harness.showFavDialogCalls);
+
+        // 3. DOWN repeat 2 e repeat 3 (l'utente tiene ancora premuto il tasto)
+        KeyEvent longPress2 = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 2, true, false);
+        boolean r2 = handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, longPress2);
+        assertTrue("Secondo repeat long-press deve essere consumato", r2);
+        assertEquals("Dialogo NON deve essere riaperto al repeat 2", 1, harness.showFavDialogCalls);
+
+        KeyEvent longPress3 = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 3, true, false);
+        boolean r3 = handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, longPress3);
+        assertTrue("Terzo repeat long-press deve essere consumato", r3);
+        assertEquals("Dialogo NON deve essere riaperto al repeat 3", 1, harness.showFavDialogCalls);
+
+        // 4. ACTION_UP finale
+        handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+        assertEquals("ZERO lanci app dopo sequenza di repeat consumati", 0, harness.launchAppCalls);
+        assertFalse("longPressHandled resettato a false", handler.isLongPressHandled());
+    }
+
+    public static void testFocusLossResetsCardKeyHandler() {
+        System.out.println("\nTest 1.7: Perdita di Focus -> Reset Deterministico dello Stato Tasti");
+        MockActivityHarness harness = new MockActivityHarness();
+        MainActivity.AppItem testItem = new MainActivity.AppItem("Prime Video", "com.amazon.amazonvideo.livingroom", "MainActivity", null);
+        MainActivity.CardKeyHandler handler = new MainActivity.CardKeyHandler(harness, testItem, MainActivity.SECTION_STREAMING, 0);
+        View mockView = new View();
+
+        // DOWN iniziato
+        handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+        assertTrue("downReceived deve essere true", handler.isDownReceived());
+
+        // La card perde il focus (es. scorrimento o animazione)
+        handler.reset();
+        assertFalse("downReceived resettato dopo perdita focus", handler.isDownReceived());
+        assertFalse("longPressHandled resettato dopo perdita focus", handler.isLongPressHandled());
+
+        // Un UP successivo non deve lanciare l'app
+        handler.onKey(mockView, KeyEvent.KEYCODE_DPAD_CENTER, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+        assertEquals("ZERO lanci app dopo reset da focus loss", 0, harness.launchAppCalls);
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST PREFERITI VUOTI E REGRESSIONE OEM (P0 & P1)
+    // -------------------------------------------------------------------------
+
+    public static void testEmptyFavoritesPersistenceAcrossReboot() {
+        System.out.println("\nTest 2.1: Persistenza Stato 'Nessun Preferito' al Riavvio (P1 Risolto)");
+        MockActivityHarness harness = new MockActivityHarness();
+
+        // L'utente ha rimosso intenzionalmente tutti i preferiti: salvata stringa vuota
+        harness.mockPrefs.put("user_favorites_ordered", "");
+        assertTrue("Chiave user_favorites_ordered presente nelle SharedPreferences", harness.mockPrefs.contains("user_favorites_ordered"));
+
+        harness.invokeLoadPreferences();
+        List<String> favs = harness.getFavoritePackagesList();
+        assertEquals("La lista preferiti DEVE rimanere vuota e NON ripopolarsi con i default", 0, favs.size());
+    }
+
+    public static void testFirstRunSeedsDefaultFavorites() {
+        System.out.println("\nTest 2.2: Primo Avvio Assoluto -> Inizializzazione 4 App Predefinite");
+        MockActivityHarness harness = new MockActivityHarness();
+
+        // Nessuna preferenza salvata (primo avvio)
+        assertFalse("Nessuna chiave salvata", harness.mockPrefs.contains("user_favorites_ordered"));
+        assertFalse("Nessun legacy salvato", harness.mockPrefs.contains("user_favorites"));
+
+        harness.invokeLoadPreferences();
+        List<String> favs = harness.getFavoritePackagesList();
+        assertEquals("Primo avvio deve inizializzare 4 preferiti", 4, favs.size());
+        assertEquals("Primo preferito deve essere YouTube TV", "com.google.android.youtube.tv", favs.get(0));
+        assertEquals("Secondo preferito deve essere RaiPlay", "it.rainet.androidtv", favs.get(1));
+        assertEquals("Terzo preferito deve essere Infinity+", "it.mediaset.infinitytv", favs.get(2));
+        assertEquals("Quarto preferito deve essere Disney+", "com.disney.disneyplus", favs.get(3));
+    }
+
+    public static void testOemTechnicalAppInFavoritesPreservedAcrossFilterToggle() {
+        System.out.println("\nTest 2.3: App Tecnica OEM nei Preferiti PRESERVATA al Cambio Filtro (P0 Risolto)");
+        MockActivityHarness harness = new MockActivityHarness();
+
+        // L'utente aggiunge nei preferiti un'app OEM e un'app utente
+        List<String> favs = harness.getFavoritePackagesList();
+        favs.add("com.cultraview.launcher");
+        favs.add("com.google.android.youtube.tv");
+        harness.invokeSaveFavoritePreferences();
+
+        assertEquals("Preferiti salvati: 2 elementi", 2, favs.size());
+        assertEquals("Primo elemento: cultraview", "com.cultraview.launcher", favs.get(0));
+        assertEquals("Secondo elemento: youtube", "com.google.android.youtube.tv", favs.get(1));
+
+        // Ricarica preferenze con showSystemApps = false (filtro attivo)
+        harness.mockPrefs.put("pref_show_system_apps", false);
+        harness.invokeLoadPreferences();
+
+        List<String> loadedFavs = harness.getFavoritePackagesList();
+        // VERIFICA CRITICA P0: l'app OEM DEVE rimanere in favoritePackages!
+        assertEquals("favoritePackages NON deve essere purgato per via del filtro OEM", 2, loadedFavs.size());
+        assertTrue("com.cultraview.launcher deve essere ancora presente nei preferiti", loadedFavs.contains("com.cultraview.launcher"));
+        assertEquals("Posizione preferito OEM preservata all'indice 0", "com.cultraview.launcher", loadedFavs.get(0));
+        assertEquals("Posizione preferito YouTube preservata all'indice 1", "com.google.android.youtube.tv", loadedFavs.get(1));
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST DIFFING NON DISTRUTTIVO, FOCUS E SCROLL (P1)
+    // -------------------------------------------------------------------------
+
+    public static void testAppListsEqualDiffing() {
+        System.out.println("\nTest 3.1: Algoritmo di Diffing per Refresh Non Distruttivo");
+        List<MainActivity.AppItem> listA = new ArrayList<MainActivity.AppItem>();
+        listA.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", null));
+        listA.add(new MainActivity.AppItem("App 2", "com.test.app2", "Act2", null));
+
+        List<MainActivity.AppItem> listB = new ArrayList<MainActivity.AppItem>();
+        listB.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", null));
+        listB.add(new MainActivity.AppItem("App 2", "com.test.app2", "Act2", null));
+
+        assertTrue("Due liste identiche per package devono risultare uguali (nessun rebuild)", MainActivity.areAppListsEqual(listA, listB));
+
+        List<MainActivity.AppItem> listDifferentOrder = new ArrayList<MainActivity.AppItem>();
+        listDifferentOrder.add(new MainActivity.AppItem("App 2", "com.test.app2", "Act2", null));
+        listDifferentOrder.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", null));
+        assertFalse("Liste con ordine diverso devono risultare differenti (rebuild richiesto)", MainActivity.areAppListsEqual(listA, listDifferentOrder));
+
+        List<MainActivity.AppItem> listDifferentSize = new ArrayList<MainActivity.AppItem>();
+        listDifferentSize.add(new MainActivity.AppItem("App 1", "com.test.app1", "Act1", null));
+        assertFalse("Liste con dimensioni diverse devono risultare differenti", MainActivity.areAppListsEqual(listA, listDifferentSize));
+    }
+
+    public static void testCardTagPackageAndSectionAssociation() {
+        System.out.println("\nTest 3.2: Tag Card per Ripristino Focus Stabile");
+        MainActivity.CardTag tag = new MainActivity.CardTag("com.google.android.youtube.tv", MainActivity.SECTION_STREAMING);
+        assertEquals("Package name memorizzato nel tag", "com.google.android.youtube.tv", tag.packageName);
+        assertEquals("Section type memorizzato nel tag", MainActivity.SECTION_STREAMING, tag.sectionType);
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST FILTRO OEM & CATEGORIZZAZIONE STREAMING
+    // -------------------------------------------------------------------------
+
+    public static void testOemTechnicalAppsFilter() {
+        System.out.println("\nTest 4.1: Filtro / Blacklist Applicazioni Tecniche OEM");
+
         assertTrue("A2dpSinkPlayer deve essere filtrata",
             MainActivity.isSystemOrTechnicalApp("com.android.bluetooth", "com.android.bluetooth.a2dp.A2dpSinkPlayerActivity", "A2dpSinkPlayer"));
         assertTrue("Boot Video deve essere filtrata",
@@ -159,7 +398,6 @@ public class LauncherUnitTests {
         assertTrue("Android Traceur deve essere filtrata",
             MainActivity.isSystemOrTechnicalApp("com.android.traceur", "com.android.traceur.MainActivity", "System Tracing"));
 
-        // App utente legittime che NON DEVONO essere filtrate
         assertFalse("YouTube TV non deve essere filtrata",
             MainActivity.isSystemOrTechnicalApp("com.google.android.youtube.tv", "com.google.android.youtube.tv.MainActivity", "YouTube TV"));
         assertFalse("RaiPlay non deve essere filtrata",
@@ -173,9 +411,8 @@ public class LauncherUnitTests {
     }
 
     public static void testStreamingCategorization() {
-        System.out.println("\nTest 3: Categorizzazione Sezione STREAMING & CINEMA");
+        System.out.println("\nTest 4.2: Categorizzazione Sezione STREAMING & CINEMA");
 
-        // Piattaforme streaming
         assertTrue("YouTube è streaming", MainActivity.isStreamingApp("com.google.android.youtube.tv", "YouTube TV"));
         assertTrue("Netflix è streaming", MainActivity.isStreamingApp("com.netflix.ninja", "Netflix"));
         assertTrue("Prime Video è streaming", MainActivity.isStreamingApp("com.amazon.amazonvideo.livingroom", "Prime Video"));
@@ -187,17 +424,19 @@ public class LauncherUnitTests {
         assertTrue("VLC è streaming", MainActivity.isStreamingApp("org.videolan.vlc", "VLC Player"));
         assertTrue("Pluto TV è streaming", MainActivity.isStreamingApp("tv.pluto.android", "Pluto TV"));
 
-        // Utility generiche NON streaming
         assertFalse("File Manager non è streaming", MainActivity.isStreamingApp("com.android.documentsui", "File Manager"));
         assertFalse("Calcolatrice non è streaming", MainActivity.isStreamingApp("com.android.calculator2", "Calcolatrice"));
         assertFalse("Settings non è streaming", MainActivity.isStreamingApp("com.android.tv.settings", "Impostazioni TV"));
         assertFalse("Clock non è streaming", MainActivity.isStreamingApp("com.android.deskclock", "Orologio"));
     }
 
-    public static void testColorContrastWCAG() {
-        System.out.println("\nTest 4: Verifica Matematica Rapporto di Contrasto sRGB (WCAG AAA >= 7.0:1)");
+    // -------------------------------------------------------------------------
+    // TEST CONTRASTO WCAG AAA (sRGB IEC 61966-2-1)
+    // -------------------------------------------------------------------------
 
-        // Calcolo luminanza relativa sRGB canonica IEC 61966-2-1
+    public static void testColorContrastWCAG() {
+        System.out.println("\nTest 5: Verifica Matematica Rapporto di Contrasto sRGB (WCAG AAA >= 7.0:1)");
+
         double lBgMidnight = calculateRelativeLuminance(0x0A, 0x0B, 0x10);
         double lSurfaceSapphire = calculateRelativeLuminance(0x1E, 0x3A, 0x8A);
         double lGoldAccent = calculateRelativeLuminance(0xF5, 0x9E, 0x0B);
@@ -238,12 +477,29 @@ public class LauncherUnitTests {
         System.out.println("================================================================");
 
         try {
+            // D-Pad Key Handling & P0
             testP0ShortPressLaunchesApp();
             testP0LongPressOpensDialogAndPreventsAppLaunch();
             testP0EnterKeyEquivalence();
             testP0CanceledEventDoesNotLaunch();
+            testOrphanedUpEventDoesNotLaunchApp();
+            testRepeatedDownOnlyTriggersDialogOnceAndConsumesRepeats();
+            testFocusLossResetsCardKeyHandler();
+
+            // Preferiti & P0 OEM Regression
+            testEmptyFavoritesPersistenceAcrossReboot();
+            testFirstRunSeedsDefaultFavorites();
+            testOemTechnicalAppInFavoritesPreservedAcrossFilterToggle();
+
+            // Diffing e Focus
+            testAppListsEqualDiffing();
+            testCardTagPackageAndSectionAssociation();
+
+            // OEM Blacklist & Streaming
             testOemTechnicalAppsFilter();
             testStreamingCategorization();
+
+            // WCAG Contrast
             testColorContrastWCAG();
 
             System.out.println("\n================================================================");

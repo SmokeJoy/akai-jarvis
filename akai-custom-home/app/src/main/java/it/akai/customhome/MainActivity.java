@@ -294,6 +294,18 @@ public class MainActivity extends Activity {
         packageReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
+                if (intent == null) return;
+                String action = intent.getAction();
+                if (Intent.ACTION_PACKAGE_REMOVED.equals(action)) {
+                    boolean replacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false);
+                    if (!replacing && intent.getData() != null) {
+                        String uninstalledPkg = intent.getData().getSchemeSpecificPart();
+                        if (uninstalledPkg != null && favoritePackages.contains(uninstalledPkg)) {
+                            favoritePackages.remove(uninstalledPkg);
+                            saveFavoritePreferences();
+                        }
+                    }
+                }
                 loadInstalledApps();
             }
         };
@@ -328,25 +340,31 @@ public class MainActivity extends Activity {
         showNetworkDetails = prefs.getBoolean(KEY_SHOW_NETWORK_DETAILS, false);
 
         favoritePackages.clear();
-        String savedOrdered = prefs.getString(KEY_FAVORITES_ORDERED, null);
-        if (savedOrdered != null && !savedOrdered.trim().isEmpty()) {
-            String[] parts = savedOrdered.split(",");
-            for (String p : parts) {
-                String trimmed = p.trim();
-                if (!trimmed.isEmpty() && !favoritePackages.contains(trimmed)) {
-                    favoritePackages.add(trimmed);
+        // Verifica la presenza esplicita della chiave: se l'utente ha svuotato i preferiti,
+        // la lista DEVE rimanere vuota e NON ripopolarsi con i default (P1 Risolto)
+        if (prefs.contains(KEY_FAVORITES_ORDERED)) {
+            String savedOrdered = prefs.getString(KEY_FAVORITES_ORDERED, "");
+            if (savedOrdered != null && !savedOrdered.trim().isEmpty()) {
+                String[] parts = savedOrdered.split(",");
+                for (String p : parts) {
+                    String trimmed = p.trim();
+                    if (!trimmed.isEmpty() && !favoritePackages.contains(trimmed)) {
+                        favoritePackages.add(trimmed);
+                    }
                 }
             }
-        } else {
+        } else if (prefs.contains(KEY_FAVORITES_LEGACY)) {
             Set<String> legacy = prefs.getStringSet(KEY_FAVORITES_LEGACY, null);
-            if (legacy != null && !legacy.isEmpty()) {
+            if (legacy != null) {
                 favoritePackages.addAll(legacy);
-            } else {
-                favoritePackages.add("com.google.android.youtube.tv");
-                favoritePackages.add("it.rainet.androidtv");
-                favoritePackages.add("it.mediaset.infinitytv");
-                favoritePackages.add("com.disney.disneyplus");
             }
+            saveFavoritePreferences();
+        } else {
+            // Primo avvio assoluto: inizializza le app preferite predefinite
+            favoritePackages.add("com.google.android.youtube.tv");
+            favoritePackages.add("it.rainet.androidtv");
+            favoritePackages.add("it.mediaset.infinitytv");
+            favoritePackages.add("com.disney.disneyplus");
             saveFavoritePreferences();
         }
     }
@@ -886,11 +904,73 @@ public class MainActivity extends Activity {
         return isStreamingApp(item.packageName, item.label);
     }
 
+    public static class CardTag {
+        public final String packageName;
+        public final int sectionType;
+
+        public CardTag(String packageName, int sectionType) {
+            this.packageName = packageName;
+            this.sectionType = sectionType;
+        }
+    }
+
+    public static boolean areAppListsEqual(List<AppItem> list1, List<AppItem> list2) {
+        if (list1 == list2) return true;
+        if (list1 == null || list2 == null) return false;
+        if (list1.size() != list2.size()) return false;
+        for (int i = 0; i < list1.size(); i++) {
+            if (!list1.get(i).packageName.equals(list2.get(i).packageName)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void restoreFocusState(String focusedPkg, int focusedSection, int focusedViewId) {
+        if (focusedPkg != null) {
+            ViewGroup targetContainer = null;
+            if (focusedSection == SECTION_FAVORITES) targetContainer = llFavContainer;
+            else if (focusedSection == SECTION_STREAMING) targetContainer = llStreamingContainer;
+            else if (focusedSection == SECTION_ALL_APPS) targetContainer = llAllAppsContainer;
+
+            if (targetContainer != null) {
+                for (int i = 0; i < targetContainer.getChildCount(); i++) {
+                    View child = targetContainer.getChildAt(i);
+                    Object tag = child.getTag();
+                    if (tag instanceof CardTag) {
+                        CardTag ct = (CardTag) tag;
+                        if (focusedPkg.equals(ct.packageName)) {
+                            child.requestFocus();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if (focusedViewId != -1) {
+            View v = findViewById(focusedViewId);
+            if (v != null && v.isFocusable()) {
+                v.requestFocus();
+                return;
+            }
+        }
+        if (btnDtv != null && getCurrentFocus() == null) {
+            btnDtv.requestFocus();
+        }
+    }
+
+    private void restoreScrollPositions(final int scrollY, final int favX, final int streamX, final int allX) {
+        if (scrollMainBody != null) scrollMainBody.scrollTo(0, scrollY);
+        if (scrollFavs != null) scrollFavs.scrollTo(favX, 0);
+        if (scrollStreaming != null) scrollStreaming.scrollTo(streamX, 0);
+        if (scrollAllApps != null) scrollAllApps.scrollTo(allX, 0);
+    }
+
     private void loadInstalledApps() {
         PackageManager pm = getPackageManager();
         Set<String> seen = new HashSet<String>();
-        allApps.clear();
-        streamingApps.clear();
+        List<AppItem> newAllApps = new ArrayList<AppItem>();
+        List<AppItem> newStreamingApps = new ArrayList<AppItem>();
 
         // 1. Leanback Apps
         Intent lbIntent = new Intent(Intent.ACTION_MAIN, null);
@@ -923,35 +1003,77 @@ public class MainActivity extends Activity {
                 }
                 Drawable icon = ri.loadIcon(pm);
                 AppItem item = new AppItem(label, pkg, act, icon);
-                allApps.add(item);
+                newAllApps.add(item);
                 if (isStreamingApp(item)) {
-                    streamingApps.add(item);
+                    newStreamingApps.add(item);
                 }
             }
         }
 
-        Collections.sort(allApps);
-        Collections.sort(streamingApps);
+        Collections.sort(newAllApps);
+        Collections.sort(newStreamingApps);
 
-        // Pulizia preferiti: se un package preferito non esiste più sulla TV, rimuovilo
-        boolean favsCleaned = false;
-        List<String> validFavs = new ArrayList<String>();
+        // Costruzione preferiti visibili: SOLO le app attualmente visibili
+        // NOTA CRITICA P0: favoritePackages NON viene mai alterato o cancellato qui.
+        // Se un'app tecnica è salvata nei preferiti ma l'utente ha showSystemApps = false,
+        // essa rimane salvata in favoritePackages e ricompare intatta quando il filtro viene riattivato.
+        List<AppItem> newFavoriteApps = new ArrayList<AppItem>();
         for (String favPkg : favoritePackages) {
-            if (seen.contains(favPkg)) {
-                validFavs.add(favPkg);
-            } else {
-                favsCleaned = true;
+            for (AppItem app : newAllApps) {
+                if (app.packageName.equals(favPkg)) {
+                    newFavoriteApps.add(app);
+                    break;
+                }
             }
         }
-        if (favsCleaned) {
-            favoritePackages.clear();
-            favoritePackages.addAll(validFavs);
-            saveFavoritePreferences();
+
+        // Memorizza stato di focus e scroll prima di eventuale rebuild
+        String focusedPkg = null;
+        int focusedSection = -1;
+        int focusedViewId = -1;
+        View currentFocus = getCurrentFocus();
+        if (currentFocus != null) {
+            focusedViewId = currentFocus.getId();
+            Object tag = currentFocus.getTag();
+            if (tag instanceof CardTag) {
+                CardTag ct = (CardTag) tag;
+                focusedPkg = ct.packageName;
+                focusedSection = ct.sectionType;
+            }
+        }
+        int scrollY = (scrollMainBody != null) ? scrollMainBody.getScrollY() : 0;
+        int scrollFavX = (scrollFavs != null) ? scrollFavs.getScrollX() : 0;
+        int scrollStreamX = (scrollStreaming != null) ? scrollStreaming.getScrollX() : 0;
+        int scrollAllX = (scrollAllApps != null) ? scrollAllApps.getScrollX() : 0;
+
+        boolean favsChanged = !areAppListsEqual(favoriteApps, newFavoriteApps);
+        boolean streamChanged = !areAppListsEqual(streamingApps, newStreamingApps);
+        boolean allAppsChanged = !areAppListsEqual(allApps, newAllApps);
+
+        favoriteApps.clear();
+        favoriteApps.addAll(newFavoriteApps);
+
+        streamingApps.clear();
+        streamingApps.addAll(newStreamingApps);
+
+        allApps.clear();
+        allApps.addAll(newAllApps);
+
+        // Se le liste sono identiche, NON distrugge le View: mantiene focus e scroll al 100%!
+        if (favsChanged) {
+            updateFavoritesList();
+        }
+        if (streamChanged) {
+            updateStreamingList();
+        }
+        if (allAppsChanged) {
+            updateAllAppsList();
         }
 
-        updateFavoritesList();
-        updateStreamingList();
-        updateAllAppsList();
+        if (favsChanged || streamChanged || allAppsChanged) {
+            restoreScrollPositions(scrollY, scrollFavX, scrollStreamX, scrollAllX);
+            restoreFocusState(focusedPkg, focusedSection, focusedViewId);
+        }
     }
 
     private void attachFocusScale(final View view, final float scale) {
@@ -969,9 +1091,11 @@ public class MainActivity extends Activity {
 
     /**
      * Gestore tasti D-Pad per le card: risolve formalmente il P0 (prevenzione doppio avvio
-     * su pressione prolungata). Traccia rigorosamente lo stato di longPressHandled:
-     * al rilascio (ACTION_UP), se la pressione prolungata è stata consumata per aprire il
-     * dialogo opzioni, l'evento viene consumato senza lanciare l'app.
+     * su pressione prolungata). Traccia rigorosamente lo stato di longPressHandled e downReceived:
+     * - Consuma le ripetizioni multiple per evitare dialoghi duplicati
+     * - Ignora gli eventi ACTION_UP orfani (senza previo DOWN)
+     * - Al rilascio (ACTION_UP), se la pressione prolungata è stata consumata, l'evento viene consumato
+     *   senza lanciare l'app (ZERO lanci spuri).
      */
     public static class CardKeyHandler implements View.OnKeyListener {
         private final MainActivity activity;
@@ -979,6 +1103,7 @@ public class MainActivity extends Activity {
         private final int sectionType;
         private final int index;
         private boolean longPressHandled = false;
+        private boolean downReceived = false;
 
         public CardKeyHandler(MainActivity activity, AppItem item, int sectionType, int index) {
             this.activity = activity;
@@ -991,34 +1116,54 @@ public class MainActivity extends Activity {
             return longPressHandled;
         }
 
+        public boolean isDownReceived() {
+            return downReceived;
+        }
+
+        public void reset() {
+            longPressHandled = false;
+            downReceived = false;
+        }
+
         @Override
         public boolean onKey(View v, int keyCode, KeyEvent event) {
-            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                    if (event.getRepeatCount() == 0) {
-                        longPressHandled = false;
-                        event.startTracking();
-                        return true;
-                    } else if (event.isLongPress()) {
+            if (keyCode != KeyEvent.KEYCODE_DPAD_CENTER && keyCode != KeyEvent.KEYCODE_ENTER) {
+                return false;
+            }
+            int action = event.getAction();
+            if (action == KeyEvent.ACTION_DOWN) {
+                downReceived = true;
+                if (event.isLongPress() || event.getRepeatCount() > 0) {
+                    if (!longPressHandled) {
                         longPressHandled = true;
                         if (sectionType == SECTION_FAVORITES) {
                             activity.showFavoriteOptionsDialog(item, index);
                         } else {
                             activity.showAppOptionsDialog(item);
                         }
-                        return true;
                     }
-                } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                    if (longPressHandled) {
-                        // Consuma il rilascio: il menu contestuale è già aperto, ZERO lanci dell'app!
-                        longPressHandled = false;
-                        return true;
-                    }
-                    if (!event.isCanceled()) {
-                        activity.launchApp(item);
-                        return true;
-                    }
+                    // Consuma tutti i repeat successivi per evitare aperture multiple del dialogo
+                    return true;
                 }
+                event.startTracking();
+                return true;
+            } else if (action == KeyEvent.ACTION_UP) {
+                if (!downReceived) {
+                    // UP orfano (senza previo DOWN su questa card): ignora completamente
+                    reset();
+                    return true;
+                }
+                if (longPressHandled) {
+                    // Consuma il rilascio dopo long press: ZERO lanci dell'app!
+                    reset();
+                    return true;
+                }
+                reset();
+                if (!event.isCanceled()) {
+                    activity.launchApp(item);
+                    return true;
+                }
+                return true;
             }
             return false;
         }
@@ -1028,6 +1173,7 @@ public class MainActivity extends Activity {
         LayoutInflater inflater = LayoutInflater.from(this);
         View card = inflater.inflate(R.layout.item_leanback_card, parent, false);
         card.setBackground(createDynamicCardSelector());
+        card.setTag(new CardTag(item.packageName, sectionType));
 
         ImageView iv = (ImageView) card.findViewById(R.id.iv_card_icon);
         TextView tv = (TextView) card.findViewById(R.id.tv_card_label);
@@ -1035,7 +1181,20 @@ public class MainActivity extends Activity {
         if (iv != null) iv.setImageDrawable(item.icon);
         if (tv != null) tv.setText(item.label);
 
-        attachFocusScale(card, 1.08f);
+        final CardKeyHandler keyHandler = new CardKeyHandler(this, item, sectionType, index);
+        card.setOnKeyListener(keyHandler);
+
+        card.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (hasFocus) {
+                    v.animate().scaleX(1.08f).scaleY(1.08f).setDuration(120).start();
+                } else {
+                    v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start();
+                    keyHandler.reset(); // reset deterministico su perdita focus
+                }
+            }
+        });
 
         // Click standard per touch / mouse
         card.setOnClickListener(new View.OnClickListener() {

@@ -11,6 +11,7 @@ public class Activity extends Context {
     public void onBackPressed() {}
     public void setContentView(int id) {}
     public View findViewById(int id) { return null; }
+    public View getCurrentFocus() { return null; }
     public SharedPreferences getSharedPreferences(String n, int m) { return null; }
     public PackageManager getPackageManager() { return new PackageManager(); }
     public Context getApplicationContext() { return this; }

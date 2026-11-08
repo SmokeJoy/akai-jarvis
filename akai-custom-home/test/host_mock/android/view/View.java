@@ -30,6 +30,23 @@ public class View {
     private boolean focused;
     private int visibility = VISIBLE;
     private Drawable background;
+    private Object tag;
+    private int id = -1;
+    private int scrollX = 0;
+    private int scrollY = 0;
+
+    public void setTag(Object tag) { this.tag = tag; }
+    public Object getTag() { return tag; }
+
+    public void setId(int id) { this.id = id; }
+    public int getId() { return id; }
+
+    public boolean isFocusable() { return true; }
+    public boolean requestFocus() { setFocused(true); return true; }
+
+    public int getScrollX() { return scrollX; }
+    public int getScrollY() { return scrollY; }
+    public void scrollTo(int x, int y) { this.scrollX = x; this.scrollY = y; }
 
     public void setOnClickListener(OnClickListener l) { this.onClickListener = l; }
     public void setOnLongClickListener(OnLongClickListener l) { this.onLongClickListener = l; }
