@@ -844,6 +844,30 @@ public class LauncherUnitTests {
         assertEquals("ZERO azioni globali durante stato transitorio", 0, service.getGlobalActionsPerformed());
     }
 
+    private static void testMenuKeyFailOpenOnUnknownVendorsAndOverlays() {
+        System.out.println("\nTest 6.10: Rigoroso Fail-Open per Vendor Ignoti e Overlay (com.vendor.unknownmenu / com.example.overlay)");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+
+        String[] unknownPackages = new String[]{
+                "com.vendor.unknownmenu",
+                "com.example.overlay",
+                "org.unknown.dialog",
+                "com.custom.oem.overlay",
+                "it.random.unknownapp"
+        };
+
+        KeyEvent menuUp = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
+        for (String pkg : unknownPackages) {
+            service.setCurrentPackageForTest(pkg);
+            assertFalse("Pacchetto ignoto non deve essere riconosciuto come verified app: " + pkg, AkaiMenuHomeService.isVerifiedUserApp(pkg));
+            assertFalse("shouldInterceptMenu DEVE ritornare false (Fail-Open) per: " + pkg, service.shouldInterceptMenu(pkg));
+            boolean consumed = service.onKeyEvent(menuUp);
+            assertFalse("MENU su pacchetto ignoto (" + pkg + ") NON deve essere consumato (pass-through OEM)", consumed);
+        }
+        assertEquals("ZERO azioni globali eseguite su pacchetti o overlay ignoti", 0, service.getGlobalActionsPerformed());
+    }
+
     public static void main(String[] args) {
         System.out.println("================================================================");
         System.out.println("  AKAI CUSTOM HOME v8 LEANBACK — SUITE DI TEST UNITARI");
@@ -887,6 +911,7 @@ public class LauncherUnitTests {
             testMenuKeyRepeatsAndLongPress();
             testMenuKeyServiceDisabled();
             testWindowStateChangedNullOrBlankResetsToFailOpen();
+            testMenuKeyFailOpenOnUnknownVendorsAndOverlays();
 
             System.out.println("\n================================================================");
             System.out.println("  RISULTATO FINALE: " + testsPassed + "/" + testsRun + " TEST SUPERATI (100% PASS)");

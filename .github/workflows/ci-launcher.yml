@@ -76,9 +76,9 @@ jobs:
           test -f "$ANDROID_HOME/platforms/android-28/android.jar" || (echo "FATAL: android-28 platform installation failed!" && exit 1)
           echo "android-28 platform successfully installed and verified."
 
-      - name: "4. Compile and Run Launcher Java Unit Tests (207 Tests - P0 Listener Reset, P1 Hidden OEM Reorder, Dynamic Metadata & Icon Diffing, Null Safety, D-Pad Repeats, AkaiMenuHomeService Fail-Open Passthrough)"
+      - name: "4. Compile and Run Launcher Java Unit Tests (223 Tests - P0 Listener Reset, P1 Hidden OEM Reorder, Dynamic Metadata & Icon Diffing, Null Safety, D-Pad Repeats, AkaiMenuHomeService Strict Allowlist & Fail-Open)"
         run: |
-          echo "=== Compiling and Running LauncherUnitTests (207 Tests) ==="
+          echo "=== Compiling and Running LauncherUnitTests (223 Tests) ==="
           mkdir -p test_bin
           APP_SRC=$(find akai-custom-home/app/src/main/java -name "*.java")
           MOCK_SRC=$(find akai-custom-home/test/host_mock -name "*.java")
@@ -88,7 +88,7 @@ jobs:
             akai-custom-home/test/it/akai/customhome/LauncherUnitTests.java
 
           java -cp test_bin it.akai.customhome.LauncherUnitTests
-          echo "All 207 Launcher unit tests passed successfully."
+          echo "All 223 Launcher unit tests passed successfully."
 
       - name: "5. Run ADB Isolation & Safety Unit Tests (Script 11 - 7 Fail-Closed Scenarios)"
         shell: pwsh
@@ -118,7 +118,7 @@ jobs:
           # 1. AAPT2 compile resources
           "$AAPT2" compile --dir akai-custom-home/app/src/main/res -o build_launcher_ci/compiled_res.zip
 
-          # 2. AAPT2 link manifest and generate R.java (candidate versionCode=11, 8.2.1)
+          # 2. AAPT2 link manifest and generate R.java (candidate versionCode=11, 8.3.0-menu-leanback)
           "$AAPT2" link -I "$ANDROID_JAR" \
             --manifest akai-custom-home/app/src/main/AndroidManifest.xml \
             -o build_launcher_ci/base.apk \
@@ -128,7 +128,7 @@ jobs:
             --min-sdk-version 21 \
             --target-sdk-version 28 \
             --version-code 11 \
-            --version-name "8.2.1"
+            --version-name "8.3.0-menu-leanback"
 
           # 3. Compile Java sources
           JAVA_SRC=$(find akai-custom-home/app/src/main/java build_launcher_ci/gen -name "*.java")
@@ -197,7 +197,7 @@ jobs:
             --min-sdk-version 21 \
             --target-sdk-version 28 \
             --version-code 11 \
-            --version-name "8.2.1" \
+            --version-name "8.3.0-menu-leanback" \
             --rename-manifest-package it.akai.customhome.v8 \
             --custom-package it.akai.customhome
 

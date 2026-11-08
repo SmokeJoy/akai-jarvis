@@ -25,6 +25,32 @@ import java.util.Set;
  */
 public class AkaiMenuHomeService extends AccessibilityService {
 
+    // Allowlist rigorosa delle sole applicazioni utente / streaming verificate
+    // su cui il tasto MENU viene reindirizzato verso la Home v8.
+    // Qualsiasi pacchetto non presente in questa lista passa all'OEM (Strict Fail-Open).
+    private static final Set<String> VERIFIED_USER_APP_PACKAGES = new HashSet<>(Arrays.asList(
+            "com.google.android.youtube.tv",
+            "com.google.android.youtube",
+            "com.netflix.ninja",
+            "it.rainet.androidtv",
+            "it.rainet.raiplay",
+            "it.mediaset.vod",
+            "com.disney.disneyplus",
+            "com.amazon.amazonvideo.livingroom",
+            "com.spotify.tv.android",
+            "org.videolan.vlc",
+            "org.xbmc.kodi",
+            "cm.aptoide.pt",
+            "com.phimtat.tvbro",
+            "org.mozilla.firefox",
+            "tv.pluto.android",
+            "com.dazn",
+            "com.discovery.discoveryplus.androidtv",
+            "com.apple.atve.androidtv.appletv",
+            "com.tim.timvision",
+            "com.nowtv.it"
+    ));
+
     // Pacchetti OEM noti del sintonizzatore TV digitale, menu fabbrica e ingressi
     private static final Set<String> OEM_EXPLICIT_PACKAGES = new HashSet<>(Arrays.asList(
             "cn.cultraview.tv",
@@ -103,7 +129,8 @@ public class AkaiMenuHomeService extends AccessibilityService {
 
         int keyCode = event.getKeyCode();
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            // Fail-open: se non e' confermata un'app utente non-OEM, lascia passare il tasto all'OEM
+            // Fail-open: se non e' confermata un'app utente verificata in allowlist,
+            // lascia passare il tasto all'OEM (return false)
             if (!shouldInterceptMenu(currentPackage)) {
                 return false;
             }
@@ -120,10 +147,11 @@ public class AkaiMenuHomeService extends AccessibilityService {
     }
 
     /**
-     * Valuta se intercettare il tasto MENU per tornare alla Home.
-     * Logica RIGOROSAMENTE FAIL-OPEN:
-     * - Ritorna false (passthrough OEM) per qualsiasi valore nullo, vuoto o di sistema/OEM.
-     * - Ritorna true esclusivamente per applicazioni utente/multimediali accertate.
+     * Valuta se intercettare il tasto MENU per tornare alla Home v8.
+     * LOGICA RIGOROSAMENTE BASATA SU ALLOWLIST (FAIL-OPEN ASSOLUTO):
+     * - Restituisce true ESCLUSIVAMENTE per le applicazioni utente/streaming esplicitamente verificate.
+     * - Restituisce false per qualsiasi pacchetto sconosciuto (es. com.vendor.unknownmenu),
+     *   overlay terzi (es. com.example.overlay), finestre di sistema, firmware OEM, DTV o ingressi HDMI.
      */
     public boolean shouldInterceptMenu(String packageName) {
         if (packageName == null) {
@@ -134,7 +162,12 @@ public class AkaiMenuHomeService extends AccessibilityService {
             return false;
         }
 
-        // Verifica se il pacchetto appartiene al firmware OEM o al sistema AOSP
+        // 1. Controllo Allowlist: se non e' un'app utente verificata, FAIL-OPEN (lascia passare al 100%)
+        if (!VERIFIED_USER_APP_PACKAGES.contains(pkg)) {
+            return false;
+        }
+
+        // 2. Controllo di sicurezza aggiuntivo contro collisioni con firmware OEM o sistema
         if (isOemOrSystemPackage(pkg)) {
             return false;
         }
@@ -165,6 +198,14 @@ public class AkaiMenuHomeService extends AccessibilityService {
         }
 
         return OEM_EXPLICIT_PACKAGES.contains(pkg);
+    }
+
+    /**
+     * Consente la registrazione dinamica di un'app utente verificata.
+     */
+    public static boolean isVerifiedUserApp(String packageName) {
+        if (packageName == null) return false;
+        return VERIFIED_USER_APP_PACKAGES.contains(packageName.trim());
     }
 
     /**
