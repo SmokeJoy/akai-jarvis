@@ -718,6 +718,132 @@ public class LauncherUnitTests {
         assertTrue("cn.cultraview.tv correttamente riconosciuto come OEM", service.isOemPassthroughPackage(service.getCurrentPackage()));
     }
 
+    private static void testMenuKeyFailOpenOnNullAndEmptyPackage() {
+        System.out.println("\nTest 6.5: Rigoroso Fail-Open su Package Sconosciuto/Null/Vuoto (P1 Risolto)");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+
+        // 1. Stato iniziale / null package
+        service.setCurrentPackageForTest(null);
+        assertFalse("shouldInterceptMenu con null DEVE ritornare false (Fail-Open)", service.shouldInterceptMenu(null));
+        KeyEvent upNull = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
+        assertFalse("MENU UP con null package NON deve essere consumato (passa all'OEM)", service.onKeyEvent(upNull));
+        assertEquals("ZERO azioni globali su null package", 0, service.getGlobalActionsPerformed());
+
+        // 2. Stringa vuota ""
+        service.setCurrentPackageForTest("");
+        assertFalse("shouldInterceptMenu con stringa vuota DEVE ritornare false (Fail-Open)", service.shouldInterceptMenu(""));
+        assertFalse("MENU UP con stringa vuota NON deve essere consumato", service.onKeyEvent(upNull));
+        assertEquals("ZERO azioni globali su stringa vuota", 0, service.getGlobalActionsPerformed());
+
+        // 3. Stringa di soli spazi
+        service.setCurrentPackageForTest("   ");
+        assertFalse("shouldInterceptMenu con soli spazi DEVE ritornare false (Fail-Open)", service.shouldInterceptMenu("   "));
+        assertFalse("MENU UP con soli spazi NON deve essere consumato", service.onKeyEvent(upNull));
+        assertEquals("ZERO azioni globali su soli spazi", 0, service.getGlobalActionsPerformed());
+    }
+
+    private static void testMenuKeyFailOpenOnSystemAndOemPackages() {
+        System.out.println("\nTest 6.6: Rigoroso Fail-Open su Pacchetti OEM, DTV e Sistema AOSP (P1 Risolto)");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+
+        String[] protectedPackages = new String[]{
+                "com.mediatek.wwtv.tvcenter",           // DTV TV Digitale Terrestre
+                "com.mediatek.tvinput",                 // Gestore Ingressi HDMI / Source
+                "com.mediatek.wwtv.setupwizard",        // Wizard prima configurazione
+                "mediatek.factorymenu.ui",              // Menu Fabbrica TV
+                "com.cultraview.SwipeService",          // Servizio gesture Cultraview
+                "com.cultraview.newfilemanager",        // File manager OEM
+                "cn.cultraview.launcher.technical.open",// Launcher tecnico di servizio
+                "com.mstar.tv.tvplayer",                // MStar TV player
+                "com.ctv.android.tvboot",               // Servizio avvio CTV
+                "com.android.tv.settings",              // Impostazioni TV
+                "com.android.systemui",                 // SystemUI / dialoghi volume / notifiche
+                "com.android.packageinstaller",         // Installatore pacchetti
+                "android",                              // Sistema Android framework
+                "it.akai.customhome.v8",                // Launcher Custom Home v8 stesso
+                "it.akai.customremote"                  // JARVIS telecomando
+        };
+
+        KeyEvent menuUp = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
+        for (String pkg : protectedPackages) {
+            service.setCurrentPackageForTest(pkg);
+            assertTrue("Pacchetto protetto OEM/Sistema: " + pkg, service.isOemOrSystemPackage(pkg));
+            assertFalse("shouldInterceptMenu DEVE ritornare false per: " + pkg, service.shouldInterceptMenu(pkg));
+            boolean consumed = service.onKeyEvent(menuUp);
+            assertFalse("MENU su pacchetto protetto (" + pkg + ") NON deve essere consumato", consumed);
+        }
+        assertEquals("ZERO azioni globali eseguite su pacchetti protetti OEM/Sistema", 0, service.getGlobalActionsPerformed());
+    }
+
+    private static void testMenuKeyRepeatsAndLongPress() {
+        System.out.println("\nTest 6.7: Pressione Prolungata / Repeat Tasto MENU in App Streaming");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+        service.setCurrentPackageForTest("com.google.android.youtube.tv");
+
+        // Primo DOWN (premuto)
+        KeyEvent down1 = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU);
+        assertTrue("Primo DOWN deve essere consumato", service.onKeyEvent(down1));
+        assertEquals("Nessuna azione globale su DOWN", 0, service.getGlobalActionsPerformed());
+
+        // Repeat DOWN 1..3 (tasto tenuto premuto sul telecomando)
+        KeyEvent repeat1 = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU);
+        assertTrue("Repeat 1 deve essere consumato", service.onKeyEvent(repeat1));
+        KeyEvent repeat2 = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU);
+        assertTrue("Repeat 2 deve essere consumato", service.onKeyEvent(repeat2));
+        assertEquals("ZERO azioni globali durante il repeat del tasto", 0, service.getGlobalActionsPerformed());
+
+        // ACTION_UP al rilascio del tasto
+        KeyEvent up = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
+        assertTrue("UP finale deve essere consumato", service.onKeyEvent(up));
+        assertEquals("Esattamente 1 azione globale eseguita al rilascio", 1, service.getGlobalActionsPerformed());
+    }
+
+    private static void testMenuKeyServiceDisabled() {
+        System.out.println("\nTest 6.8: Disattivazione Dinamica di Emergenza del Servizio (Kill-Switch)");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+        service.setCurrentPackageForTest("com.netflix.ninja");
+
+        // Servizio disabilitato
+        service.setServiceEnabled(false);
+        assertFalse("isServiceEnabled deve essere false", service.isServiceEnabled());
+
+        KeyEvent menuUp = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
+        assertFalse("MENU UP quando disabilitato NON deve essere consumato (passa interamente)", service.onKeyEvent(menuUp));
+        assertEquals("ZERO azioni globali quando il servizio e disabilitato", 0, service.getGlobalActionsPerformed());
+
+        // Riabilitazione
+        service.setServiceEnabled(true);
+        assertTrue("isServiceEnabled deve essere true", service.isServiceEnabled());
+        assertTrue("MENU UP dopo riabilitazione deve essere consumato", service.onKeyEvent(menuUp));
+        assertEquals("1 azione globale eseguita dopo riabilitazione", 1, service.getGlobalActionsPerformed());
+    }
+
+    private static void testWindowStateChangedNullOrBlankResetsToFailOpen() {
+        System.out.println("\nTest 6.9: Evento Transitorio Privo di Package -> Reset Automatico a Fail-Open");
+        AkaiMenuHomeService service = new AkaiMenuHomeService();
+        service.onServiceConnected();
+
+        // 1. Prima impostiamo un'app streaming
+        service.setCurrentPackageForTest("com.netflix.ninja");
+        assertTrue("Netflix deve essere intercettato", service.shouldInterceptMenu(service.getCurrentPackage()));
+
+        // 2. Arriva evento con package null (es. finestra di dialogo di sistema/overlay transitorio)
+        android.view.accessibility.AccessibilityEvent nullEvent =
+                new android.view.accessibility.AccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED, null);
+        service.onAccessibilityEvent(nullEvent);
+
+        assertEquals("currentPackage deve essere resettato a stringa vuota", "", service.getCurrentPackage());
+        assertFalse("shouldInterceptMenu su stato transitorio DEVE ritornare false (Fail-Open)", service.shouldInterceptMenu(service.getCurrentPackage()));
+
+        KeyEvent up = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MENU);
+        assertFalse("MENU su stato transitorio NON deve essere consumato", service.onKeyEvent(up));
+        assertEquals("ZERO azioni globali durante stato transitorio", 0, service.getGlobalActionsPerformed());
+    }
+
     public static void main(String[] args) {
         System.out.println("================================================================");
         System.out.println("  AKAI CUSTOM HOME v8 LEANBACK — SUITE DI TEST UNITARI");
@@ -751,11 +877,16 @@ public class LauncherUnitTests {
             // WCAG Contrast
             testColorContrastWCAG();
 
-            // Suite 6: AkaiMenuHomeService (Tasto MENU -> Home v8 e Anti-Collisione OEM)
+            // Suite 6: AkaiMenuHomeService (Tasto MENU -> Home v8, Fail-Open e Anti-Collisione OEM)
             testMenuKeyOnThirdPartyAppTriggersGlobalHome();
             testMenuKeyOnOemDtvAppPassesThrough();
             testNonMenuKeysPassThrough();
             testWindowStateChangedUpdatesPackage();
+            testMenuKeyFailOpenOnNullAndEmptyPackage();
+            testMenuKeyFailOpenOnSystemAndOemPackages();
+            testMenuKeyRepeatsAndLongPress();
+            testMenuKeyServiceDisabled();
+            testWindowStateChangedNullOrBlankResetsToFailOpen();
 
             System.out.println("\n================================================================");
             System.out.println("  RISULTATO FINALE: " + testsPassed + "/" + testsRun + " TEST SUPERATI (100% PASS)");
