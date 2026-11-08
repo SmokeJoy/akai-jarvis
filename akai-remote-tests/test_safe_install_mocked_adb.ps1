@@ -497,7 +497,7 @@ if (args.includes('exec-out')) {
 }
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('pidof')) { console.log('12345'); process.exit(0); }
-if (args.includes('test -f databases/akai_memory.db-wal')) { console.log('NOT_FOUND'); process.exit(0); }
+if (args.includes('test -f')) { console.log('NOT_FOUND'); process.exit(0); }
 if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('shell')) {
@@ -1176,6 +1176,345 @@ Verify-SQLiteIntegrityOffline '$dbEsc14'
 } finally {
     if ($busyHolderProc14 -and -not $busyHolderProc14.HasExited) { Stop-Process -Id $busyHolderProc14.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $testDir14 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+
+# ==============================================================================
+# TEST 15: [TEST ISOLATO / SQLITE3 CLI BACKEND] Verifica isolata del percorso sqlite3 CLI
+# (a: exit 0 + ok -> pass, b: exit nonzero + ok -> fail-closed, c: exit 0 + non-ok -> fail-closed, d: checkpoint busy -> fail-closed)
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 15: Verifica isolata del percorso sqlite3 CLI (4 condizioni) ---" -ForegroundColor Yellow
+$testDir15 = Join-Path $tempDir "akai_test_sqlite3_cli_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir15 | Out-Null
+$testDb15 = Join-Path $testDir15 "akai_memory.db"
+New-MockRealDatabase -FilePath $testDb15
+
+$mockSqliteJs15 = Join-Path $testDir15 "mock_sqlite3.js"
+@"
+const args = process.argv.slice(2).join(' ');
+const mode = process.env.MOCK_SQLITE3_MODE || 'success';
+
+if (args.includes('wal_checkpoint')) {
+    if (mode === 'checkpoint_busy') {
+        console.log('1|5|5');
+        process.exit(0);
+    }
+    console.log('0|0|0');
+    process.exit(0);
+}
+
+if (args.includes('integrity_check')) {
+    if (mode === 'exit_nonzero_ok') {
+        console.log('ok');
+        process.exit(1);
+    }
+    if (mode === 'exit_zero_corrupt') {
+        console.log('*** in database: page 4 is corrupt');
+        process.exit(0);
+    }
+    console.log('ok');
+    process.exit(0);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockSqliteJs15 -Encoding ascii
+
+$mockSqliteCmd15 = if ($isWin) { Join-Path $testDir15 "sqlite3.cmd" } else { Join-Path $testDir15 "sqlite3" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockSqliteJs15`" %*" | Out-File -FilePath $mockSqliteCmd15 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSqliteJs15`" `"`$@`"" | Out-File -FilePath $mockSqliteCmd15 -Encoding ascii
+    & chmod +x $mockSqliteCmd15
+}
+
+$dbEsc15 = $testDb15.Replace('\', '/')
+$scriptEscaped = $scriptPath.Replace('\', '/')
+$mockSqliteEscaped15 = $mockSqliteCmd15.Replace('\', '/')
+$nodeEscaped = if ($validNode) { $validNode.Replace('\', '/') } else { "node" }
+
+$subPassed15 = 0
+
+# 15a: exit 0 + ok -> successo
+$cmd15a = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:FORCE_SQLITE3_CLI = '1'
+`$env:SQLITE3_EXE = '$mockSqliteEscaped15'
+`$env:MOCK_SQLITE3_MODE = 'success'
+. '$scriptEscaped' -Action plan | Out-Null
+try { Verify-SQLiteIntegrityOffline '$dbEsc15'; Write-Output 'VERIFY_SUCCESS' } catch { Write-Output ('CAUGHT: ' + `$_.Exception.Message) }
+"@
+$out15a = & $psExe -ExecutionPolicy Bypass -Command $cmd15a 2>&1 | Out-String
+if ($out15a -match 'VERIFY_SUCCESS' -and $out15a -notmatch 'CAUGHT') {
+    $subPassed15++
+} else {
+    Write-Host "  [FAIL] Test 15a (success) ha fallito: $out15a" -ForegroundColor Red
+}
+
+# 15b: exit non-zero + ok -> blocco fail-closed
+$cmd15b = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:FORCE_SQLITE3_CLI = '1'
+`$env:SQLITE3_EXE = '$mockSqliteEscaped15'
+`$env:MOCK_SQLITE3_MODE = 'exit_nonzero_ok'
+. '$scriptEscaped' -Action plan | Out-Null
+try { Verify-SQLiteIntegrityOffline '$dbEsc15'; Write-Output 'VERIFY_SUCCESS' } catch { Write-Output ('CAUGHT: ' + `$_.Exception.Message) }
+"@
+$out15b = & $psExe -ExecutionPolicy Bypass -Command $cmd15b 2>&1 | Out-String
+if ($out15b -match "CAUGHT: ERRORE FAIL-CLOSED: Controllo di integrita' fallito con sqlite3") {
+    $subPassed15++
+} else {
+    Write-Host "  [FAIL] Test 15b (exit_nonzero_ok) mancato blocco: $out15b" -ForegroundColor Red
+}
+
+# 15c: exit 0 + non-ok (corrupt) -> blocco fail-closed
+$cmd15c = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:FORCE_SQLITE3_CLI = '1'
+`$env:SQLITE3_EXE = '$mockSqliteEscaped15'
+`$env:MOCK_SQLITE3_MODE = 'exit_zero_corrupt'
+. '$scriptEscaped' -Action plan | Out-Null
+try { Verify-SQLiteIntegrityOffline '$dbEsc15'; Write-Output 'VERIFY_SUCCESS' } catch { Write-Output ('CAUGHT: ' + `$_.Exception.Message) }
+"@
+$out15c = & $psExe -ExecutionPolicy Bypass -Command $cmd15c 2>&1 | Out-String
+if ($out15c -match "CAUGHT: ERRORE FAIL-CLOSED: Controllo di integrita' fallito con sqlite3") {
+    $subPassed15++
+} else {
+    Write-Host "  [FAIL] Test 15c (exit_zero_corrupt) mancato blocco: $out15c" -ForegroundColor Red
+}
+
+# 15d: checkpoint busy -> blocco fail-closed
+$cmd15d = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:FORCE_SQLITE3_CLI = '1'
+`$env:SQLITE3_EXE = '$mockSqliteEscaped15'
+`$env:MOCK_SQLITE3_MODE = 'checkpoint_busy'
+. '$scriptEscaped' -Action plan | Out-Null
+try { Verify-SQLiteIntegrityOffline '$dbEsc15'; Write-Output 'VERIFY_SUCCESS' } catch { Write-Output ('CAUGHT: ' + `$_.Exception.Message) }
+"@
+$out15d = & $psExe -ExecutionPolicy Bypass -Command $cmd15d 2>&1 | Out-String
+if ($out15d -match "CAUGHT: ERRORE FAIL-CLOSED: Checkpoint WAL fallito o bloccato con sqlite3") {
+    $subPassed15++
+} else {
+    Write-Host "  [FAIL] Test 15d (checkpoint_busy) mancato blocco: $out15d" -ForegroundColor Red
+}
+
+if ($subPassed15 -eq 4) {
+    Write-Host "[PASS] [TEST ISOLATO / SQLITE3 CLI BACKEND] Test 15: Percorso sqlite3 CLI verificato in isolamento (successo 0+ok, blocco su exit non-zero, blocco su corruzione, blocco su checkpoint busy)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST ISOLATO / SQLITE3 CLI BACKEND] Test 15: Sotto-test superati: $subPassed15 / 4" -ForegroundColor Red
+    $failed++
+}
+Remove-Item $testDir15 -Recurse -Force -ErrorAction SilentlyContinue
+
+
+# ==============================================================================
+# TEST 16: [TEST NEGATIVO / QUIESCENZA WRITER FALLITA FAIL-CLOSED]
+# Il writer resta attivo (pidof restituisce un PID dopo am force-stop e kill -9): blocco FAIL-CLOSED prima dell'estrazione DB
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 16: Quiescenza writer fallita (Fail-Closed) ---" -ForegroundColor Yellow
+$testDir16 = Join-Path $tempDir "akai_test_quiescence_fail_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir16 | Out-Null
+
+$mockAdbJs16 = Join-Path $testDir16 "mock_adb_16.js"
+$mockSignerJs16 = Join-Path $testDir16 "mock_signer_16.js"
+$backupDir16 = Join-Path $testDir16 "backup_target"
+
+@"
+console.log('Signer #1 certificate SHA-256 digest: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs16 -Encoding ascii
+
+$mockSignerCmd16 = if ($isWin) { Join-Path $testDir16 "apksigner.cmd" } else { Join-Path $testDir16 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockSignerJs16`" %*" | Out-File -FilePath $mockSignerCmd16 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs16`" `"`$@`"" | Out-File -FilePath $mockSignerCmd16 -Encoding ascii
+    & chmod +x $mockSignerCmd16
+}
+
+@"
+const fs = require('fs');
+const args = process.argv.slice(2).join(' ');
+
+if (args.includes('connect')) process.exit(0);
+if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
+if (args.includes('pull') && args.includes('base.apk')) {
+    const dest = process.argv[process.argv.length - 1];
+    fs.writeFileSync(dest, 'PK_DEVICE_BACKUP_APK_MOCK');
+    process.exit(0);
+}
+// Snapshot v6 assente per innescare estrazione baseline v5
+if (args.includes('akai_memory_snapshot.db')) {
+    process.exit(1);
+}
+// Quiescence checks:
+if (args.includes('am force-stop')) {
+    process.exit(0);
+}
+if (args.includes('kill -9')) {
+    process.exit(0);
+}
+if (args.includes('pidof')) {
+    // Processo writer ancora attivo (simula processo bloccato che non muore)
+    console.log('9999');
+    process.exit(0);
+}
+// Se viene tentata l'estrazione DB nonostante il writer non sia quiescente:
+if (args.includes('exec-out') || args.includes('pull')) {
+    console.error('FAIL_UNSAFE_PULL: Tentata estrazione del DB senza quiescenza del writer!');
+    process.exit(1);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs16 -Encoding ascii
+
+$mockAdbCmd16 = if ($isWin) { Join-Path $testDir16 "adb.cmd" } else { Join-Path $testDir16 "adb" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockAdbJs16`" %*" | Out-File -FilePath $mockAdbCmd16 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs16`" `"`$@`"" | Out-File -FilePath $mockAdbCmd16 -Encoding ascii
+    & chmod +x $mockAdbCmd16
+}
+
+$mockAdbEscaped16 = $mockAdbCmd16.Replace('\', '/')
+$mockSignerEscaped16 = $mockSignerCmd16.Replace('\', '/')
+$backupDirEscaped16 = $backupDir16.Replace('\', '/')
+
+$testCmd16 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped16'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped16'
+
+& '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -BackupDir '$backupDirEscaped16' -AllowHardwareExecution
+"@
+try {
+    $res16 = & $psExe -ExecutionPolicy Bypass -Command $testCmd16 2>&1 | Out-String
+
+    if ($res16 -match "ERRORE FAIL-CLOSED: Impossibile arrestare il processo dell'applicazione" -and $res16 -match "Writer non quiescente" -and $res16 -notmatch "FAIL_UNSAFE_PULL" -and $res16 -notmatch "Sessione di backup completata") {
+        Write-Host "[PASS] [TEST NEGATIVO / QUIESCENZA WRITER FALLITA FAIL-CLOSED] Test 16: Writer non quiescente (pidof restituisce PID residuo) blocca categoricamente l'operazione in Fail-Closed prima del pull DB" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / QUIESCENZA WRITER FALLITA FAIL-CLOSED] Test 16: Mancato blocco fail-closed: $res16" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Impossibile arrestare il processo dell'applicazione" -or $_.Exception.Message -match "Writer non quiescente") {
+        Write-Host "[PASS] [TEST NEGATIVO / QUIESCENZA WRITER FALLITA FAIL-CLOSED] Test 16: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / QUIESCENZA WRITER FALLITA FAIL-CLOSED] Test 16: Eccezione inattesa: $($_.Exception.Message)" -ForegroundColor Red
+        $failed++
+    }
+} finally {
+    Remove-Item $testDir16 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+
+# ==============================================================================
+# TEST 17: [TEST NEGATIVO / ROLLBACK PULIZIA WAL NEGATA FAIL-CLOSED]
+# Rimozione verificata file WAL/SHM orfani fallita durante rollback: blocco FAIL-CLOSED prima del ripristino del DB originale
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 17: Rimozione residui WAL/SHM fallita nel Rollback (Fail-Closed) ---" -ForegroundColor Yellow
+$testDir17 = Join-Path $tempDir "akai_test_rollback_wal_fail_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir17 | Out-Null
+
+$mockAdbJs17 = Join-Path $testDir17 "mock_adb_17.js"
+$mockSignerJs17 = Join-Path $testDir17 "mock_signer_17.js"
+$backupDir17 = Join-Path $testDir17 "backup_target"
+$sessionDir17 = Join-Path $backupDir17 "session_20261108_040000"
+New-Item -ItemType Directory -Force -Path $sessionDir17 | Out-Null
+
+$deviceApk17 = Join-Path $sessionDir17 "it.akai.customremote_backup.apk"
+$deviceDb17 = Join-Path $sessionDir17 "akai_memory.db"
+
+[System.IO.File]::WriteAllText($deviceApk17, "PK_DEVICE_BACKUP_APK_MOCK")
+New-MockRealDatabase -FilePath $deviceDb17
+
+@"
+console.log('Signer #1 certificate SHA-256 digest: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs17 -Encoding ascii
+
+$mockSignerCmd17 = if ($isWin) { Join-Path $testDir17 "apksigner.cmd" } else { Join-Path $testDir17 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockSignerJs17`" %*" | Out-File -FilePath $mockSignerCmd17 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs17`" `"`$@`"" | Out-File -FilePath $mockSignerCmd17 -Encoding ascii
+    & chmod +x $mockSignerCmd17
+}
+
+@"
+const fs = require('fs');
+const args = process.argv.slice(2).join(' ');
+
+if (args.includes('connect')) process.exit(0);
+if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (args.includes('am force-stop')) process.exit(0);
+if (args.includes('install')) { console.log('Success'); process.exit(0); }
+if (args.includes('exec-in') && args.includes('pm install')) {
+    process.stdin.on('data', () => {});
+    process.stdin.on('end', () => { console.log('Success'); process.exit(0); });
+    return;
+}
+if (args.includes('rm -f')) {
+    process.exit(0);
+}
+// test -f: simula che akai_memory.db-wal non sia stato rimosso (EXISTS)
+if (args.includes('test -f') && args.includes('akai_memory.db-wal')) {
+    console.log('EXISTS');
+    process.exit(0);
+}
+if (args.includes('test -f')) {
+    console.log('NOT_FOUND');
+    process.exit(0);
+}
+// Se viene tentato il ripristino del database:
+if (args.includes('akai_memory.db')) {
+    console.error('FAIL_UNSAFE_RESTORE: Tentato ripristino del DB con file WAL/SHM orfani presenti!');
+    process.exit(1);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs17 -Encoding ascii
+
+$mockAdbCmd17 = if ($isWin) { Join-Path $testDir17 "adb.cmd" } else { Join-Path $testDir17 "adb" }
+if ($isWin) {
+    "@echo off`n`"$validNode`" `"$mockAdbJs17`" %*" | Out-File -FilePath $mockAdbCmd17 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs17`" `"`$@`"" | Out-File -FilePath $mockAdbCmd17 -Encoding ascii
+    & chmod +x $mockAdbCmd17
+}
+
+$mockAdbEscaped17 = $mockAdbCmd17.Replace('\', '/')
+$mockSignerEscaped17 = $mockSignerCmd17.Replace('\', '/')
+$backupDirEscaped17 = $backupDir17.Replace('\', '/')
+
+$testCmd17 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped17'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped17'
+
+& '$scriptEscaped' -Action rollback -TargetTv '127.0.0.1' -BackupDir '$backupDirEscaped17' -AllowHardwareExecution
+"@
+try {
+    $res17 = & $psExe -ExecutionPolicy Bypass -Command $testCmd17 2>&1 | Out-String
+
+    if ($res17 -match "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita su device" -and $res17 -match "Ripristino abortito categoricamente in FAIL-CLOSED" -and $res17 -notmatch "FAIL_UNSAFE_RESTORE" -and $res17 -notmatch "ROLLBACK COMPLETATO CON SUCCESSO") {
+        Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK PULIZIA WAL NEGATA FAIL-CLOSED] Test 17: Rimozione residui WAL/SHM orfani fallita su device blocca categoricamente il rollback in Fail-Closed prima del restore DB" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / ROLLBACK PULIZIA WAL NEGATA FAIL-CLOSED] Test 17: Mancato blocco fail-closed: $res17" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    if ($_.Exception.Message -match "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita su device" -or $_.Exception.Message -match "Ripristino abortito categoricamente in FAIL-CLOSED") {
+        Write-Host "[PASS] [TEST NEGATIVO / ROLLBACK PULIZIA WAL NEGATA FAIL-CLOSED] Test 17: Eccezione fail-closed: $($_.Exception.Message)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / ROLLBACK PULIZIA WAL NEGATA FAIL-CLOSED] Test 17: Eccezione inattesa: $($_.Exception.Message)" -ForegroundColor Red
+        $failed++
+    }
+} finally {
+    Remove-Item $testDir17 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan

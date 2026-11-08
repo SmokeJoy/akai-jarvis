@@ -108,8 +108,14 @@ A seguito dell'audit condotto nell'ottava revisione tecnica, viene formalizzata 
    In caso di ripristino via root (`su`), lo script risolve dinamicamente l'identità numerica dell'applicazione (`userId` o `appId`) interrogando `dumpsys package <PackageName>` o `stat -c "%u" /data/data/<PackageName>`. Se la risoluzione non restituisce un valore strettamente numerico verificato, la procedura **solleva immediatamente eccezione `FAIL-CLOSED`**. È categoricamente vietato applicare permessi con UID arbitrari o fittizi (es. `10000:10000`).
 8. **Watchdog Post-Rollback Deterministic Exit (P1)**:
    I controlli di salute post-rollback eseguono un ciclo di verifica attivo: se l'endpoint `/api/status` non risponde con `status=ok`, la procedura dichiara esplicitamente lo stato `FAIL/UNKNOWN` e termina con eccezione bloccante ed exit code 1.
-9. **Suite di Test Offline Rigorosa (14/14 PASS)**:
-   La suite offline PowerShell `test_safe_install_mocked_adb.ps1` copre 14 scenari formali:
-   - Test 1-6, 9, 12, 13, 14: Test negativi e fail-closed categorici (inclusi Test 13: estrazione WAL fallita se presente, e Test 14: checkpoint WAL bloccato con lettore concorrente `busy=1`);
+9. **Suite di Test Offline Rigorosa (17/17 PASS)**:
+   La suite offline PowerShell `test_safe_install_mocked_adb.ps1` copre 17 scenari formali:
+   - Test 1-6, 9, 12, 13, 14, 16, 17: Test negativi e fail-closed categorici (inclusi Test 13: estrazione WAL fallita se presente, Test 14: checkpoint WAL bloccato con lettore concorrente `busy=1`, Test 16: writer non quiescente con PID attivo, e Test 17: residui WAL/SHM non rimossi su storage pre-restore);
    - Test 7-8: Test affermativi end-to-end con mock ADB (ciclo completo upgrade e rollback con streaming e parità hash);
-   - Test 10-11: Regressioni baseline v5 e consistenza transazionale WAL.
+   - Test 10-11: Regressioni baseline v5 e consistenza transazionale WAL;
+   - Test 15: Verifica isolata del percorso `sqlite3` CLI (4 condizioni: successo 0+ok, exit non-zero, corruzione, checkpoint busy).
+10. **Correzione Predicato SQLite CLI e Verifica Isolata Backend CLI (P0 - Revisione 11)**:
+    Corretto il typo invertito nella verifica con sqlite3 CLI (`$LASTEXITCODE -eq 0 -and $out.Trim() -eq "ok"`). Aggiunto Test 15 isolato con 4 condizioni formali che validano il comportamento corretto e fail-closed in isolamento.
+11. **Prova Attiva di Quiescenza Writer e Rimozione Verificata File Orfani `-wal`/`-shm` (P1 - Revisione 11)**:
+    - **Quiescenza Forzata e Verificata**: Implementato helper `Ensure-ApplicationQuiescence` (`am force-stop`, controllo attivo `pidof`, `kill -9` di recupero, e riverifica `pidof`). Se il processo writer continua a girare, l'estrazione viene categoricamente interrotta in `FAIL-CLOSED` per prevenire snapshot incoerenti (Test 16).
+    - **Pulizia Verificata Residui WAL/SHM**: Implementato helper `Remove-OrphanedWalAndShmFiles` invocato prima del ripristino del DB in fase di rollback. Esegue `rm -f` e verifica attivamente con `test -f` l'assenza confermata (`NOT_FOUND`). In presenza di file `-wal` o `-shm` orfani non rimovibili, il ripristino abortisce immediatamente in `FAIL-CLOSED` per proteggere l'integrità del motore SQLite (Test 17).

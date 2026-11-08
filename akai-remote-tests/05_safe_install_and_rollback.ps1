@@ -186,6 +186,66 @@ function Receive-FileViaAdbExecOut {
     }
 }
 
+function Ensure-ApplicationQuiescence {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName
+    )
+    Write-Host "      Imposizione e verifica attiva della quiescenza del writer ($PackageName)..." -ForegroundColor Yellow
+    $stopRes = & $AdbExe -s $TargetAdb shell "am force-stop $PackageName" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "ERRORE FAIL-CLOSED: Invocazione am force-stop fallita con codice $LASTEXITCODE : $stopRes"
+    }
+
+    Start-Sleep -Milliseconds 300
+    $pidsRaw = & $AdbExe -s $TargetAdb shell "pidof $PackageName 2>/dev/null"
+    $pids = if ($pidsRaw) { $pidsRaw.ToString().Trim() } else { "" }
+    if ($pids) {
+        Write-Host "      Processo ancora attivo (PID: $pids), tentativo terminazione forzata (kill -9)..." -ForegroundColor Yellow
+        & $AdbExe -s $TargetAdb shell "kill -9 $pids 2>/dev/null" | Out-Null
+        Start-Sleep -Milliseconds 300
+        $pidsRetryRaw = & $AdbExe -s $TargetAdb shell "pidof $PackageName 2>/dev/null"
+        $pidsRetry = if ($pidsRetryRaw) { $pidsRetryRaw.ToString().Trim() } else { "" }
+        if ($pidsRetry) {
+            throw "ERRORE FAIL-CLOSED: Impossibile arrestare il processo dell'applicazione ($PackageName, PID residuo: $pidsRetry). Writer non quiescente: estrazione database bloccata categoricamente per prevenire incoerenze o corruzione."
+        }
+    }
+    Write-Host "      Quiescenza applicazione verificata e confermata (zero processi attivi)." -ForegroundColor Green
+    return $true
+}
+
+function Remove-OrphanedWalAndShmFiles {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName
+    )
+    Write-Host "      Rimozione e verifica assenza file WAL/SHM orfani su storage device..." -ForegroundColor Cyan
+    & $AdbExe -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
+    & $AdbExe -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
+
+    $walRaw = & $AdbExe -s $TargetAdb shell "run-as $PackageName sh -c 'test -f databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND' 2>/dev/null"
+    $walCheck = if ($walRaw) { $walRaw.ToString().Trim() } else { "NOT_FOUND" }
+    if ($walCheck -notmatch "NOT_FOUND" -and $walCheck -notmatch "EXISTS") {
+        $walRaw = & $AdbExe -s $TargetAdb shell "su -c 'test -f /data/data/$PackageName/databases/akai_memory.db-wal && echo EXISTS || echo NOT_FOUND' 2>/dev/null"
+        $walCheck = if ($walRaw) { $walRaw.ToString().Trim() } else { "NOT_FOUND" }
+    }
+
+    $shmRaw = & $AdbExe -s $TargetAdb shell "run-as $PackageName sh -c 'test -f databases/akai_memory.db-shm && echo EXISTS || echo NOT_FOUND' 2>/dev/null"
+    $shmCheck = if ($shmRaw) { $shmRaw.ToString().Trim() } else { "NOT_FOUND" }
+    if ($shmCheck -notmatch "NOT_FOUND" -and $shmCheck -notmatch "EXISTS") {
+        $shmRaw = & $AdbExe -s $TargetAdb shell "su -c 'test -f /data/data/$PackageName/databases/akai_memory.db-shm && echo EXISTS || echo NOT_FOUND' 2>/dev/null"
+        $shmCheck = if ($shmRaw) { $shmRaw.ToString().Trim() } else { "NOT_FOUND" }
+    }
+
+    if ($walCheck -match "EXISTS" -or $shmCheck -match "EXISTS") {
+        throw "ERRORE FAIL-CLOSED: Rimozione file WAL/SHM orfani fallita su device (WAL: $walCheck, SHM: $shmCheck). Ripristino abortito categoricamente in FAIL-CLOSED per prevenire corruzione dello schema."
+    }
+    Write-Host "      Assenza file WAL/SHM orfani confermata con successo." -ForegroundColor Green
+    return $true
+}
+
 function Get-ApkCertificateFingerprint($apkFile) {
     if (-not (Test-Path $apkFile)) {
         throw "ERRORE FAIL-CLOSED: File APK non trovato in: $apkFile"
@@ -246,14 +306,16 @@ function Verify-SQLiteIntegrityOffline($dbFile) {
     $shmFile = "$dbFile-shm"
     $verified = $false
 
-    # 1. Prova con Node.js
-    $nodePaths = @(
-        "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\nodejs\node.exe",
-        (Get-Command node -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
-    )
-    $validNode = $nodePaths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    # 1. Prova con Node.js (se non forzato sqlite3 CLI per test)
+    if (-not $env:FORCE_SQLITE3_CLI) {
+        $nodePaths = @(
+            $env:NODE_EXE,
+            "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\nodejs\node.exe",
+            (Get-Command node -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+        )
+        $validNode = $nodePaths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
-    if ($validNode) {
+        if ($validNode) {
         $dbEscaped = $dbFile.Replace('\', '/')
         $jsCheck = @"
 try {
@@ -295,11 +357,17 @@ try {
             throw "ERRORE FAIL-CLOSED: Controllo di integrita' SQLite fallito (database corrotto) su $dbFile : $res"
         }
     }
+    }
 
-    # 2. Prova con Python
-    if (-not $verified) {
-        $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1
-        if (-not $pythonCmd) { $pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1 }
+    # 2. Prova con Python (se non forzato sqlite3 CLI per test)
+    if (-not $verified -and -not $env:FORCE_SQLITE3_CLI) {
+        $pythonCmd = $null
+        if ($env:PYTHON_EXE -and (Test-Path $env:PYTHON_EXE)) {
+            $pythonCmd = @{ Source = $env:PYTHON_EXE }
+        } else {
+            $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1
+            if (-not $pythonCmd) { $pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch "WindowsApps" } | Select-Object -First 1 }
+        }
         if ($pythonCmd) {
             $pyCheck = "import sqlite3, sys
 try:
@@ -332,14 +400,19 @@ except Exception as e:
 
     # 3. Prova con sqlite3 CLI
     if (-not $verified) {
-        $sqlite3 = Get-Command sqlite3 -ErrorAction SilentlyContinue
+        $sqlite3 = $null
+        if ($env:SQLITE3_EXE -and (Test-Path $env:SQLITE3_EXE)) {
+            $sqlite3 = @{ Source = $env:SQLITE3_EXE }
+        } else {
+            $sqlite3 = Get-Command sqlite3 -ErrorAction SilentlyContinue
+        }
         if ($sqlite3) {
             $cpOut = & $sqlite3.Source $dbFile "PRAGMA wal_checkpoint(TRUNCATE);" 2>&1
-            if ($LASTEXITCODE -ne 0 -or ($cpOut -notmatch "^0\|")) {
+            if ($LASTEXITCODE -ne 0 -or ($cpOut.ToString().Trim() -notmatch "^0\|")) {
                 throw "ERRORE FAIL-CLOSED: Checkpoint WAL fallito o bloccato con sqlite3 su $dbFile : $cpOut"
             }
             $out = & $sqlite3.Source $dbFile "PRAGMA integrity_check;" 2>&1
-            if ($LASTEXITCODE -ne 0 -and $out.Trim() -eq "ok") {
+            if ($LASTEXITCODE -eq 0 -and $out.ToString().Trim() -eq "ok") {
                 $verified = $true
             } else {
                 throw "ERRORE FAIL-CLOSED: Controllo di integrita' fallito con sqlite3 su $dbFile : $out"
@@ -464,10 +537,9 @@ switch ($Action) {
             if ($rx.Success) { $extracted = $true }
         }
 
-        # Se snapshot v6 non presente, applica quiescenza assoluta per estrazione baseline v5
+        # Se snapshot v6 non presente, applica quiescenza verificata per estrazione baseline v5
         if (-not $extracted) {
-            Write-Host "      Snapshot v6 non presente. Applicazione quiescenza forzata per estrazione baseline v5 (am force-stop)..." -ForegroundColor Yellow
-            & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
+            Ensure-ApplicationQuiescence -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
         }
 
         # Tentativo C: database primario + WAL via run-as (baseline v5 con probing attivo WAL)
@@ -591,10 +663,9 @@ switch ($Action) {
                 if ($rx.Success) { $dbExtracted = $true }
             }
 
-            # Se snapshot v6 non presente, applica quiescenza forzata per estrazione baseline v5
+            # Se snapshot v6 non presente, applica quiescenza verificata per estrazione baseline v5
             if (-not $dbExtracted) {
-                Write-Host "      Snapshot v6 non presente. Applicazione quiescenza forzata per estrazione baseline v5 (am force-stop)..." -ForegroundColor Yellow
-                & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
+                Ensure-ApplicationQuiescence -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
             }
 
             # Tentativo C: database primario + WAL via run-as (baseline v5 con probing attivo WAL)
@@ -744,9 +815,8 @@ switch ($Action) {
                 # 1. Arresto forzato dell'app per rilasciare lock sul file
                 & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
 
-                # 2. Rimozione file WAL e SHM orfani
-                & $adb -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
-                & $adb -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
+                # 2. Rimozione e verifica assenza file WAL e SHM orfani
+                Remove-OrphanedWalAndShmFiles -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
 
                 # Risoluzione UID numerico Android per chown
                 $appUid = $null
@@ -859,9 +929,8 @@ $chownTarget = "${appUid}:${appUid}"
         Write-Host "[2/4] Ripristino database SQLite originale..."
         & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
 
-        # Rimozione file WAL/SHM orfani
-        & $adb -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
-        & $adb -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
+        # Rimozione e verifica assenza file WAL/SHM orfani
+        Remove-OrphanedWalAndShmFiles -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
 
         # Risoluzione UID numerico Android per chown
         $appUid = $null
