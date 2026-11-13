@@ -2,6 +2,7 @@ package it.akai.customhome;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityEvent;
 import java.util.Arrays;
@@ -12,18 +13,10 @@ import java.util.Set;
  * Servizio di accessibilita opzionale e a minimizzazione dati per reindirizzare
  * la pressione del tasto MENU (KEYCODE_MENU / 82) del telecomando originale AKAI
  * verso la Home v8 LEANBACK (GLOBAL_ACTION_HOME).
- *
- * Principi di Sicurezza e Privacy:
- * - canRetrieveWindowContent = false (nessun accesso a testi, password o contenuti video/DRM)
- * - canRequestFilterKeyEvents = true (intercettazione tasti a basso livello)
- * - ARCHITETTURA RIGOROSAMENTE FAIL-OPEN: se il pacchetto in primo piano e sconosciuto
- *   (null, vuoto, finestra di transizione, overlay), di sistema (Android, SystemUI, Settings)
- *   o del firmware OEM (MediaTek DTV, MStar, Cultraview, ingressi HDMI), il tasto MENU
- *   NON viene intercettato e passa al 100% all'OEM/sistema (return false).
- * - Intercettazione consentita ESCLUSIVAMENTE per applicazioni utente/multimediali
- *   terze verificate (es. YouTube, Netflix, RaiPlay, Prime Video, Disney+, Spotify, browser).
  */
 public class AkaiMenuHomeService extends AccessibilityService {
+
+    private static final String TAG = "AkaiMenuHomeService";
 
     // Allowlist rigorosa delle sole applicazioni utente / streaming verificate
     // su cui il tasto MENU viene reindirizzato verso la Home v8.
@@ -95,12 +88,7 @@ public class AkaiMenuHomeService extends AccessibilityService {
     @Override
     public void onServiceConnected() {
         super.onServiceConnected();
-        AccessibilityServiceInfo info = new AccessibilityServiceInfo();
-        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
-        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC;
-        info.flags = AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS;
-        info.notificationTimeout = 100;
-        setServiceInfo(info);
+        Log.i(TAG, "onServiceConnected: AkaiMenuHomeService connesso e pronto.");
     }
 
     @Override
@@ -109,17 +97,17 @@ public class AkaiMenuHomeService extends AccessibilityService {
             CharSequence pkg = event.getPackageName();
             if (pkg != null && pkg.length() > 0) {
                 currentPackage = pkg.toString().trim();
+                Log.d(TAG, "TYPE_WINDOW_STATE_CHANGED -> currentPackage: " + currentPackage);
             } else {
-                // Stato transitorio sconosciuto o overlay privo di package:
-                // reset a stringa vuota per forzare il fail-open trasparente
                 currentPackage = "";
+                Log.d(TAG, "TYPE_WINDOW_STATE_CHANGED -> package nullo/vuoto, reset a stringa vuota");
             }
         }
     }
 
     @Override
     public void onInterrupt() {
-        // Nessuna operazione pendente da interrompere
+        Log.i(TAG, "onInterrupt ricevuto.");
     }
 
     @Override
@@ -129,17 +117,23 @@ public class AkaiMenuHomeService extends AccessibilityService {
         }
 
         int keyCode = event.getKeyCode();
+        int action = event.getAction();
+        Log.d(TAG, "onKeyEvent: keyCode=" + keyCode + " action=" + action + " currentPackage=" + currentPackage);
+
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            // Fail-open: se non e' confermata un'app utente verificata in allowlist,
-            // lascia passare il tasto all'OEM (return false)
-            if (!shouldInterceptMenu(currentPackage)) {
+            boolean intercept = shouldInterceptMenu(currentPackage);
+            Log.i(TAG, "KEYCODE_MENU rilevato su package='" + currentPackage + "' -> shouldIntercept=" + intercept);
+
+            if (!intercept) {
+                Log.i(TAG, "Passthrough OEM: KEYCODE_MENU rilasciato all'OEM (return false).");
                 return false;
             }
 
-            // Consuma l'evento e attiva HOME su ACTION_UP per evitare doppie chiamate o repeat
-            if (event.getAction() == KeyEvent.ACTION_UP) {
-                performGlobalAction(GLOBAL_ACTION_HOME);
+            if (action == KeyEvent.ACTION_UP) {
+                Log.i(TAG, "Triggering performGlobalAction(GLOBAL_ACTION_HOME)...");
+                boolean res = performGlobalAction(GLOBAL_ACTION_HOME);
                 globalActionsPerformed++;
+                Log.i(TAG, "performGlobalAction(GLOBAL_ACTION_HOME) risultato=" + res);
             }
             return true;
         }
