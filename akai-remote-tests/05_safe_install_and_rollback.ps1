@@ -535,23 +535,28 @@ function Invoke-WithAdbElevation {
         [string]$TargetAdb,
         [scriptblock]$ActionBlock
     )
-    $elevated = $false
+    $preExistingRoot = $false
+    $escalationAttempted = $false
     $isRootActive = $false
     $prevEap = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
         $idOut = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
-        if ($LASTEXITCODE -eq 0 -and $idOut -match "uid=0\(root\)|uid=0\b") {
+        $idInitExit = $LASTEXITCODE
+        if ($idInitExit -eq 0 -and $idOut -match "\buid=0\(root\)|\buid=0\b") {
+            $preExistingRoot = $true
             $isRootActive = $true
         } else {
+            $escalationAttempted = $true
             $rootOut = (& $AdbExe -s $TargetAdb root 2>&1 | Out-String).Trim()
-            if ($LASTEXITCODE -eq 0 -and $rootOut -match "restarting adbd as root|already running as root") {
+            $rootExit = $LASTEXITCODE
+            if ($rootExit -eq 0 -and $rootOut -match "restarting adbd as root|already running as root") {
                 Start-Sleep -Milliseconds 1000
                 & $AdbExe connect $TargetAdb 2>$null | Out-Null
                 & $AdbExe -s $TargetAdb wait-for-device 2>$null | Out-Null
                 $idCheck = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
-                if ($LASTEXITCODE -eq 0 -and $idCheck -match "uid=0\(root\)|uid=0\b") {
-                    $elevated = $true
+                $idCheckExit = $LASTEXITCODE
+                if ($idCheckExit -eq 0 -and $idCheck -match "\buid=0\(root\)|\buid=0\b") {
                     $isRootActive = $true
                 }
             }
@@ -562,15 +567,24 @@ function Invoke-WithAdbElevation {
         }
     } finally {
         $ErrorActionPreference = "Continue"
-        if ($elevated) {
-            & $AdbExe -s $TargetAdb unroot 2>&1 | Out-Null
+        if ($escalationAttempted -and -not $preExistingRoot) {
+            $unrootOut = (& $AdbExe -s $TargetAdb unroot 2>&1 | Out-String).Trim()
+            $unrootExit = $LASTEXITCODE
             Start-Sleep -Milliseconds 800
             & $AdbExe connect $TargetAdb 2>$null | Out-Null
             & $AdbExe -s $TargetAdb wait-for-device 2>$null | Out-Null
             $idAfter = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
-            if ($idAfter -match "uid=0\(root\)|uid=0\b") {
+            $idAfterExit = $LASTEXITCODE
+            $verifiedNonRootShell = (
+                $unrootExit -eq 0 -and
+                $idAfterExit -eq 0 -and
+                -not [string]::IsNullOrWhiteSpace($idAfter) -and
+                ($idAfter -match "\buid=2000\(shell\)|\buid=[1-9]\d*\b") -and
+                ($idAfter -notmatch "\buid=0\(root\)|\buid=0\b")
+            )
+            if (-not $verifiedNonRootShell) {
                 $ErrorActionPreference = $prevEap
-                throw "ERRORE FAIL-CLOSED: Ripristino privilegi non-root (adb unroot) fallito: il demone adbd risulta ancora in esecuzione come uid=0 ($idAfter)."
+                throw "ERRORE FAIL-CLOSED [STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO]: Impossibile confermare positivamente il ritorno del demone adbd a privilegi non-root (uid=2000 shell) dopo adb unroot (unrootExit=$unrootExit, unrootOut='$unrootOut', idExit=$idAfterExit, idOut='$idAfter'). Eseguire manualmente: adb -s $TargetAdb unroot && adb -s $TargetAdb shell id"
             }
             Write-Host "      Privilegi temporanei adbd revocati con successo (adb unroot -> $idAfter)." -ForegroundColor Gray
         }

@@ -321,9 +321,13 @@ if ($isWin) {
 # 4. Mock ADB per Happy Path Upgrade
 @"
 const fs = require('fs');
-const args = process.argv.slice(2).join(' ');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
 
-if (args.includes('connect')) process.exit(0);
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
 if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
 if (args.includes('pull')) {
@@ -487,9 +491,13 @@ if ($isWin) {
 # 3. Mock ADB per Rollback: supporta exec-in per streaming e exec-out per verifica hash post-restore
 @"
 const fs = require('fs');
-const args = process.argv.slice(2).join(' ');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
 
-if (args.includes('connect')) process.exit(0);
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
 if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
 if (args.includes('pull')) {
@@ -1039,9 +1047,13 @@ if ($isWin) {
 # - exec-out su akai_memory.db-wal FALLISCE (process.exit(1))
 @"
 const fs = require('fs');
-const args = process.argv.slice(2).join(' ');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
 
-if (args.includes('connect')) process.exit(0);
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
 if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
 if (args.includes('pull')) {
@@ -1371,9 +1383,13 @@ if ($isWin) {
 
 @"
 const fs = require('fs');
-const args = process.argv.slice(2).join(' ');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
 
-if (args.includes('connect')) process.exit(0);
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
 if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
 if (args.includes('pull') && args.includes('base.apk')) {
@@ -1482,9 +1498,13 @@ if ($isWin) {
 
 @"
 const fs = require('fs');
-const args = process.argv.slice(2).join(' ');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
 
-if (args.includes('connect')) process.exit(0);
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
 if (args.includes('am force-stop')) process.exit(0);
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
@@ -1584,9 +1604,13 @@ if ($isWin) {
 
 @"
 const fs = require('fs');
-const args = process.argv.slice(2).join(' ');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
 
-if (args.includes('connect')) process.exit(0);
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
 if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
 if (args.includes('pull') && args.includes('base.apk')) {
@@ -1691,9 +1715,13 @@ if ($isWin) {
 
 @"
 const fs = require('fs');
-const args = process.argv.slice(2).join(' ');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
 
-if (args.includes('connect')) process.exit(0);
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
 if (args.includes('am force-stop')) process.exit(0);
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
@@ -2080,7 +2108,10 @@ const path = require('path');
 const args = process.argv.slice(2);
 const argStr = args.join(' ');
 
-if (args[0] === 'connect') process.exit(0);
+if (args[0] === 'connect' || args.includes('wait-for-device')) process.exit(0);
+if (args.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (args.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (args.includes('shell') && args[args.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (argStr.includes('pm path')) {
     console.log('package:/data/app/it.akai.customremote-1/base.apk');
     process.exit(0);
@@ -2225,7 +2256,10 @@ $mockAdbJs24 = Join-Path $testDir24 "mock_adb.js"
 const args = process.argv.slice(2);
 const argStr = args.join(' ');
 
-if (args[0] === 'connect') process.exit(0);
+if (args[0] === 'connect' || args.includes('wait-for-device')) process.exit(0);
+if (args.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (args.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (args.includes('shell') && args[args.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (argStr.includes('pm path')) {
     // Pacchetto it.akai.customremote ASSENTE sulla TV
     process.exit(1);
@@ -2471,10 +2505,14 @@ Remove-Item $testDirTls -Recurse -Force -ErrorAction SilentlyContinue
 
 # ==============================================================================
 # TEST 29: [ADB ROOT/UNROOT + WAL BACKUP & EACCES GUARD]
-# Verifica positiva/negativa completa del canale root adbd (Step 2):
+# Verifica positiva/negativa completa del canale root adbd (Step 2 + P1 Fail-Closed Gates):
 #   29a) Happy Path: shell(uid=2000) -> adb root -> uid=0 -> backup DB+WAL + checkpoint -> adb unroot -> uid=2000
 #   29b) Error/Interruption Path: fail streaming WAL sotto root -> ERRORE FAIL-CLOSED + adb unroot garantito in finally
 #   29c) Denied & EACCES Guard: adb root rifiutato (uid=2000) + Probe-DeviceFileState -Channel "root" su EACCES -> Fail-Closed
+#   29d) P1 Gate: adb root eleva a root ma id check post-root fallisce -> ActionBlock NON eseguito + adb unroot eseguito in finally
+#   29e) P1 Gate: adb unroot fallisce/connessione interrotta -> ERRORE FAIL-CLOSED [STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO]
+#   29f) P1 Gate: id check finale post-unroot restituisce stringa vuota -> ERRORE FAIL-CLOSED (mai falso successo)
+#   29g) P1 Gate: root pre-esistente su adbd -> preserva stato root senza invocare adb root ne' adb unroot
 # ==============================================================================
 Write-Host "`n--- Esecuzione Test 29: ADB Root/Unroot Escalation, WAL Checkpoint & EACCES Guard ---" -ForegroundColor Yellow
 $testDir29 = Join-Path $tempDir "akai_test_adb_root_$([Guid]::NewGuid().ToString('N'))"
@@ -2549,6 +2587,17 @@ if (args.includes('root')) {
     process.exit(0);
 }
 if (args.includes('unroot')) {
+    if (rootMode === 'unroot_fail') {
+        if (logFile) fs.appendFileSync(logFile, 'unroot_fail\n', 'utf8');
+        process.stderr.write('error: closed\n');
+        process.exit(1);
+    }
+    if (rootMode === 'post_unroot_id_empty') {
+        fs.writeFileSync(stateFile, 'unroot_empty', 'utf8');
+        if (logFile) fs.appendFileSync(logFile, 'unroot\n', 'utf8');
+        console.log('restarting adbd as non root');
+        process.exit(0);
+    }
     fs.writeFileSync(stateFile, 'shell', 'utf8');
     if (logFile) fs.appendFileSync(logFile, 'unroot\n', 'utf8');
     console.log('restarting adbd as non root');
@@ -2574,6 +2623,13 @@ if (argStr.includes('su -c')) {
 if (args.includes('shell')) {
     if (args[args.length - 1] === 'id') {
         const st = getState();
+        if (rootMode === 'post_root_id_fail' && st === 'root') {
+            process.stderr.write('error: device offline\n');
+            process.exit(1);
+        }
+        if (st === 'unroot_empty') {
+            process.exit(0);
+        }
         if (st === 'root') {
             console.log('uid=0(root) gid=0(root) groups=0(root) context=u:r:su:s0');
         } else {
@@ -2759,15 +2815,120 @@ try {
     } else {
         Write-Host "   [FAIL] Sotto-test 29c fallito: backup=$out29cBackup | probe=$out29cProbe" -ForegroundColor Red
     }
+
+    # --- Sotto-test 29d: P1 Gate - adb root eleva a root ma check id post-root fallisce -> ActionBlock NON eseguito + adb unroot in finally ---
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29d = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:MOCK_ROOT_MODE = 'post_root_id_fail'
+. '$scriptEscaped' -Action plan | Out-Null
+`$actionRan = `$false
+try {
+    Invoke-WithAdbElevation -AdbExe '$mockAdbEsc29' -TargetAdb '127.0.0.1:5555' -ActionBlock { `$actionRan = `$true }
+    Write-Output ('ACTION_RAN=' + `$actionRan)
+} catch {
+    Write-Output ('ACTION_RAN=' + `$actionRan + ' CAUGHT_29D:' + `$_.Exception.Message)
+}
+"@
+    $out29d = & $psExe -ExecutionPolicy Bypass -Command $cmd29d 2>&1 | Out-String
+    $finalState29d = (Get-Content $adbdStateFile29 -Raw).Trim()
+    $logLines29d = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+
+    if ($out29d -match "ACTION_RAN=False" -and $out29d -notmatch "CAUGHT_29D:" -and $out29d -match "Privilegi temporanei adbd revocati con successo \(adb unroot -> uid=2000" -and $finalState29d -eq "shell" -and $logLines29d -match "root" -and $logLines29d -match "unroot") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29d: adb root eleva a root ma id check post-root fallisce -> ActionBlock bloccato e adb unroot garantito in finally (-> uid=2000 shell)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29d fallito (state=$finalState29d, log=$logLines29d): $out29d" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29e: P1 Gate - adb unroot fallisce / connessione interrotta -> throw FAIL-CLOSED [STATO ADBD UNKNOWN] ---
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29e = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:MOCK_ROOT_MODE = 'unroot_fail'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Invoke-WithAdbElevation -AdbExe '$mockAdbEsc29' -TargetAdb '127.0.0.1:5555' -ActionBlock { Write-Output 'ACTION_EXECUTED_29E' }
+    Write-Output 'FAIL_NO_THROW_29E'
+} catch {
+    Write-Output ('CAUGHT_29E:' + `$_.Exception.Message)
+}
+"@
+    $out29e = & $psExe -ExecutionPolicy Bypass -Command $cmd29e 2>&1 | Out-String
+    $logLines29e = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+
+    if ($out29e -match "CAUGHT_29E:ERRORE FAIL-CLOSED \[STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO\]" -and $out29e -notmatch "Privilegi temporanei adbd revocati con successo" -and $out29e -notmatch "FAIL_NO_THROW_29E" -and $logLines29e -match "unroot_fail") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29e: Fallimento adb unroot rilevato in Fail-Closed ([STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO]), nessun falso successo" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29e fallito (log=$logLines29e): $out29e" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29f: P1 Gate - id check finale post-unroot vuoto -> throw FAIL-CLOSED [STATO ADBD UNKNOWN] ---
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29f = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:MOCK_ROOT_MODE = 'post_unroot_id_empty'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Invoke-WithAdbElevation -AdbExe '$mockAdbEsc29' -TargetAdb '127.0.0.1:5555' -ActionBlock { Write-Output 'ACTION_EXECUTED_29F' }
+    Write-Output 'FAIL_NO_THROW_29F'
+} catch {
+    Write-Output ('CAUGHT_29F:' + `$_.Exception.Message)
+}
+"@
+    $out29f = & $psExe -ExecutionPolicy Bypass -Command $cmd29f 2>&1 | Out-String
+
+    if ($out29f -match "CAUGHT_29F:ERRORE FAIL-CLOSED \[STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO\]" -and $out29f -notmatch "Privilegi temporanei adbd revocati con successo" -and $out29f -notmatch "FAIL_NO_THROW_29F") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29f: Output vuoto su adb shell id post-unroot bloccato in Fail-Closed invece di falso successo" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29f fallito: $out29f" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29g: P1 Gate - adbd gia' root in ingresso (pre-existing root) -> preserva stato senza root ne' unroot ---
+    [System.IO.File]::WriteAllText($adbdStateFile29, "root")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29g = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:MOCK_ROOT_MODE = 'allow'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Invoke-WithAdbElevation -AdbExe '$mockAdbEsc29' -TargetAdb '127.0.0.1:5555' -ActionBlock { Write-Output 'ACTION_EXECUTED_29G' }
+} catch {
+    Write-Output ('CAUGHT_29G:' + `$_.Exception.Message)
+}
+"@
+    $out29g = & $psExe -ExecutionPolicy Bypass -Command $cmd29g 2>&1 | Out-String
+    $finalState29g = (Get-Content $adbdStateFile29 -Raw).Trim()
+    $logLines29g = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+
+    if ($out29g -match "ACTION_EXECUTED_29G" -and $out29g -notmatch "CAUGHT_29G:" -and $finalState29g -eq "root" -and [string]::IsNullOrWhiteSpace($logLines29g)) {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29g: Stato adbd pre-existing root preservato senza invocare adb root ne' adb unroot" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29g fallito (state=$finalState29g, log='$logLines29g'): $out29g" -ForegroundColor Red
+    }
 } finally {
     Remove-Item $testDir29 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($subPassed29 -eq 3) {
-    Write-Host "[PASS] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Elevation root/unroot, WAL checkpoint e guardia EACCES verificati al 100% (3/3)" -ForegroundColor Green
+if ($subPassed29 -eq 7) {
+    Write-Host "[PASS] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Elevation root/unroot, WAL checkpoint, EACCES e P1 Fail-Closed gates verificati al 100% (7/7)" -ForegroundColor Green
     $passed++
 } else {
-    Write-Host "[FAIL] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Sotto-test superati: $subPassed29 / 3" -ForegroundColor Red
+    Write-Host "[FAIL] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Sotto-test superati: $subPassed29 / 7" -ForegroundColor Red
     $failed++
 }
 
