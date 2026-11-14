@@ -112,6 +112,20 @@ public class RestApiRouter {
         this(securityManager, commandHandler, memoryHandler, pinHandler, null, localIpAddress, httpPort);
     }
 
+    /**
+     * Serve only public bundled web remote assets on legacy HTTP. No traversal
+     * or API endpoint may be matched here. The caller still enforces LAN scope.
+     */
+    public static boolean isPublicRemoteAssetRequest(String method, String path) {
+        if (!"GET".equals(method) || path == null) return false;
+        if ("/".equals(path)) return true;
+        if (!path.matches("/[A-Za-z0-9_./-]+") || path.contains("..") || path.contains("//")) return false;
+        String lower = path.toLowerCase(java.util.Locale.US);
+        return lower.endsWith(".html") || lower.endsWith(".css") || lower.endsWith(".js")
+                || lower.endsWith(".json") || lower.endsWith(".svg") || lower.endsWith(".png")
+                || lower.endsWith(".ico") || lower.endsWith(".webmanifest") || lower.endsWith(".webp");
+    }
+
     public boolean routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os) throws Exception {
         return routeRequest(method, path, headers, body, clientIp, os, true);
     }
@@ -138,7 +152,20 @@ public class RestApiRouter {
                                       (("/api/auth/tls_info".equals(path) || "/tls_info".equals(path)) && "GET".equals(method)) ||
                                       (("/setup".equals(path) || "/bootstrap".equals(path)) && "GET".equals(method));
 
-        if (!isTls && !isBootstrapEndpoint) {
+        // P0 Legacy Remote compatibility: exact old PIN/remote endpoints ONLY on private LAN.
+        // Token/PIN on HTTP can be intercepted on an untrusted LAN; prefer TLS when available.
+        // AI, cloud configuration, memory and diagnostics MUST remain HTTPS-only.
+        boolean legacyRemoteHttp = "POST".equals(method) && (
+                "/api/auth/pair/request".equals(path) ||
+                "/api/auth/pair/verify".equals(path) ||
+                "/api/auth/pair".equals(path) ||
+                "/api/auth/revoke".equals(path) ||
+                "/api/command".equals(path) ||
+                "/api/control/command".equals(path) ||
+                "/api/control/text".equals(path));
+
+        if (!isTls && !isBootstrapEndpoint && !legacyRemoteHttp
+                && !isPublicRemoteAssetRequest(method, path)) {
             JSONObject err = new JSONObject();
             err.put("success", false);
             err.put("error", "HTTPS_REQUIRED");
