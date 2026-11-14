@@ -21,3 +21,9 @@ Questo repository ha una **memoria operativa persistente** per ChatGPT, Antigrav
 - Non salvare PIN, chiavi, IP LAN, SSID o dati privati in documentazione/commenti.
 
 **Ordine delle fonti:** decisioni recenti del proprietario > GitHub codice e CI live > stato issue #4 > memoria documentale datata. Non trattare istruzioni vecchie nei commenti come ancora vincolanti quando sostituite esplicitamente.
+
+## Documentazione tecnica ufficiale (OBBLIGATORIA)
+Prima di cambiare API Android, UI, SQLite, Keystore, rete, provider LLM, pipeline CI o regole Antigravity consultare **[docs/OFFICIAL_TECH_REFERENCES.md](docs/OFFICIAL_TECH_REFERENCES.md)**: include i link ufficiali, le limitazioni Android 9/API28 e i gate di test. Prima codice esistente, poi documentazione ufficiale, infine pattern OSS. Non dedurre compatibilità da codice Android moderno; niente API30+ usate su API28 senza fallback.
+
+## Progetto ChatGPT «AKAI TV BOOST»
+Le istruzioni pronte da applicare nel progetto ChatGPT sono in **[docs/CHATGPT_PROJECT_AKAI_TV_BOOST.md](docs/CHATGPT_PROJECT_AKAI_TV_BOOST.md)**. Il progetto ChatGPT e il repository GitHub sono sistemi distinti: gli aggiornamenti su GitHub NON cambiano automaticamente le impostazioni della UI del progetto. Per le nuove chat, leggere sempre la fonte canonica e l'issue #4, non soltanto il testo del progetto.
