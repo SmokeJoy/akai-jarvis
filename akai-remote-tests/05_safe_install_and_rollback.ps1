@@ -1415,7 +1415,7 @@ switch ($Action) {
         Write-Host "Fase 3: Installazione conservativa nuovo APK (adb install -r -d se upgrade, adb install se clean)"
         Write-Host "Fase 4: Multi-Point Health Check Watchdog (30s):"
         Write-Host "        - Verifica 1: /api/status risponde 200 con status=ok E uinput_ready=true"
-        Write-Host "        - Verifica 2: /index.html risponde 200 (v5) o 426 Upgrade Required (HTTPS M2/M3)"
+        Write-Host "        - Verifica 2: /index.html risponde 200 con payload HTML valido (telecomando classico LAN preservato)"
         Write-Host "        - Verifica 3: Porta HTTPS 8443 con probe TLS, verifica SAN IP/DNS ed impronta Root CA"
         Write-Host "        - Verifica 4: Processo attivo su device (pidof)"
         Write-Host "Fase 5: Rollback Automatico in caso di anomalia Watchdog:"
@@ -1984,20 +1984,31 @@ switch ($Action) {
                 $statusResp = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 4 -ErrorAction Stop
                 
                 # 1. Verifica HTTP 8088 (/index.html e /api/status)
+                # Il telecomando classico LAN esige obbligatoriamente HTTP 200 con payload HTML valido.
+                # L'esito 426 su /index.html costituisce regressione vietata (rompe il telecomando).
                 $webOk = $false
                 $webStatusMsg = ""
                 try {
                     $webResp = Invoke-WebRequest -Uri $WebUrl -Method Get -TimeoutSec 4 -UseBasicParsing -ErrorAction Stop
                     if ($webResp.StatusCode -eq 200) {
-                        $webOk = $true
-                        $webStatusMsg = "HTTP 200 ($($webResp.RawContentLength) bytes - telecomando classico LAN HTTP)"
+                        if ($webResp.Content -match "<html|<!DOCTYPE|<body|<title") {
+                            $webOk = $true
+                            $webStatusMsg = "HTTP 200 ($($webResp.RawContentLength) bytes - telecomando classico LAN HTML operativo)"
+                        } else {
+                            $webOk = $false
+                            $webStatusMsg = "FALLITO (HTTP 200 ma payload HTML non valido o tronco)"
+                        }
+                    } else {
+                        $webOk = $false
+                        $webStatusMsg = "FALLITO (HTTP status $($webResp.StatusCode))"
                     }
                 } catch {
                     if ($_.Exception.Message -match "426" -or ($_.Exception.Response -and $_.Exception.Response.StatusCode -eq 426)) {
-                        $webOk = $true
-                        $webStatusMsg = "HTTP 426 Upgrade Required (Policy HTTP 8088 Fail-Closed Verificata)"
+                        $webOk = $false
+                        $webStatusMsg = "FALLITO (HTTP 426 Upgrade Required su /index.html: regressione telecomando classico LAN vietata)"
                     } else {
-                        throw $_
+                        $webOk = $false
+                        $webStatusMsg = "FALLITO ($($_.Exception.Message))"
                     }
                 }
                 $pidVal = (& $adb -s $TargetAdb shell "pidof $PackageName").Trim()
@@ -2013,7 +2024,7 @@ switch ($Action) {
                 } elseif ($tlsRes.SanMatched -and $tlsRes.Status -eq "TLS_HANDSHAKE_ONLY/UNVERIFIED") {
                     if ([string]::IsNullOrWhiteSpace($ExpectedCaFingerprint)) {
                         $httpsOk = $true
-                        $httpsStatusMsg = "TLS_HANDSHAKE_OK (Porta $HttpsPort, Handshake TLS OK, SAN=$TargetTv OK, Root CA SHA256=$($tlsRes.RootCaSha256) pronta per bootstrap OOB)"
+                        $httpsStatusMsg = "PROVISIONAL / OOB TRUST PENDING (Porta $HttpsPort, Handshake TLS OK, SAN=$TargetTv OK, Root CA SHA256=$($tlsRes.RootCaSha256))"
                     } else {
                         $httpsOk = $false
                         $httpsStatusMsg = "UNVERIFIED: Handshake TLS attivo ma Root CA non corrisponde all'impronta attesa ($ExpectedCaFingerprint)"
@@ -2040,7 +2051,15 @@ switch ($Action) {
         }
 
         if ($healthy) {
-            Write-Host "`nDEPLOYMENT VERIFICATO CON SUCCESSO AL 100%! Tutti i componenti operativi." -ForegroundColor Green
+            if ($tlsRes -and $tlsRes.Status -eq "APPROVED") {
+                Write-Host "`nDEPLOYMENT VERIFICATO CON SUCCESSO AL 100%! Tutti i componenti operativi e Root CA approvata." -ForegroundColor Green
+            } else {
+                Write-Host "`nSTATO PROVVISORIO: AVVIO TECNICO RIUSCITO (PROVISIONAL / OOB TRUST PENDING)" -ForegroundColor Yellow
+                Write-Host "AVVISO DI SICUREZZA: Handshake TLS attivo ma Root CA non ancora validata fuori banda sullo schermo TV." -ForegroundColor Yellow
+                Write-Host "Impronta Root CA rilevata sul device : $($tlsRes.RootCaSha256)" -ForegroundColor Cyan
+                Write-Host "DIVIETO: Non utilizzare credenziali/PIN/chiavi su HTTPS finche' l'impronta non e' verificata fuori banda." -ForegroundColor Yellow
+                Write-Host "Per la validazione definitiva ri-eseguire con parametro: -ExpectedCaFingerprint $($tlsRes.RootCaSha256)" -ForegroundColor Cyan
+            }
         } else {
             Write-Host "`nALLARME: Health check fallito entro 30s! Avvio ROLLBACK..." -ForegroundColor Red
             if ($hasPrevious) {
