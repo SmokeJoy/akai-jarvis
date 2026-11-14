@@ -23,6 +23,22 @@ public class AkaiAiController {
     private static final String TAG = "AKAI_AiController";
     private static AkaiAiController sInstance = null;
 
+    // Profilo vincolante STRICT_LOCAL_ONLY (PR #1 Milestone M1):
+    // Impedisce rigorosamente qualsiasi socket/chiamata verso provider cloud o TTS esterni
+    private static volatile boolean sStrictLocalOnly = true;
+
+    public static boolean isStrictLocalOnly() {
+        return sStrictLocalOnly;
+    }
+
+    public static void setStrictLocalOnly(boolean strictLocalOnly) {
+        sStrictLocalOnly = strictLocalOnly;
+    }
+
+    public static org.json.JSONArray getSupportedCatalog() {
+        return LocalIntentParser.getSupportedCatalog();
+    }
+
     private final Context context;
     private final TvController tvController;
     private final AkaiMemoryEngine memoryEngine;
@@ -172,8 +188,32 @@ public class AkaiAiController {
         String planReply = null;
         String planWarning = null;
 
-        // Se è configurato un provider cloud (DeepSeek/Kimi) con API Key:
-        if (!AiProviderAdapter.PROVIDER_LOCAL.equals(provider) && !apiKey.isEmpty()) {
+        // Profilo vincolante STRICT_LOCAL_ONLY (PR #1 Milestone M1):
+        // Se attivo (default), inibisci qualsiasi invocazione cloud/esterna e usa unicamente
+        // il Local UI Graph Planner deterministico. Se non trova nodi, fail-closed immediato.
+        if (sStrictLocalOnly) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            DiscoveryPlan plan = planLocalDiscovery(query, initialSnap);
+            if (plan != null) {
+                candidateActions = plan.actions;
+                candidateKey = generateIntentKey(query);
+                candidateCondition = plan.successCondition;
+                planReply = plan.reply;
+            } else {
+                try {
+                    result.put("success", false);
+                    result.put("status", "FAIL_CLOSED_UNSUPPORTED");
+                    result.put("reply", "Comando non supportato in modalita locale esclusiva (PC spento). Comandi disponibili: volume, canali DTV, ingressi HDMI, navigazione Home/Indietro, avvio app.");
+                    result.put("source", "strict_local_guard");
+                    result.put("tokens", 0);
+                    result.put("cost_eur", 0.0);
+                    result.put("latency_ms", elapsed);
+                    result.put("verified", false);
+                    result.put("strict_local_only", true);
+                } catch (Exception ignored) {}
+                return completeAndSpeak(result, query, "Comando non supportato in modalita locale esclusiva.", "FAIL_CLOSED_UNSUPPORTED", null, 0, 0.0, speak, startTime);
+            }
+        } else if (!AiProviderAdapter.PROVIDER_LOCAL.equals(provider) && !apiKey.isEmpty()) {
             if (aiAdapter.isBudgetExceeded()) {
                 long elapsed = System.currentTimeMillis() - startTime;
                 try {
@@ -349,13 +389,15 @@ public class AkaiAiController {
             result.put("latency_ms", elapsed);
         } catch (Exception ignored) {}
 
-        // 1. Voce TV: Pronuncia attraverso altoparlanti se richiesto
+        // 1. Voce TV: Pronuncia attraverso altoparlanti se richiesto (inibito se STRICT_LOCAL_ONLY per evitare chiamate cloud esterne)
         if (speakRequested && replyMsg != null && !replyMsg.trim().isEmpty()) {
-            try {
-                AkaiSpeechEngine speech = AkaiSpeechEngine.getInstance(context);
-                speech.speak(replyMsg, true);
-            } catch (Exception e) {
-                Log.w(TAG, "Speech engine playback notice: " + e.getMessage());
+            if (!sStrictLocalOnly) {
+                try {
+                    AkaiSpeechEngine speech = AkaiSpeechEngine.getInstance(context);
+                    speech.speak(replyMsg, true);
+                } catch (Exception e) {
+                    Log.w(TAG, "Speech engine playback notice: " + e.getMessage());
+                }
             }
         }
 

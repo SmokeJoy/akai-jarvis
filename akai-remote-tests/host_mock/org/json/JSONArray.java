@@ -52,6 +52,11 @@ public class JSONArray {
         return val != null ? String.valueOf(val) : "";
     }
 
+    public String getString(int index) throws JSONException {
+        Object val = get(index);
+        return val != null ? String.valueOf(val) : "";
+    }
+
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder("[");

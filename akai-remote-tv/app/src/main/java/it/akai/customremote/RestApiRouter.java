@@ -32,10 +32,17 @@ public class RestApiRouter {
         void dismissPin();
     }
 
+    public interface AiHandler {
+        JSONObject processQuery(String query, boolean speak);
+        boolean isStrictLocalOnly();
+        JSONArray getSupportedCatalog();
+    }
+
     private final SecurityManager securityManager;
     private final CommandHandler commandHandler;
     private final MemoryHandler memoryHandler;
     private final PinHandler pinHandler;
+    private final AiHandler aiHandler;
     private final String localIpAddress;
     private final int httpPort;
 
@@ -43,14 +50,25 @@ public class RestApiRouter {
                          CommandHandler commandHandler,
                          MemoryHandler memoryHandler,
                          PinHandler pinHandler,
+                         AiHandler aiHandler,
                          String localIpAddress,
                          int httpPort) {
         this.securityManager = securityManager;
         this.commandHandler = commandHandler;
         this.memoryHandler = memoryHandler;
         this.pinHandler = pinHandler;
+        this.aiHandler = aiHandler;
         this.localIpAddress = (localIpAddress != null && !localIpAddress.isEmpty()) ? localIpAddress : "192.168.1.8";
         this.httpPort = httpPort > 0 ? httpPort : 8088;
+    }
+
+    public RestApiRouter(SecurityManager securityManager,
+                         CommandHandler commandHandler,
+                         MemoryHandler memoryHandler,
+                         PinHandler pinHandler,
+                         String localIpAddress,
+                         int httpPort) {
+        this(securityManager, commandHandler, memoryHandler, pinHandler, null, localIpAddress, httpPort);
     }
 
     public boolean routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os) throws Exception {
@@ -279,6 +297,97 @@ public class RestApiRouter {
             res.put("success", true);
             res.put("guest_mode", memoryHandler.isGuestMode());
             sendJsonResponse(os, 200, res);
+            return true;
+        }
+
+        // AI Query / Local Intent (/api/ai/ask & /api/control/ai & /api/ai/query)
+        if (("/api/ai/ask".equals(path) || "/api/control/ai".equals(path) || "/api/ai/query".equals(path)) && "POST".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return true;
+            }
+
+            JSONObject req = new JSONObject(body != null && !body.isEmpty() ? body : "{}");
+            String query = req.optString("query", "").trim();
+            if (query.isEmpty()) {
+                query = req.optString("text", "").trim();
+            }
+            boolean speak = req.optBoolean("speak", false);
+
+            if (aiHandler != null) {
+                JSONObject res = aiHandler.processQuery(query, speak);
+                sendJsonResponse(os, 200, res);
+                return true;
+            }
+
+            // Fallback autonomo su LocalIntentParser se aiHandler non registrato
+            it.akai.customremote.ai.LocalIntentParser.ParsedIntent parsed = it.akai.customremote.ai.LocalIntentParser.parse(null, query);
+            JSONObject out = new JSONObject();
+            if (parsed.matched) {
+                if (parsed.actions != null && commandHandler != null) {
+                    for (int i = 0; i < parsed.actions.length(); i++) {
+                        JSONObject act = parsed.actions.optJSONObject(i);
+                        if (act != null) {
+                            String a = act.optString("action", "");
+                            if (!a.isEmpty()) {
+                                commandHandler.executeCommand(a);
+                            }
+                        }
+                    }
+                }
+                out.put("success", true);
+                out.put("matched", true);
+                out.put("intent_key", parsed.intentKey);
+                out.put("reply", parsed.responseMessage);
+                out.put("source", parsed.source);
+                out.put("tokens", 0);
+                out.put("cost_eur", 0.0);
+                out.put("strict_local_only", true);
+                sendJsonResponse(os, 200, out);
+            } else {
+                out.put("success", false);
+                out.put("matched", false);
+                out.put("status", "FAIL_CLOSED_UNSUPPORTED");
+                out.put("reply", "Comando vocale/testuale non riconosciuto nel profilo locale TV.");
+                out.put("source", "strict_local_guard");
+                out.put("tokens", 0);
+                out.put("cost_eur", 0.0);
+                out.put("strict_local_only", true);
+                sendJsonResponse(os, 400, out);
+            }
+            return true;
+        }
+
+        // AI Catalog (/api/ai/catalog & /api/control/ai/catalog)
+        if (("/api/ai/catalog".equals(path) || "/api/control/ai/catalog".equals(path)) && "GET".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return true;
+            }
+
+            JSONObject out = new JSONObject();
+            out.put("strict_local_only", true);
+            out.put("offline_guaranteed", true);
+            out.put("supported_commands", aiHandler != null ? aiHandler.getSupportedCatalog() : it.akai.customremote.ai.LocalIntentParser.getSupportedCatalog());
+            sendJsonResponse(os, 200, out);
+            return true;
+        }
+
+        // Blocco preventivo chiamate Cloud in STRICT_LOCAL_ONLY (/api/ai/test_connection)
+        if ("/api/ai/test_connection".equals(path) && "POST".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return true;
+            }
+
+            JSONObject err = new JSONObject();
+            err.put("success", false);
+            err.put("error", "Chiamate verso provider cloud disabilitate nel profilo STRICT_LOCAL_ONLY");
+            err.put("strict_local_only", true);
+            sendJsonResponse(os, 403, err);
             return true;
         }
 

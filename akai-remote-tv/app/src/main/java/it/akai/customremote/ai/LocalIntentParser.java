@@ -142,6 +142,50 @@ public class LocalIntentParser {
             return new ParsedIntent(true, "input_hdmi2", "Passa a HDMI 2", acts, "Passaggio a sorgente HDMI 2...", "local_fast_path", null);
         }
 
+        if (clean.equals("hdmi 3") || clean.equals("hdmi3") || clean.equals("passa a hdmi 3")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "input_hdmi3")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "input_hdmi3", "Passa a HDMI 3", acts, "Passaggio a sorgente HDMI 3...", "local_fast_path", null);
+        }
+
+        // Cambio canale relativo (avanti / indietro)
+        if (clean.equals("canale su") || clean.equals("canale successivo") || clean.equals("prossimo canale") || clean.equals("avanti canale") || clean.equals("canale piu")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "channel_up")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "channel_up", "Canale successivo", acts, "Canale successivo...", "local_fast_path", null);
+        }
+
+        if (clean.equals("canale giu") || clean.equals("canale precedente") || clean.equals("canale prima") || clean.equals("canale meno")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "channel_down")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "channel_down", "Canale precedente", acts, "Canale precedente...", "local_fast_path", null);
+        }
+
+        // Canali TV Italiani Nominali Diretti (DTV)
+        int namedChannel = -1;
+        String namedChannelTitle = null;
+        if (clean.equals("rai 1") || clean.equals("rai1") || clean.equals("rai uno") || clean.equals("metti rai 1") || clean.equals("metti rai uno")) {
+            namedChannel = 1; namedChannelTitle = "Rai 1";
+        } else if (clean.equals("rai 2") || clean.equals("rai2") || clean.equals("rai due") || clean.equals("metti rai 2") || clean.equals("metti rai due")) {
+            namedChannel = 2; namedChannelTitle = "Rai 2";
+        } else if (clean.equals("rai 3") || clean.equals("rai3") || clean.equals("rai tre") || clean.equals("metti rai 3") || clean.equals("metti rai tre")) {
+            namedChannel = 3; namedChannelTitle = "Rai 3";
+        } else if (clean.equals("rete 4") || clean.equals("rete4") || clean.equals("rete quattro") || clean.equals("metti rete 4")) {
+            namedChannel = 4; namedChannelTitle = "Rete 4";
+        } else if (clean.equals("canale 5") || clean.equals("canale5") || clean.equals("canale cinque") || clean.equals("metti canale 5")) {
+            namedChannel = 5; namedChannelTitle = "Canale 5";
+        } else if (clean.equals("italia 1") || clean.equals("italia1") || clean.equals("italia uno") || clean.equals("metti italia 1")) {
+            namedChannel = 6; namedChannelTitle = "Italia 1";
+        } else if (clean.equals("la 7") || clean.equals("la7") || clean.equals("la sette") || clean.equals("metti la 7")) {
+            namedChannel = 7; namedChannelTitle = "La 7";
+        }
+
+        if (namedChannel > 0) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "tune_channel").put("number", namedChannel)); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "channel_" + namedChannel, "Sintonizza " + namedChannelTitle, acts, "Sintonizzazione " + namedChannelTitle + " (Canale " + namedChannel + ")...", "local_fast_path", null);
+        }
+
         // Sintonizzazione canale numerico diretto (es. "canale 5", "canale 20")
         Pattern chanPattern = Pattern.compile("^(?:metti\\s+)?(?:il\\s+)?canale\\s+(\\d{1,4})$");
         Matcher chanMatcher = chanPattern.matcher(clean);
@@ -152,100 +196,185 @@ public class LocalIntentParser {
             return new ParsedIntent(true, "channel_" + ch, "Sintonizza Canale " + ch, acts, "Sintonizzazione Canale " + ch + "...", "local_fast_path", null);
         }
 
+        // Navigazione D-Pad e Menu
+        if (clean.equals("su") || clean.equals("in alto") || clean.equals("freccia su") || clean.equals("muovi su")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "up")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "dpad_up", "Sposta cursore in alto", acts, "Cursore su", "local_fast_path", null);
+        }
+        if (clean.equals("giu") || clean.equals("in basso") || clean.equals("freccia giu") || clean.equals("muovi giu")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "down")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "dpad_down", "Sposta cursore in basso", acts, "Cursore giu", "local_fast_path", null);
+        }
+        if (clean.equals("sinistra") || clean.equals("a sinistra") || clean.equals("freccia sinistra")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "left")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "dpad_left", "Sposta cursore a sinistra", acts, "Cursore a sinistra", "local_fast_path", null);
+        }
+        if (clean.equals("destra") || clean.equals("a destra") || clean.equals("freccia destra")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "right")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "dpad_right", "Sposta cursore a destra", acts, "Cursore a destra", "local_fast_path", null);
+        }
+        if (clean.equals("ok") || clean.equals("conferma") || clean.equals("seleziona") || clean.equals("invio") || clean.equals("premi ok")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "center")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "dpad_center", "Conferma selezione (OK)", acts, "Tasto OK inviato", "local_fast_path", null);
+        }
+        if (clean.equals("menu") || clean.equals("apri menu") || clean.equals("tasto menu")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "menu")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "menu", "Apri Menu TV", acts, "Tasto Menu inviato", "local_fast_path", null);
+        }
+
+        // Avvio Applicazioni Multimediali
+        if (clean.equals("apri youtube") || clean.equals("avvia youtube") || clean.equals("youtube") || clean.equals("vai su youtube")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "launch_youtube")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "launch_youtube", "Avvia YouTube TV", acts, "Avvio di YouTube TV in corso...", "local_fast_path", null);
+        }
+        if (clean.equals("apri raiplay") || clean.equals("avvia raiplay") || clean.equals("raiplay") || clean.equals("vai su raiplay")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "launch_raiplay")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "launch_raiplay", "Avvia RaiPlay", acts, "Avvio di RaiPlay in corso...", "local_fast_path", null);
+        }
+        if (clean.equals("apri mediaset") || clean.equals("avvia mediaset") || clean.equals("mediaset") || clean.equals("infinity") || clean.equals("mediaset infinity")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "launch_mediaset")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "launch_mediaset", "Avvia Mediaset Infinity", acts, "Avvio di Mediaset Infinity in corso...", "local_fast_path", null);
+        }
+        if (clean.equals("apri browser") || clean.equals("avvia browser") || clean.equals("browser") || clean.equals("internet") || clean.equals("naviga")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "launch_browser")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "launch_browser", "Avvia TV Bro Browser", acts, "Avvio del browser in corso...", "local_fast_path", null);
+        }
+
         // -------------------------------------------------------------
         // 1.5 CONSULTAZIONE MEMORIA PREFERENZE E CRONOLOGIA (0 TOKEN)
         // -------------------------------------------------------------
-        if (clean.contains("canali preferiti") || clean.contains("canali che preferisco") || clean.contains("quali canali preferisco") || clean.equals("i miei canali")) {
-            AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
-            if (mem.isGuestMode()) {
-                return new ParsedIntent(true, "pref_favorite_channels", "Consultazione canali preferiti", new JSONArray(),
-                        "La modalità Ospite è attiva. I canali preferiti personali sono protetti e non accessibili.", "local_memory", null);
-            }
-            String favs = mem.getPreference("favorite_channels", "[]");
-            String msg;
-            try {
-                JSONArray arr = new JSONArray(favs);
-                StringBuilder sb = new StringBuilder("I tuoi canali preferiti memorizzati sono: ");
-                for (int i = 0; i < arr.length(); i++) {
-                    if (i > 0 && i == arr.length() - 1) sb.append(" e ");
-                    else if (i > 0) sb.append(", ");
-                    sb.append(arr.getString(i));
+        if (context != null) {
+            if (clean.contains("canali preferiti") || clean.contains("canali che preferisco") || clean.contains("quali canali preferisco") || clean.equals("i miei canali")) {
+                AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
+                if (mem.isGuestMode()) {
+                    return new ParsedIntent(true, "pref_favorite_channels", "Consultazione canali preferiti", new JSONArray(),
+                            "La modalità Ospite è attiva. I canali preferiti personali sono protetti e non accessibili.", "local_memory", null);
                 }
-                sb.append(".");
-                msg = sb.toString();
-            } catch (Exception e) {
-                msg = "Non ho ancora canali preferiti registrati nella tua memoria personale.";
-            }
-            return new ParsedIntent(true, "pref_favorite_channels", "Consultazione canali preferiti", new JSONArray(), msg, "local_memory", null);
-        }
-
-        if (clean.contains("generi preferiti") || clean.contains("cosa mi piace guardare") || clean.contains("miei gusti")) {
-            AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
-            if (mem.isGuestMode()) {
-                return new ParsedIntent(true, "pref_favorite_genres", "Consultazione generi preferiti", new JSONArray(),
-                        "La modalità Ospite è attiva. I generi e i gusti personali sono protetti e non accessibili.", "local_memory", null);
-            }
-            String favs = mem.getPreference("favorite_genres", "[]");
-            String msg;
-            try {
-                JSONArray arr = new JSONArray(favs);
-                StringBuilder sb = new StringBuilder("I generi che preferisci guardare sono: ");
-                for (int i = 0; i < arr.length(); i++) {
-                    if (i > 0 && i == arr.length() - 1) sb.append(" e ");
-                    else if (i > 0) sb.append(", ");
-                    sb.append(arr.getString(i));
+                String favs = mem.getPreference("favorite_channels", "[]");
+                String msg;
+                try {
+                    JSONArray arr = new JSONArray(favs);
+                    StringBuilder sb = new StringBuilder("I tuoi canali preferiti memorizzati sono: ");
+                    for (int i = 0; i < arr.length(); i++) {
+                        if (i > 0 && i == arr.length() - 1) sb.append(" e ");
+                        else if (i > 0) sb.append(", ");
+                        sb.append(arr.optString(i));
+                    }
+                    sb.append(".");
+                    msg = sb.toString();
+                } catch (Exception e) {
+                    msg = "Non ho ancora canali preferiti registrati nella tua memoria personale.";
                 }
-                sb.append(".");
-                msg = sb.toString();
-            } catch (Exception e) {
-                msg = "Nessun genere preferito memorizzato.";
+                return new ParsedIntent(true, "pref_favorite_channels", "Consultazione canali preferiti", new JSONArray(), msg, "local_memory", null);
             }
-            return new ParsedIntent(true, "pref_favorite_genres", "Consultazione generi preferiti", new JSONArray(), msg, "local_memory", null);
-        }
 
-        if (clean.contains("cosa hai fatto") || clean.contains("cosa hai appena fatto") || clean.contains("ultimo comando") || clean.contains("ultima operazione")) {
-            AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
-            if (mem.isGuestMode()) {
-                return new ParsedIntent(true, "last_action_recall", "Rievocazione ultima operazione", new JSONArray(),
-                        "La modalità Ospite è attiva. La cronologia delle operazioni recenti è protetta.", "local_memory", null);
+            if (clean.contains("generi preferiti") || clean.contains("cosa mi piace guardare") || clean.contains("miei gusti")) {
+                AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
+                if (mem.isGuestMode()) {
+                    return new ParsedIntent(true, "pref_favorite_genres", "Consultazione generi preferiti", new JSONArray(),
+                            "La modalità Ospite è attiva. I generi e i gusti personali sono protetti e non accessibili.", "local_memory", null);
+                }
+                String favs = mem.getPreference("favorite_genres", "[]");
+                String msg;
+                try {
+                    JSONArray arr = new JSONArray(favs);
+                    StringBuilder sb = new StringBuilder("I generi che preferisci guardare sono: ");
+                    for (int i = 0; i < arr.length(); i++) {
+                        if (i > 0 && i == arr.length() - 1) sb.append(" e ");
+                        else if (i > 0) sb.append(", ");
+                        sb.append(arr.optString(i));
+                    }
+                    sb.append(".");
+                    msg = sb.toString();
+                } catch (Exception e) {
+                    msg = "Nessun genere preferito memorizzato.";
+                }
+                return new ParsedIntent(true, "pref_favorite_genres", "Consultazione generi preferiti", new JSONArray(), msg, "local_memory", null);
             }
-            JSONArray convs = mem.getRecentConversations(2);
-            String msg;
-            if (convs != null && convs.length() > 0) {
-                JSONObject last = convs.optJSONObject(convs.length() - 1);
-                if (last != null) {
-                    String lastQ = last.optString("user_query", "");
-                    String lastA = last.optString("assistant_reply", "");
-                    msg = "L'ultima richiesta completata è stata: " + lastQ + ", con esito: " + lastA;
+
+            if (clean.contains("cosa hai fatto") || clean.contains("cosa hai appena fatto") || clean.contains("ultimo comando") || clean.contains("ultima operazione")) {
+                AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
+                if (mem.isGuestMode()) {
+                    return new ParsedIntent(true, "last_action_recall", "Rievocazione ultima operazione", new JSONArray(),
+                            "La modalità Ospite è attiva. La cronologia delle operazioni recenti è protetta.", "local_memory", null);
+                }
+                JSONArray convs = mem.getRecentConversations(2);
+                String msg;
+                if (convs != null && convs.length() > 0) {
+                    JSONObject last = convs.optJSONObject(convs.length() - 1);
+                    if (last != null) {
+                        String lastQ = last.optString("user_query", "");
+                        String lastA = last.optString("assistant_reply", "");
+                        msg = "L'ultima richiesta completata è stata: " + lastQ + ", con esito: " + lastA;
+                    } else {
+                        msg = "Nessuna operazione precedente registrata nella cronologia recente.";
+                    }
                 } else {
                     msg = "Nessuna operazione precedente registrata nella cronologia recente.";
                 }
-            } else {
-                msg = "Nessuna operazione precedente registrata nella cronologia recente.";
+                return new ParsedIntent(true, "last_action_recall", "Rievocazione ultima operazione", new JSONArray(), msg, "local_memory", null);
             }
-            return new ParsedIntent(true, "last_action_recall", "Rievocazione ultima operazione", new JSONArray(), msg, "local_memory", null);
-        }
 
-        // -------------------------------------------------------------
-        // 2. CONSULTAZIONE DINAMICA DELLA MEMORIA PROCEDURALE (SQLITE)
-        // -------------------------------------------------------------
-        AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
-        JSONObject proc = mem.findProcedureByGoal(clean);
-        if (proc != null) {
-            String intentKey = proc.optString("intent_key");
-            String desc = proc.optString("description", clean);
-            JSONArray actions = proc.optJSONArray("action_sequence");
-            String succCond = proc.optString("success_condition", null);
-            String initState = proc.optString("initial_state", null);
-            int successes = proc.optInt("success_count", 1);
+            // -------------------------------------------------------------
+            // 2. CONSULTAZIONE DINAMICA DELLA MEMORIA PROCEDURALE (SQLITE)
+            // -------------------------------------------------------------
+            AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(context);
+            JSONObject proc = mem.findProcedureByGoal(clean);
+            if (proc != null) {
+                String intentKey = proc.optString("intent_key");
+                String desc = proc.optString("description", clean);
+                JSONArray actions = proc.optJSONArray("action_sequence");
+                String succCond = proc.optString("success_condition", null);
+                String initState = proc.optString("initial_state", null);
+                int successes = proc.optInt("success_count", 1);
 
-            Log.i(TAG, "Procedural memory matched dynamically from SQLite: " + intentKey + " (" + successes + " previous successes)");
+                Log.i(TAG, "Procedural memory matched dynamically from SQLite: " + intentKey + " (" + successes + " previous successes)");
 
-            return new ParsedIntent(true, intentKey, desc, actions,
-                    "Esecuzione procedura memorizzata: " + desc, "procedural_memory", succCond, initState);
+                return new ParsedIntent(true, intentKey, desc, actions,
+                        "Esecuzione procedura memorizzata: " + desc, "procedural_memory", succCond, initState);
+            }
         }
 
         // Nessun match primitivo né procedurale trovato -> Richiede esplorazione autonoma
         return ParsedIntent.notMatched();
+    }
+
+    public static JSONArray getSupportedCatalog() {
+        JSONArray arr = new JSONArray();
+        arr.put("volume_up");
+        arr.put("volume_down");
+        arr.put("volume_set");
+        arr.put("volume_mute");
+        arr.put("channel_up");
+        arr.put("channel_down");
+        arr.put("tune_channel");
+        arr.put("home");
+        arr.put("back");
+        arr.put("power");
+        arr.put("input_tv");
+        arr.put("input_hdmi1");
+        arr.put("input_hdmi2");
+        arr.put("input_hdmi3");
+        arr.put("dpad_up");
+        arr.put("dpad_down");
+        arr.put("dpad_left");
+        arr.put("dpad_right");
+        arr.put("dpad_center");
+        arr.put("menu");
+        arr.put("launch_youtube");
+        arr.put("launch_raiplay");
+        arr.put("launch_mediaset");
+        arr.put("launch_browser");
+        return arr;
     }
 }

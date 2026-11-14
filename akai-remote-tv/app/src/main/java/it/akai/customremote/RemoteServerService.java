@@ -111,6 +111,17 @@ public class RemoteServerService extends Service {
                 @Override public void showPin(String pin, int remaining, String serverUrl) { PinOverlayDialog.show(RemoteServerService.this, pin, remaining, serverUrl); }
                 @Override public void dismissPin() { PinOverlayDialog.dismiss(); }
             },
+            new RestApiRouter.AiHandler() {
+                @Override public JSONObject processQuery(String query, boolean speak) {
+                    return AkaiAiController.getInstance(RemoteServerService.this, tvController).processQuery(query, speak);
+                }
+                @Override public boolean isStrictLocalOnly() {
+                    return AkaiAiController.isStrictLocalOnly();
+                }
+                @Override public JSONArray getSupportedCatalog() {
+                    return AkaiAiController.getSupportedCatalog();
+                }
+            },
             getLocalIpAddress(),
             HTTP_PORT
         );
