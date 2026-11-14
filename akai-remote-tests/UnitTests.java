@@ -969,12 +969,63 @@ public class UnitTests {
             failed++;
         }
 
+        // =========================================================================
+        // Test 28 (PR-01 M3): Contratto Mobile Companion Web Remote, Onboarding Anti-MITM, e Fallback Offline Vocale/Testuale
+        // =========================================================================
+        // 1. Dispatch vocale simulato da client Web Remote con richiesta di riproduzione vocale TV
+        JSONObject voiceReq = new JSONObject()
+                .put("query", "alza il volume")
+                .put("speak", true)
+                .put("source", "web_remote");
+        MockHttpResponse rVoiceAsk = dispatch(router, "POST", "/api/ai/ask", authHeaders, voiceReq.toString(), "192.168.1.10");
+        boolean okVoiceAsk = (rVoiceAsk.statusCode == 200) && (rVoiceAsk.json != null) &&
+                             rVoiceAsk.json.optBoolean("success") &&
+                             "volume_up".equals(rVoiceAsk.json.optString("intent_key")) &&
+                             (rVoiceAsk.json.optInt("tokens") == 0) &&
+                             rVoiceAsk.json.optBoolean("verified");
+
+        // 2. Verifica speech status polling per chiusura turni conversazionali
+        MockHttpResponse rSpeechStatus = dispatch(router, "GET", "/api/ai/speech_status", authHeaders, "", "192.168.1.10");
+        boolean okSpeechStatus = (rSpeechStatus.statusCode == 200) && (rSpeechStatus.json != null) &&
+                                 rSpeechStatus.json.has("speaking") &&
+                                 rSpeechStatus.json.has("speech_state");
+
+        // 3. Fallback testuale: utente digita su tastiera smartphone (funziona con WAN=0 e senza engine STT nel browser)
+        JSONObject textReq = new JSONObject()
+                .put("query", "metti rai 1")
+                .put("speak", false)
+                .put("source", "web_remote");
+        MockHttpResponse rTextAsk = dispatch(router, "POST", "/api/ai/ask", authHeaders, textReq.toString(), "192.168.1.10");
+        boolean okTextAsk = (rTextAsk.statusCode == 200) && (rTextAsk.json != null) &&
+                            rTextAsk.json.optBoolean("success") &&
+                            "channel_1".equals(rTextAsk.json.optString("intent_key")) &&
+                            "tune_channel_1".equals(cmdHandler.lastExecutedAction) &&
+                            (rTextAsk.json.optInt("tokens") == 0);
+
+        // 4. Verifica handshaking e corrispondenza impronta anti-MITM per onboarding sicuro Web Remote
+        MockHttpResponse rPairReqM3 = dispatch(router, "POST", "/api/auth/pair/request", new HashMap<>(), "{\"client\":\"web_remote\"}", "192.168.1.10");
+        boolean okPairHandshake = (rPairReqM3.statusCode == 200) && (rPairReqM3.json != null) &&
+                                  rPairReqM3.json.optBoolean("success") &&
+                                  (tlsInfo != null && tlsInfo.caFingerprintSha256.equals(rPairReqM3.json.optString("ca_fingerprint_sha256"))) &&
+                                  (rPairReqM3.json.optInt("expires_in") > 0);
+
+        // 5. Verifica politica Strict Local e assenza dipendenze cloud esterne
+        boolean okStrictLocal = aiHandler.strictLocalOnly && rVoiceAsk.json.optBoolean("strict_local_only");
+
+        if (okVoiceAsk && okSpeechStatus && okTextAsk && okPairHandshake && okStrictLocal) {
+            System.out.println("[PASS] Test 28 (PR-01 M3): Contratto Web Remote mobile companion verificato: ricezione query vocale 'web_remote' con polling speech_status, fallback immediato a digitazione tastiera per WAN=0 (senza dipendenza da STT cloud), handshake anti-MITM con fingerprint TV e rispetto integrale policy locale a 0 token");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 28: Fallimento contratto Web Remote M3 (okVoiceAsk=" + okVoiceAsk + ", okSpeechStatus=" + okSpeechStatus + ", okTextAsk=" + okTextAsk + ", okPairHandshake=" + okPairHandshake + ", okStrictLocal=" + okStrictLocal + ")");
+            failed++;
+        }
+
         // Pulizia file temporanei di test effimeri (garanzia zero leak segreti in CI e repo)
         for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem")) {
             try { new java.io.File(testFile).delete(); } catch (Exception ignored) {}
         }
 
-        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v17 (M1 + M2 HTTPS/SAN/ANTI-MITM) ===");
+        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v18 (M1 + M2 + M3 COMPANION) ===");
         System.out.println("Test Superati: " + passed + " / " + (passed + failed));
         if (failed > 0) {
             System.exit(1);

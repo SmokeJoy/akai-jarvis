@@ -1692,6 +1692,129 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .toast.hidden { display: none; }
 .hidden { display: none !important; }
 
+/* Voice Environment Notice & HTTPS Secure Context Banner */
+.voice-env-notice {
+    background: rgba(240, 185, 11, 0.12);
+    border: 1px solid rgba(240, 185, 11, 0.35);
+    color: #f7df83;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 11.5px;
+    line-height: 1.45;
+    margin: 8px 16px 12px;
+    text-align: left;
+}
+.voice-env-notice strong {
+    color: #ffd859;
+}
+
+/* CA Trust & Anti-MITM Verification Card */
+.ca-trust-card {
+    background: rgba(14, 22, 38, 0.95);
+    border: 1px solid rgba(80, 227, 194, 0.28);
+    border-radius: 14px;
+    padding: 14px;
+    margin-top: 16px;
+    text-align: left;
+}
+.ca-trust-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--mint);
+}
+.ca-trust-desc {
+    font-size: 11px;
+    color: var(--subtle);
+    line-height: 1.45;
+    margin: 6px 0 10px;
+}
+.ca-fp-box {
+    background: #090f1c;
+    border: 1px solid #1d2d48;
+    border-radius: 8px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.ca-fp-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--subtle);
+}
+.ca-fp-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    color: #a5f3fc;
+    word-break: break-all;
+    user-select: all;
+    background: transparent;
+}
+.ca-actions-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+.btn-subtle-link {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(80, 227, 194, 0.12);
+    border: 1px solid var(--mint);
+    color: var(--mint);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background 0.15s ease;
+}
+.btn-subtle-link:hover {
+    background: rgba(80, 227, 194, 0.22);
+}
+.btn-subtle-guide {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--subtle);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+.btn-subtle-guide:hover {
+    border-color: var(--subtle);
+    color: var(--txt);
+}
+.ca-instructions-panel {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    font-size: 11px;
+    color: var(--subtle);
+}
+.guide-step {
+    margin-bottom: 8px;
+}
+.guide-step strong {
+    color: var(--txt);
+}
+.guide-step ol {
+    margin: 4px 0 0;
+    padding-left: 18px;
+}
+.guide-step li {
+    margin: 2px 0;
+    line-height: 1.4;
+}
+
 /* Media Queries & Desktop Responsive Tweaks */
 @media (min-width: 768px) {
     .remote-shell {

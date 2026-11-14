@@ -136,6 +136,17 @@ public class RemoteServerService extends Service {
                 @Override public boolean previewVoice(String voice, String text) {
                     return it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).previewVoice(voice, text);
                 }
+                @Override public JSONObject getSpeechStatus() {
+                    it.akai.customremote.ai.AkaiSpeechEngine speech = it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this);
+                    JSONObject out = new JSONObject();
+                    try {
+                        out.put("speaking", speech.isSpeaking());
+                        out.put("speech_state", speech.getSpeechState());
+                        out.put("speech_id", speech.getCurrentSpeechId());
+                        out.put("voice", speech.getTtsVoice());
+                    } catch (Exception ignored) {}
+                    return out;
+                }
             },
             getLocalIpAddress(),
             HTTP_PORT

@@ -41,6 +41,16 @@ public class RestApiRouter {
         JSONArray getSupportedCatalog();
         default boolean speak(String text, boolean interrupt) { return false; }
         default boolean previewVoice(String voice, String text) { return false; }
+        default JSONObject getSpeechStatus() {
+            JSONObject s = new JSONObject();
+            try {
+                s.put("speaking", false);
+                s.put("speech_state", "IDLE");
+                s.put("speech_id", "");
+                s.put("voice", "offline_local");
+            } catch (Exception ignored) {}
+            return s;
+        }
     }
 
     private final SecurityManager securityManager;
@@ -180,6 +190,9 @@ public class RestApiRouter {
             JSONObject res = new JSONObject();
             res.put("success", true);
             res.put("expires_in", remaining);
+            if (caFp != null) {
+                res.put("ca_fingerprint_sha256", caFp);
+            }
             sendJsonResponse(os, 200, res);
             return true;
         }
@@ -444,6 +457,26 @@ public class RestApiRouter {
             out.put("spoken", textToSpeak);
             out.put("strict_local_only", aiHandler != null ? aiHandler.isStrictLocalOnly() : true);
             sendJsonResponse(os, queued ? 200 : 500, out);
+            return true;
+        }
+
+        // AI Speech Status Polling (/api/ai/speech_status)
+        if ("/api/ai/speech_status".equals(path) && "GET".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return true;
+            }
+            if (aiHandler == null) {
+                JSONObject err = new JSONObject();
+                err.put("success", false);
+                err.put("status", "SERVICE_UNAVAILABLE");
+                err.put("error", "AI Speech Engine non inizializzato");
+                sendJsonResponse(os, 503, err);
+                return true;
+            }
+            JSONObject status = aiHandler.getSpeechStatus();
+            sendJsonResponse(os, 200, status != null ? status : new JSONObject().put("speaking", false).put("speech_state", "IDLE"));
             return true;
         }
 

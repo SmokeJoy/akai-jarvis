@@ -71,6 +71,9 @@
                         <span id="jarvis-badge-mode">● RESIDENTE</span>
                     </div>
 
+                    <!-- Honest Voice Context Notice (Secure Context / Offline STT Requirements) -->
+                    <div id="voice-env-notice" class="voice-env-notice hidden" role="alert"></div>
+
                     <div class="orb-space">
                         <div class="halo"></div>
                         <button class="orb" id="jarvis-orb" aria-label="Inizia conversazione con JARVIS" type="button" aria-pressed="false">
@@ -358,6 +361,46 @@
                     <div id="pairing-timer" class="pairing-timer">Scadenza codice: <span id="pin-countdown">120</span>s</div>
                     <div id="pairing-error" class="pairing-error hidden"></div>
                     <button id="btn-submit-pin" class="btn-primary-action">Associa Dispositivo</button>
+
+                    <!-- Anti-MITM Visual Verification & CA Onboarding Card -->
+                    <div id="ca-trust-card" class="ca-trust-card">
+                        <div class="ca-trust-header">
+                            <span class="ca-shield">🛡️</span>
+                            <span class="ca-trust-title">Verifica Sicurezza TV (Anti-MITM)</span>
+                        </div>
+                        <p class="ca-trust-desc">
+                            Il microfono vocale del browser richiede HTTPS sicuro sulla TV (porta 8443). Prima di installare il certificato sul telefono, confronta l'impronta con quella mostrata sullo schermo della TV:
+                        </p>
+                        <div class="ca-fp-box">
+                            <span class="ca-fp-label">Impronta SHA-256 Root CA TV:</span>
+                            <code id="ca-fp-val" class="ca-fp-code">Caricamento impronta...</code>
+                        </div>
+                        <div class="ca-actions-row">
+                            <a id="btn-download-ca" href="#" class="btn-subtle-link" download="akai_root_ca.crt">📥 Scarica Certificato CA</a>
+                            <button type="button" id="btn-toggle-ca-instructions" class="btn-subtle-guide">Guida Onboarding</button>
+                        </div>
+                        <div id="ca-instructions-panel" class="ca-instructions-panel hidden">
+                            <div class="guide-step">
+                                <strong>🍏 iOS (iPhone / Safari):</strong>
+                                <ol>
+                                    <li>Tocca <em>Scarica Certificato CA</em> &rarr; Consenti download profilo.</li>
+                                    <li>Apri <em>Impostazioni &rarr; Profilo scaricato</em> &rarr; <em>Installa</em>.</li>
+                                    <li>Vai su <em>Impostazioni &rarr; Generali &rarr; Info &rarr; Impostazioni attendibilità certificati</em>.</li>
+                                    <li>Abilita <strong>Attendibilità totale</strong> per la CA AKAI.</li>
+                                    <li>Riapri il telecomando su <code>https://&lt;ip-tv&gt;:8443</code>.</li>
+                                </ol>
+                            </div>
+                            <div class="guide-step">
+                                <strong>🤖 Android (Chrome):</strong>
+                                <ol>
+                                    <li>Tocca <em>Scarica Certificato CA</em>.</li>
+                                    <li>Apri <em>Impostazioni &rarr; Sicurezza &rarr; Crittografia e credenziali</em>.</li>
+                                    <li>Scegli <em>Installa un certificato &rarr; Certificato CA</em> &rarr; Installa comunque.</li>
+                                    <li>Riapri il telecomando su <code>https://&lt;ip-tv&gt;:8443</code>.</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
