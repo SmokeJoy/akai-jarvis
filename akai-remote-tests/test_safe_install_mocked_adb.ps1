@@ -1918,108 +1918,123 @@ Remove-Item $testDir20 -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "`n--- Esecuzione Test 21: Inventario e Preflight Read-Only TV (100% Non-Distruttivo) ---" -ForegroundColor Cyan
 $testDir21 = Join-Path $tempDir "akai_test_preflight_$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $testDir21 | Out-Null
-$mockAdb21 = if ($isWin) { Join-Path $testDir21 "adb.cmd" } else { Join-Path $testDir21 "adb" }
 
+$mockAdbJs21 = Join-Path $testDir21 "mock_adb.js"
+@'
+const fs = require('fs');
+const args = process.argv.slice(2);
+const argStr = args.join(' ');
+
+if (args.includes('connect')) process.exit(0);
+if (argStr.includes('force-stop')) {
+    console.error('VIOLATION_FORCE_STOP_CALLED');
+    process.exit(99);
+}
+if (argStr.includes('pm list packages it.akai.customhome.v8')) {
+    console.log('package:it.akai.customhome.v8');
+    process.exit(0);
+}
+if (argStr.includes('pm list packages it.akai.customhome')) {
+    console.log('package:it.akai.customhome');
+    process.exit(0);
+}
+if (argStr.includes('pm list packages it.akai.customremote')) {
+    console.log('package:it.akai.customremote');
+    process.exit(0);
+}
+if (argStr.includes('pm path it.akai.customremote')) {
+    console.log('package:/data/app/it.akai.customremote-1/base.apk');
+    process.exit(0);
+}
+if (argStr.includes('dumpsys')) {
+    console.log('    versionCode=12 minSdk=28 targetSdk=28');
+    console.log('    versionName=1.0.5');
+    process.exit(0);
+}
+if (argStr.includes('pidof')) {
+    console.log('1234');
+    process.exit(0);
+}
+if (argStr.includes('run-as') && argStr.includes('ls databases/')) {
+    console.log('run-as: package not debuggable');
+    process.exit(1);
+}
+if (argStr.includes('pull')) {
+    const dest = args[args.length - 1];
+    fs.writeFileSync(dest, 'PK_DUMMY_REMOTE_INSTALLED_APK');
+    process.exit(0);
+}
+if (argStr.includes('df /data')) {
+    console.log('/dev/block/bootdevice/by-name/userdata 5.2G 1.8G 3.4G 35% /data');
+    process.exit(0);
+}
+if (argStr.includes('netstat')) {
+    console.log('tcp 0 0 0.0.0.0:8088 0.0.0.0:* LISTEN 1234/it.akai.customremote');
+    console.log('tcp 0 0 0.0.0.0:8443 0.0.0.0:* LISTEN 1234/it.akai.customremote');
+    process.exit(0);
+}
+process.exit(0);
+'@ | Out-File -FilePath $mockAdbJs21 -Encoding ascii
+
+$mockAdbCmd21 = if ($isWin) { Join-Path $testDir21 "adb.cmd" } else { Join-Path $testDir21 "adb" }
 if ($isWin) {
-@'
-@echo off
-set "ARGS=%*"
-if "%1"=="connect" exit /b 0
-echo %ARGS% | findstr /i "pm list packages customhome" >nul
-if %ERRORLEVEL% equ 0 (
-    echo package:it.akai.customhome.v8
-    exit /b 0
-)
-echo %ARGS% | findstr /i "pm list packages it.akai.customremote" >nul
-if %ERRORLEVEL% equ 0 (
-    echo package:it.akai.customremote
-    exit /b 0
-)
-echo %ARGS% | findstr /i "pm path" >nul
-if %ERRORLEVEL% equ 0 (
-    echo package:/data/app/it.akai.customremote-1/base.apk
-    exit /b 0
-)
-echo %ARGS% | findstr /i "pidof" >nul
-if %ERRORLEVEL% equ 0 (
-    echo 1234
-    exit /b 0
-)
-echo %ARGS% | findstr /i "run-as.*ls databases" >nul
-if %ERRORLEVEL% equ 0 (
-    echo akai_memory.db
-    exit /b 0
-)
-echo %ARGS% | findstr /i "df /data" >nul
-if %ERRORLEVEL% equ 0 (
-    echo /dev/block/bootdevice/by-name/userdata 5.2G 1.8G 3.4G 35%% /data
-    exit /b 0
-)
-echo %ARGS% | findstr /i "netstat" >nul
-if %ERRORLEVEL% equ 0 (
-    echo tcp 0 0 0.0.0.0:8088 0.0.0.0:* LISTEN 1234/it.akai.customremote
-    echo tcp 0 0 0.0.0.0:8443 0.0.0.0:* LISTEN 1234/it.akai.customremote
-    exit /b 0
-)
-echo %ARGS% | findstr /i "force-stop" >nul
-if %ERRORLEVEL% equ 0 (
-    echo VIOLATION_FORCE_STOP_CALLED >&2
-    exit /b 99
-)
-exit /b 0
-'@ | Out-File -FilePath $mockAdb21 -Encoding ascii
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs21`" %*" | Out-File -FilePath $mockAdbCmd21 -Encoding ascii
 } else {
-@'
-#!/bin/sh
-ARGS="$*"
-case "$1" in
-  connect) exit 0 ;;
-esac
-case "$ARGS" in
-  *"force-stop"*) echo "VIOLATION_FORCE_STOP_CALLED" >&2; exit 99 ;;
-  *"pm list packages customhome"*) echo "package:it.akai.customhome.v8"; exit 0 ;;
-  *"pm list packages it.akai.customremote"*) echo "package:it.akai.customremote"; exit 0 ;;
-  *"pm path"*) echo "package:/data/app/it.akai.customremote-1/base.apk"; exit 0 ;;
-  *"pidof"*) echo "1234"; exit 0 ;;
-  *"run-as"*"ls databases"*) echo "akai_memory.db"; exit 0 ;;
-  *"df /data"*) echo "/dev/block/bootdevice/by-name/userdata 5.2G 1.8G 3.4G 35% /data"; exit 0 ;;
-  *"netstat"*)
-    echo "tcp 0 0 0.0.0.0:8088 0.0.0.0:* LISTEN 1234/it.akai.customremote"
-    echo "tcp 0 0 0.0.0.0:8443 0.0.0.0:* LISTEN 1234/it.akai.customremote"
-    exit 0
-    ;;
-esac
-exit 0
-'@ | Out-File -FilePath $mockAdb21 -Encoding ascii
-    & chmod +x $mockAdb21
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs21`" `"`$@`"" | Out-File -FilePath $mockAdbCmd21 -Encoding ascii
+    & chmod +x $mockAdbCmd21
 }
 
-$mockAdbEscaped21 = $mockAdb21.Replace('\', '/')
+$mockSignerJs21 = Join-Path $testDir21 "apksigner.js"
+@"
+console.log('Signer #1 certificate SHA-256 digest: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs21 -Encoding ascii
+
+$mockSignerCmd21 = if ($isWin) { Join-Path $testDir21 "apksigner.cmd" } else { Join-Path $testDir21 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs21`" %*" | Out-File -FilePath $mockSignerCmd21 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs21`" `"`$@`"" | Out-File -FilePath $mockSignerCmd21 -Encoding ascii
+    & chmod +x $mockSignerCmd21
+}
+
+$mockAdbEscaped21 = $mockAdbCmd21.Replace('\', '/')
+$mockSignerEscaped21 = $mockSignerCmd21.Replace('\', '/')
 $mockDirEscaped21 = $testDir21.Replace('\', '/')
 $cmd21 = @"
+`$ErrorActionPreference = 'Continue'
+`$env:NODE_EXE = '$nodeEscaped'
 `$env:ADB_EXECUTABLE = '$mockAdbEscaped21'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped21'
 `$env:PATH = '$mockDirEscaped21' + [System.IO.Path]::PathSeparator + `$env:PATH
 & '$scriptEscaped' -Action preflight
 "@
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $out21 = & $psExe -ExecutionPolicy Bypass -Command $cmd21 2>&1 | Out-String
+$ErrorActionPreference = $prevEap
 
 if ($out21 -match "INVENTARIO E PREFLIGHT READ-ONLY TV" -and
-    $out21 -match "Home Custom\s+:\s+PRESENTE E PROTETTA" -and
+    $out21 -match "versionCode=12,\s*versionName=1.0.5" -and
+    $out21 -match "Firma SHA-256\s+:\s+a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90" -and
+    $out21 -match "Home v8 \(it\.akai\.customhome\.v8\)\s+:\s+PRESENTE E PROTETTA" -and
+    $out21 -match "Home v7 \(it\.akai\.customhome\)\s+:\s+PRESENTE E PROTETTA" -and
+    $out21 -match "UNKNOWN / INACCESSIBLE" -and
     $out21 -match "Tabella Trasparenza Dati Greenfield" -and
     $out21 -notmatch "VIOLATION_FORCE_STOP_CALLED") {
-    Write-Host "[PASS] [TEST AFFERMATIVO / PREFLIGHT READ-ONLY] Test 21: Inventario preflight completato senza alterazioni e senza force-stop" -ForegroundColor Green
+    Write-Host "[PASS] [TEST AFFERMATIVO / PREFLIGHT READ-ONLY] Test 21: Inventario preflight completato: dumpsys versionCode/Name, apksigner SHA-256, Home v8/v7 protette, DB inaccessibile non-zero, zero force-stop" -ForegroundColor Green
     $passed++
 } else {
-    Write-Host "[FAIL] [TEST AFFERMATIVO / PREFLIGHT READ-ONLY] Test 21: Preflight fallito: $out21" -ForegroundColor Red
+    Write-Host "[FAIL] [TEST AFFERMATIVO / PREFLIGHT READ-ONLY] Test 21: Preflight non conforme: $out21" -ForegroundColor Red
     $failed++
 }
 Remove-Item $testDir21 -Recurse -Force -ErrorAction SilentlyContinue
 
 # -----------------------------------------------------------------------------
-# TEST 22: Greenfield Start con permessi DB negati (-Action install -GreenfieldStart)
+# TEST 22: Rifiuto categorico di -GreenfieldStart se pacchetto precedente e' presente ma DB inaccessibile (Fail-Closed)
 # -----------------------------------------------------------------------------
-Write-Host "`n--- Esecuzione Test 22: Clean-Start Greenfield con permessi negati DB (-GreenfieldStart) ---" -ForegroundColor Cyan
-$testDir22 = Join-Path $tempDir "akai_test_greenfield_$([Guid]::NewGuid().ToString('N'))"
+Write-Host "`n--- Esecuzione Test 22: Rifiuto -GreenfieldStart se pacchetto precedente presente e DB inaccessibile (Fail-Closed) ---" -ForegroundColor Cyan
+$testDir22 = Join-Path $tempDir "akai_test_greenfield_block_$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $testDir22 | Out-Null
 
 $testApkOld22 = Join-Path $testDir22 "installed_old.apk"
@@ -2033,7 +2048,6 @@ const fs = require('fs');
 const path = require('path');
 const args = process.argv.slice(2);
 const argStr = args.join(' ');
-const stoppedFile = path.join(__dirname, 'stopped.flag');
 
 if (args[0] === 'connect') process.exit(0);
 if (argStr.includes('pm path')) {
@@ -2046,32 +2060,16 @@ if (argStr.includes('pull')) {
     process.exit(0);
 }
 if (argStr.includes('exec-out')) {
-    console.error('run-as: package not debuggable');
+    console.log('run-as: package not debuggable');
     process.exit(1);
 }
-if (argStr.includes('am force-stop') || argStr.includes('kill -9')) {
-    fs.writeFileSync(stoppedFile, '1');
-    process.exit(0);
-}
-if (argStr.includes('am startservice')) {
-    try { fs.unlinkSync(stoppedFile); } catch(e){}
-    process.exit(0);
-}
-if (argStr.includes('pidof')) {
-    if (fs.existsSync(stoppedFile)) {
-        console.log('PIDOF_CHECK:pids=[]:exit=[1]');
-    } else {
-        console.log('PIDOF_CHECK:pids=[1234]:exit=[0]');
-    }
+if (argStr.includes('pidof') || argStr.includes('PIDOF_CHECK')) {
+    console.log('PIDOF_CHECK:pids=[]:exit=[1]');
     process.exit(0);
 }
 if (argStr.includes('install')) {
-    console.log('Success');
-    process.exit(0);
-}
-if (argStr.includes('dumpsys')) {
-    console.log('userId=10045');
-    process.exit(0);
+    console.log('VIOLATION_INSTALL_CALLED_ON_FAIL_CLOSED');
+    process.exit(1);
 }
 process.exit(0);
 '@ | Out-File -FilePath $mockAdbJs22 -Encoding ascii
@@ -2103,50 +2101,25 @@ $mockSignerEscaped22 = $mockSignerCmd22.Replace('\', '/')
 $mockDirEscaped22 = $testDir22.Replace('\', '/')
 $candApkEscaped22 = $testApkNew22.Replace('\', '/')
 
-# Utilizziamo mock server Node.js HTTP 200 per status e index.html (baseline v5 style)
-$nodeServerScript22 = Join-Path $testDir22 "mock_http_server.js"
-@'
-const http = require('http');
-const server = http.createServer((req, res) => {
-    if (req.url === '/api/status') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 0 }));
-    } else if (req.url === '/index.html') {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<html><body>Akai Web Remote v5</body></html>');
-    } else {
-        res.writeHead(404);
-        res.end();
-    }
-});
-server.listen(18088, '127.0.0.1');
-'@ | Out-File -FilePath $nodeServerScript22 -Encoding ascii
-
-$srvProc22 = [System.Diagnostics.Process]::Start("$validNode", "`"$nodeServerScript22`"")
-Start-Sleep -Milliseconds 600
-
 $cmd22 = @"
+`$ErrorActionPreference = 'Continue'
 `$env:NODE_EXE = '$nodeEscaped'
 `$env:ADB_EXECUTABLE = '$mockAdbEscaped22'
 `$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped22'
 `$env:PATH = '$mockDirEscaped22' + [System.IO.Path]::PathSeparator + `$env:PATH
-`$env:WATCHDOG_ATTEMPTS = '2'
-`$env:WATCHDOG_SLEEP_SEC = '1'
 & '$scriptEscaped' -Action install -ApkPath '$candApkEscaped22' -TargetTv '127.0.0.1' -HttpPort 18088 -AllowHardwareExecution -GreenfieldStart
 "@
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $out22 = & $psExe -ExecutionPolicy Bypass -Command $cmd22 2>&1 | Out-String
+$ErrorActionPreference = $prevEap
 
-try {
-    if ($srvProc22 -and -not $srvProc22.HasExited) { $srvProc22.Kill() }
-} catch {}
-
-if ($out22 -match "AVVISO GREENFIELD: Estrazione database non possibile" -and
-    $out22 -match "Parametro -GreenfieldStart attivo: autorizzato avvio pulito greenfield" -and
-    $out22 -match "DEPLOYMENT VERIFICATO CON SUCCESSO AL 100%") {
-    Write-Host "[PASS] [TEST AFFERMATIVO / GREENFIELD START] Test 22: Greenfield Start eseguito con successo in presenza di DB inaccessibile (zero blocchi fail-closed)" -ForegroundColor Green
+if ($out22 -match "ERRORE FAIL-CLOSED: Rilevata installazione precedente di it\.akai\.customremote" -and
+    $out22 -notmatch "VIOLATION_INSTALL_CALLED_ON_FAIL_CLOSED") {
+    Write-Host "[PASS] [TEST NEGATIVO / DATA SAFETY FAIL-CLOSED] Test 22: Greenfield Start bloccato categoricamente se pacchetto precedente e' presente ma DB inaccessibile (zero installazioni)" -ForegroundColor Green
     $passed++
 } else {
-    Write-Host "[FAIL] [TEST AFFERMATIVO / GREENFIELD START] Test 22: Greenfield Start fallito: $out22" -ForegroundColor Red
+    Write-Host "[FAIL] [TEST NEGATIVO / DATA SAFETY FAIL-CLOSED] Test 22: Blocco fallito: $out22" -ForegroundColor Red
     $failed++
 }
 Remove-Item $testDir22 -Recurse -Force -ErrorAction SilentlyContinue
@@ -2201,6 +2174,250 @@ if ($out23 -match "PROBE_SUCCESS=False" -and $out23 -match "PROBE_ERROR=") {
     $failed++
 }
 Remove-Item $testDir23 -Recurse -Force -ErrorAction SilentlyContinue
+
+# -----------------------------------------------------------------------------
+# TEST 24: Clean-Start Greenfield con pacchetto ASSENTE sulla TV (hasPrevious=false) e -GreenfieldStart
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 24: Clean-Start Greenfield con pacchetto ASSENTE (hasPrevious=false) ---" -ForegroundColor Cyan
+$testDir24 = Join-Path $tempDir "akai_test_clean_greenfield_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir24 | Out-Null
+
+$testApkNew24 = Join-Path $testDir24 "candidate_new.apk"
+[System.IO.File]::WriteAllText($testApkNew24, "PK_DUMMY_NEW_APK")
+
+$mockAdbJs24 = Join-Path $testDir24 "mock_adb.js"
+@'
+const args = process.argv.slice(2);
+const argStr = args.join(' ');
+
+if (args[0] === 'connect') process.exit(0);
+if (argStr.includes('pm path')) {
+    // Pacchetto it.akai.customremote ASSENTE sulla TV
+    process.exit(1);
+}
+if (argStr.includes('install')) {
+    console.log('Success');
+    process.exit(0);
+}
+if (argStr.includes('pidof')) {
+    console.log('1234');
+    process.exit(0);
+}
+if (argStr.includes('am startservice')) {
+    process.exit(0);
+}
+process.exit(0);
+'@ | Out-File -FilePath $mockAdbJs24 -Encoding ascii
+
+$mockAdbCmd24 = if ($isWin) { Join-Path $testDir24 "adb.cmd" } else { Join-Path $testDir24 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs24`" %*" | Out-File -FilePath $mockAdbCmd24 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs24`" `"`$@`"" | Out-File -FilePath $mockAdbCmd24 -Encoding ascii
+    & chmod +x $mockAdbCmd24
+}
+
+$mockSignerJs24 = Join-Path $testDir24 "apksigner.js"
+@"
+console.log('Signer #1 certificate SHA-256 digest: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs24 -Encoding ascii
+
+$mockSignerCmd24 = if ($isWin) { Join-Path $testDir24 "apksigner.cmd" } else { Join-Path $testDir24 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs24`" %*" | Out-File -FilePath $mockSignerCmd24 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs24`" `"`$@`"" | Out-File -FilePath $mockSignerCmd24 -Encoding ascii
+    & chmod +x $mockSignerCmd24
+}
+
+$mockAdbEscaped24 = $mockAdbCmd24.Replace('\', '/')
+$mockSignerEscaped24 = $mockSignerCmd24.Replace('\', '/')
+$mockDirEscaped24 = $testDir24.Replace('\', '/')
+$candApkEscaped24 = $testApkNew24.Replace('\', '/')
+
+$port24 = Get-Random -Minimum 31000 -Maximum 38000
+$nodeServerScript24 = Join-Path $testDir24 "mock_http_server.js"
+@"
+const http = require('http');
+const server = http.createServer((req, res) => {
+    if (req.url === '/api/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 0 }));
+    } else if (req.url === '/index.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body>Akai Web Remote v5</body></html>');
+    } else {
+        res.writeHead(404);
+        res.end();
+    }
+});
+setInterval(() => {}, 1000);
+server.on('error', () => {});
+server.listen($port24, '127.0.0.1');
+"@ | Out-File -FilePath $nodeServerScript24 -Encoding ascii
+
+$srvProc24 = Start-Process -FilePath $validNode -ArgumentList "`"$nodeServerScript24`"" -PassThru
+Start-Sleep -Milliseconds 800
+
+$cmd24 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped24'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped24'
+`$env:PATH = '$mockDirEscaped24' + [System.IO.Path]::PathSeparator + `$env:PATH
+`$env:WATCHDOG_ATTEMPTS = '2'
+`$env:WATCHDOG_SLEEP_SEC = '1'
+& '$scriptEscaped' -Action install -ApkPath '$candApkEscaped24' -TargetTv '127.0.0.1' -HttpPort $port24 -AllowHardwareExecution -GreenfieldStart
+"@
+$out24 = & $psExe -ExecutionPolicy Bypass -Command $cmd24 2>&1 | Out-String
+
+try {
+    if ($srvProc24 -and -not $srvProc24.HasExited) { Stop-Process -Id $srvProc24.Id -Force -ErrorAction SilentlyContinue }
+} catch {}
+
+if ($out24 -match "Nessun APK precedente installato sulla TV \(it\.akai\.customremote assente\)" -and
+    $out24 -match "Parametro -GreenfieldStart attivo: autorizzata prima installazione pulita" -and
+    $out24 -match "Home v8 \(it\.akai\.customhome\.v8\) e Home v7 \(it\.akai\.customhome\) rimangono intatte al 100%" -and
+    $out24 -match "DEPLOYMENT VERIFICATO CON SUCCESSO AL 100%") {
+    Write-Host "[PASS] [TEST AFFERMATIVO / CLEAN-START GREENFIELD] Test 24: Clean-Start Greenfield su TV vergine completato al 100% con Home protette" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST AFFERMATIVO / CLEAN-START GREENFIELD] Test 24: Clean-Start fallito: $out24" -ForegroundColor Red
+    $failed++
+}
+Remove-Item $testDir24 -Recurse -Force -ErrorAction SilentlyContinue
+
+# -----------------------------------------------------------------------------
+# TEST 25-28: Verifica Rigorosa Autenticazione Server TLS (SAN Mismatch, CA Hostile, CA Unverified, CA Approved)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 25-28: Autenticazione Rigorosa Server TLS (Test-HttpsTlsEndpoint) ---" -ForegroundColor Cyan
+$testDirTls = Join-Path $tempDir "akai_test_tls_suite_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDirTls | Out-Null
+
+$pfx127 = Join-Path $testDirTls "cert127.pfx"
+$pfx192 = Join-Path $testDirTls "cert192.pfx"
+
+# 1. Certificato con SAN IP 127.0.0.1
+$rsa1 = [System.Security.Cryptography.RSA]::Create(2048)
+$san1 = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+$san1.AddIpAddress([System.Net.IPAddress]::Parse('127.0.0.1'))
+$req1 = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=127.0.0.1', $rsa1, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+$req1.CertificateExtensions.Add($san1.Build())
+$cert1 = $req1.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+[System.IO.File]::WriteAllBytes($pfx127, $cert1.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'pass123'))
+$sha127 = $cert1.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+
+# 2. Certificato con SAN IP 192.168.1.99 (per indurre SAN Mismatch su 127.0.0.1)
+$rsa2 = [System.Security.Cryptography.RSA]::Create(2048)
+$san2 = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+$san2.AddIpAddress([System.Net.IPAddress]::Parse('192.168.1.99'))
+$req2 = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=192.168.1.99', $rsa2, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+$req2.CertificateExtensions.Add($san2.Build())
+$cert2 = $req2.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+[System.IO.File]::WriteAllBytes($pfx192, $cert2.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'pass123'))
+$sha192 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+
+# Helper per avviare server HTTPS Node.js effimero
+function Start-EphemeralNodeHttpsServer($pfxPath) {
+    $jsPath = Join-Path $testDirTls "srv_$([Guid]::NewGuid().ToString('N')).js"
+    $pFile = Join-Path $testDirTls "port_$([Guid]::NewGuid().ToString('N')).txt"
+    $escapedPfx = $pfxPath.Replace('\', '/')
+    $escapedPort = $pFile.Replace('\', '/')
+
+    $srvCode = @"
+const https = require('https');
+const fs = require('fs');
+const srv = https.createServer({ pfx: fs.readFileSync('$escapedPfx'), passphrase: 'pass123' }, (req, res) => res.end('ok'));
+srv.listen(0, '127.0.0.1', () => {
+    fs.writeFileSync('$escapedPort', srv.address().port.toString());
+});
+setInterval(() => {}, 1000);
+"@
+    [System.IO.File]::WriteAllText($jsPath, $srvCode)
+    $proc = Start-Process -FilePath "$validNode" -ArgumentList "`"$jsPath`"" -PassThru
+    $cnt = 30
+    while (-not (Test-Path $pFile) -and $cnt -gt 0) {
+        Start-Sleep -Milliseconds 100
+        $cnt--
+    }
+    $port = [int](Get-Content $pFile)
+    return @{ Process = $proc; Port = $port }
+}
+
+# TEST 25: SAN Mismatch
+$srv25 = Start-EphemeralNodeHttpsServer $pfx192
+$cmd25 = @"
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv25.Port) -ExpectedCaSha256 '$sha192'
+Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':SAN=' + `$res.SanMatched)
+"@
+$out25 = & $psExe -ExecutionPolicy Bypass -Command $cmd25 2>&1 | Out-String
+$srv25.Process.Kill()
+
+if ($out25 -match "SUCCESS=False:STATUS=SAN_MISMATCH:SAN=False") {
+    Write-Host "[PASS] [TEST NEGATIVO / TLS SAN MISMATCH] Test 25: Certificato con SAN discrepanza (192.168.1.99 su 127.0.0.1) categoricamente bloccato (SAN_MISMATCH)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST NEGATIVO / TLS SAN MISMATCH] Test 25: Fallito: $out25" -ForegroundColor Red
+    $failed++
+}
+
+# TEST 26: Hostile / Untrusted CA
+$srv26 = Start-EphemeralNodeHttpsServer $pfx127
+$cmd26 = @"
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv26.Port) -ExpectedCaSha256 '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'
+Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':CA=' + `$res.CaMatched)
+"@
+$out26 = & $psExe -ExecutionPolicy Bypass -Command $cmd26 2>&1 | Out-String
+$srv26.Process.Kill()
+
+if ($out26 -match "SUCCESS=False:STATUS=CA_UNTRUSTED_MISMATCH:CA=False") {
+    Write-Host "[PASS] [TEST NEGATIVO / TLS CA UNTRUSTED] Test 26: Certificato con CA ostile o non attesa bloccato categoricamente (CA_UNTRUSTED_MISMATCH)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST NEGATIVO / TLS CA UNTRUSTED] Test 26: Fallito: $out26" -ForegroundColor Red
+    $failed++
+}
+
+# TEST 27: Unverified Mode (No Out-of-band CA)
+$srv27 = Start-EphemeralNodeHttpsServer $pfx127
+$cmd27 = @"
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv27.Port)
+Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':CA=' + `$res.CaMatched)
+"@
+$out27 = & $psExe -ExecutionPolicy Bypass -Command $cmd27 2>&1 | Out-String
+$srv27.Process.Kill()
+
+if ($out27 -match "SUCCESS=False:STATUS=TLS_HANDSHAKE_ONLY/UNVERIFIED:CA=False") {
+    Write-Host "[PASS] [TEST NEGATIVO / TLS UNVERIFIED CA] Test 27: Handshake TLS senza CA fuori banda restituito come TLS_HANDSHAKE_ONLY/UNVERIFIED (non autorizza deployment)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST NEGATIVO / TLS UNVERIFIED CA] Test 27: Fallito: $out27" -ForegroundColor Red
+    $failed++
+}
+
+# TEST 28: Approved Mode (SAN e CA Match)
+$srv28 = Start-EphemeralNodeHttpsServer $pfx127
+$cmd28 = @"
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv28.Port) -ExpectedCaSha256 '$sha127'
+Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':SAN=' + `$res.SanMatched + ':CA=' + `$res.CaMatched)
+"@
+$out28 = & $psExe -ExecutionPolicy Bypass -Command $cmd28 2>&1 | Out-String
+$srv28.Process.Kill()
+
+if ($out28 -match "SUCCESS=True:STATUS=APPROVED:SAN=True:CA=True") {
+    Write-Host "[PASS] [TEST AFFERMATIVO / TLS APPROVED] Test 28: Handshake TLS con SAN typed IP/DNS e impronta Root CA fuori banda approvato al 100% (APPROVED)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST AFFERMATIVO / TLS APPROVED] Test 28: Fallito: $out28" -ForegroundColor Red
+    $failed++
+}
+
+Remove-Item $testDirTls -Recurse -Force -ErrorAction SilentlyContinue
+
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 

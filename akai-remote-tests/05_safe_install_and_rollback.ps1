@@ -117,40 +117,219 @@ function Test-HttpsTlsEndpoint {
         [string]$TargetHost,
         [int]$Port = 8443,
         [string]$ExpectedCaSha256 = $null,
-        [int]$TimeoutMs = 3000
+        [int]$TimeoutMs = 4000
     )
     $tcpClient = New-Object System.Net.Sockets.TcpClient
     try {
         $connectAsync = $tcpClient.BeginConnect($TargetHost, $Port, $null, $null)
         $connected = $connectAsync.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
         if (-not $connected) {
-            return @{ Success = $false; Error = "Connessione TCP a ${TargetHost}:${Port} scaduta (${TimeoutMs}ms)" }
+            return @{
+                Success = $false
+                Status = "TCP_TIMEOUT"
+                SanMatched = $false
+                CaMatched = $false
+                Error = "Connessione TCP a ${TargetHost}:${Port} scaduta (${TimeoutMs}ms)"
+            }
         }
         $tcpClient.EndConnect($connectAsync)
+
+        $holder = [hashtable]::Synchronized(@{
+            RawCertBytes = $null
+            ChainRawCerts = @()
+            Errors = [System.Net.Security.SslPolicyErrors]::None
+        })
+
+        $callback = {
+            param($sender, $certificate, $chain, $sslPolicyErrors)
+            if ($certificate) {
+                $holder.RawCertBytes = $certificate.GetRawCertData()
+            }
+            if ($chain -and $chain.ChainElements) {
+                $list = @()
+                foreach ($el in $chain.ChainElements) {
+                    $list += ,($el.Certificate.GetRawCertData())
+                }
+                $holder.ChainRawCerts = $list
+            }
+            $holder.Errors = $sslPolicyErrors
+            return $true
+        }
 
         $sslStream = New-Object System.Net.Security.SslStream(
             $tcpClient.GetStream(),
             $false,
-            {
-                param($sender, $cert, $chain, $sslPolicyErrors)
-                return $true
-            }
+            $callback
         )
 
         $sslStream.AuthenticateAsClient($TargetHost)
-        $remoteCert = $sslStream.RemoteCertificate
-        if (-not $remoteCert) {
-            return @{ Success = $false; Error = "Nessun certificato X.509 ricevuto durante l'handshake TLS su porta $Port" }
+        if (-not $holder.RawCertBytes -or $holder.RawCertBytes.Length -eq 0) {
+            $sslStream.Close()
+            $tcpClient.Close()
+            return @{
+                Success = $false
+                Status = "NO_CERTIFICATE"
+                SanMatched = $false
+                CaMatched = $false
+                Error = "Nessun certificato X.509 ricevuto durante l'handshake TLS su porta $Port"
+            }
         }
-        $cert2 = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($remoteCert)
-        $certSha256 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
 
+        $cert2 = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(,[byte[]]$holder.RawCertBytes)
+        if (-not $cert2 -or $cert2.Handle -eq [IntPtr]::Zero) {
+            $sslStream.Close()
+            $tcpClient.Close()
+            return @{
+                Success = $false
+                Status = "NO_CERTIFICATE"
+                SanMatched = $false
+                CaMatched = $false
+                Error = "Certificato X.509 non valido o vuoto"
+            }
+        }
+
+        # 1. Validazione periodo temporale (NotBefore <= UtcNow <= NotAfter)
+        $now = [DateTime]::UtcNow
+        $notBeforeUtc = ([DateTime]$cert2.NotBefore).ToUniversalTime()
+        $notAfterUtc = ([DateTime]$cert2.NotAfter).ToUniversalTime()
+        if ($now -lt $notBeforeUtc -or $now -gt $notAfterUtc) {
+            $sslStream.Close()
+            $tcpClient.Close()
+            return @{
+                Success = $false
+                Status = "CERT_EXPIRED_OR_NOT_YET_VALID"
+                SanMatched = $false
+                CaMatched = $false
+                CertSha256 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+                Error = "Certificato non valido nel periodo temporale corrente (NotBefore: $($cert2.NotBefore), NotAfter: $($cert2.NotAfter))"
+            }
+        }
+
+        # 2. Validazione Rigorosa SAN (Subject Alternative Name - OID 2.5.29.17)
+        $sanMatched = $false
         $sanFound = $false
+        $formattedSan = ""
+        $targetIpObj = $null
+        $isTargetIp = [System.Net.IPAddress]::TryParse($TargetHost, [ref]$targetIpObj)
+
         foreach ($ext in $cert2.Extensions) {
-            if ($ext.Oid.Value -eq "2.5.29.17") { # SAN OID
-                $sanText = $ext.Format($false)
-                if ($sanText -match [regex]::Escape($TargetHost)) {
-                    $sanFound = $true
+            if ($ext.Oid.Value -eq "2.5.29.17") {
+                $sanFound = $true
+                $formattedSan = $ext.Format($false)
+                
+                # Metodo A: Verifica binaria su byte ASN.1 (DER IPv4 tag 0x87 len 0x04 o dNSName tag 0x82)
+                # Indipendente al 100% dalla lingua o localizzazione dell'OS
+                if ($isTargetIp) {
+                    $rawBytes = $ext.RawData
+                    $ipBytes = $targetIpObj.GetAddressBytes()
+                    for ($b = 0; $b -le ($rawBytes.Length - ($ipBytes.Length + 2)); $b++) {
+                        if ($rawBytes[$b] -eq 0x87 -and $rawBytes[$b+1] -eq $ipBytes.Length) {
+                            $matchAll = $true
+                            for ($k = 0; $k -lt $ipBytes.Length; $k++) {
+                                if ($rawBytes[$b + 2 + $k] -ne $ipBytes[$k]) {
+                                    $matchAll = $false
+                                    break
+                                }
+                            }
+                            if ($matchAll) {
+                                $sanMatched = $true
+                                break
+                            }
+                        }
+                    }
+                } else {
+                    $rawBytes = $ext.RawData
+                    $dnsBytes = [System.Text.Encoding]::ASCII.GetBytes($TargetHost)
+                    for ($b = 0; $b -le ($rawBytes.Length - ($dnsBytes.Length + 2)); $b++) {
+                        if ($rawBytes[$b] -eq 0x82 -and $rawBytes[$b+1] -eq $dnsBytes.Length) {
+                            $matchAll = $true
+                            for ($k = 0; $k -lt $dnsBytes.Length; $k++) {
+                                if ($rawBytes[$b + 2 + $k] -ne $dnsBytes[$k]) {
+                                    $matchAll = $false
+                                    break
+                                }
+                            }
+                            if ($matchAll) {
+                                $sanMatched = $true
+                                break
+                            }
+                        }
+                    }
+                }
+
+                # Metodo B: Parsing deterministico per token (supporta formati EN/IT "IP Address=X", "Indirizzo IP=X", "DNS Name=X")
+                if (-not $sanMatched) {
+                    $tokens = $formattedSan -split ',|\r?\n'
+                    foreach ($token in $tokens) {
+                        $t = $token.Trim()
+                        if ($t -match "[:=]\s*$([regex]::Escape($TargetHost))\s*`$") {
+                            $sanMatched = $true
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        if (-not $sanFound) {
+            $sslStream.Close()
+            $tcpClient.Close()
+            return @{
+                Success = $false
+                Status = "SAN_EXTENSION_MISSING"
+                SanMatched = $false
+                CaMatched = $false
+                Error = "Estensione Subject Alternative Name (SAN 2.5.29.17) assente nel certificato del server"
+            }
+        }
+
+        if (-not $sanMatched) {
+            $sslStream.Close()
+            $tcpClient.Close()
+            return @{
+                Success = $false
+                Status = "SAN_MISMATCH"
+                SanMatched = $false
+                CaMatched = $false
+                FormattedSan = $formattedSan
+                Error = "SAN mismatch: l'host '$TargetHost' non compare tra gli indirizzi IP/DNS autorizzati del certificato server ($formattedSan)"
+            }
+        }
+
+        # 3. Validazione Catena e Impronta Root CA
+        $chainFingerprints = @()
+        if ($holder.ChainRawCerts -and $holder.ChainRawCerts.Count -gt 0) {
+            foreach ($rawCert in $holder.ChainRawCerts) {
+                $cElem = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(,[byte[]]$rawCert)
+                $chainFingerprints += $cElem.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+            }
+        }
+        $serverCertSha256 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+        if ($chainFingerprints.Count -eq 0) {
+            $chainFingerprints += $serverCertSha256
+        }
+        $rootCaSha256 = $chainFingerprints[$chainFingerprints.Count - 1]
+
+        $caMatched = $false
+        $caStatus = ""
+        if ([string]::IsNullOrWhiteSpace($ExpectedCaSha256)) {
+            $caStatus = "TLS_HANDSHAKE_ONLY/UNVERIFIED"
+        } else {
+            $cleanExpected = $ExpectedCaSha256.Replace(':', '').Replace(' ', '').ToLower().Trim()
+            if ($chainFingerprints -contains $cleanExpected) {
+                $caMatched = $true
+                $caStatus = "APPROVED"
+            } else {
+                $sslStream.Close()
+                $tcpClient.Close()
+                return @{
+                    Success = $false
+                    Status = "CA_UNTRUSTED_MISMATCH"
+                    SanMatched = $sanMatched
+                    CaMatched = $false
+                    RootCaSha256 = $rootCaSha256
+                    ExpectedCaSha256 = $cleanExpected
+                    Error = "CA Mismatch: l'impronta della CA del server ($rootCaSha256) non corrisponde all'impronta fuori banda attesa ($cleanExpected)"
                 }
             }
         }
@@ -158,16 +337,24 @@ function Test-HttpsTlsEndpoint {
         $sslStream.Close()
         $tcpClient.Close()
 
+        $isSuccess = ($sanMatched -and $caMatched -and ($caStatus -eq "APPROVED"))
         return @{
-            Success = $true
-            CertSha256 = $certSha256
-            SanMatched = $sanFound
+            Success = $isSuccess
+            Status = $caStatus
+            CertSha256 = $serverCertSha256
+            RootCaSha256 = $rootCaSha256
+            SanMatched = $sanMatched
+            CaMatched = $caMatched
             Subject = $cert2.Subject
             Issuer = $cert2.Issuer
+            FormattedSan = $formattedSan
         }
     } catch {
         return @{
             Success = $false
+            Status = "HANDSHAKE_FAILED"
+            SanMatched = $false
+            CaMatched = $false
             Error = $_.Exception.Message
         }
     } finally {
@@ -597,30 +784,31 @@ except Exception as e:
 
 switch ($Action) {
     "plan" {
-        Write-Host "=== PIANO SICURO DI DEPLOYMENT, VERIFICA E ROLLBACK ATOMICO (Rev 8 - Greenfield Ready) ===" -ForegroundColor Cyan
+        Write-Host "=== PIANO SICURO DI DEPLOYMENT, VERIFICA E ROLLBACK ATOMICO (Rev 9 - Strict Greenfield & TLS SAN) ===" -ForegroundColor Cyan
         Write-Host "Fase 0: Inventario e Preflight Read-Only (100% Non-Distruttivo)"
         Write-Host "        - Comando: -Action preflight"
         Write-Host "        - Zero scritture, zero force-stop, zero perturbazione dello stato TV."
-        Write-Host "        - Rileva installazione di 'it.akai.customremote' e garantisce che Home v8 sia preservata."
+        Write-Host "        - Estrae versionCode/versionName da dumpsys, firma SHA-256 via apksigner (read-only)."
+        Write-Host "        - Verifica e distingue Home v8 (it.akai.customhome.v8) da Home v7 (it.akai.customhome)."
         Write-Host "Fase 1: Validazione Parametri e Verifica Firma Digitale Fail-Closed Pre-Install"
         Write-Host "        - Rifiuta categoricamente artefatti CI di test non distribuibili."
         Write-Host "        - Estrae e confronta il digest SHA-256 esatto a 64 caratteri con apksigner."
-        Write-Host "Fase 2: Gestione Dati e Backup Preventivo (Due Flussi Distinti):"
+        Write-Host "Fase 2: Gestione Dati e Backup Preventivo (Separazione Rigorosa dei Flussi):"
         Write-Host "        - FLUSSO A (In-Place con Backup Consistente):"
-        Write-Host "          Se 'it.akai.customremote' e' installato e il DB e' accessibile via run-as/su,"
-        Write-Host "          effettua snapshot atomico SQLite + WAL e verifica integrita' bit-for-bit."
+        Write-Host "          Se 'it.akai.customremote' e' installato, il backup SQLite v5 e' OBBLIGATORIO (fail-closed)."
+        Write-Host "          Se il DB non e' estraibile, l'installazione e' BLOCCATA per prevenire migrazioni v5->v6 senza rollback."
         Write-Host "        - FLUSSO B (Clean-Start Greenfield con -GreenfieldStart):"
-        Write-Host "          Se 'it.akai.customremote' non e' installato o il DB non e' estraibile (app di release),"
-        Write-Host "          il deployment procede in modalita' greenfield pulita senza bloccare indefinitamente."
-        Write-Host "          Salvaguardia totale: il launcher Home v8 (it.akai.customhome) NON viene toccato."
-        Write-Host "Fase 3: Installazione conservativa nuovo APK (adb install -r -d, ZERO uninstall)"
+        Write-Host "          Ammesso ESCLUSIVAMENTE se 'it.akai.customremote' NON e' installato sulla TV."
+        Write-Host "          Salvaguardia totale: il launcher Home v8 (it.akai.customhome.v8) resta intatto al 100%."
+        Write-Host "Fase 3: Installazione conservativa nuovo APK (adb install -r -d se upgrade, adb install se clean)"
         Write-Host "Fase 4: Multi-Point Health Check Watchdog (30s):"
         Write-Host "        - Verifica 1: /api/status risponde 200 con status=ok E uinput_ready=true"
         Write-Host "        - Verifica 2: /index.html risponde 200 (v5) o 426 Upgrade Required (HTTPS M2/M3)"
-        Write-Host "        - Verifica 3: Processo attivo su device (pidof)"
+        Write-Host "        - Verifica 3: Porta HTTPS 8443 con probe TLS, verifica SAN IP/DNS ed impronta Root CA"
+        Write-Host "        - Verifica 4: Processo attivo su device (pidof)"
         Write-Host "Fase 5: Rollback Automatico in caso di anomalia Watchdog:"
-        Write-Host "        - Se backup DB presente: Reinstallazione APK precedente + ripristino atomico DB SQLite."
-        Write-Host "        - Se avvio Greenfield: Reinstallazione APK precedente (zero alterazioni Home v8)."
+        Write-Host "        - Flusso A: Reinstallazione APK precedente + ripristino atomico DB SQLite con parita' SHA-256."
+        Write-Host "        - Flusso B: Disinstallazione pulita del nuovo APK (adb uninstall) per ripristinare stato vergine."
         Write-Host "==========================================================================================" -ForegroundColor Cyan
     }
 
@@ -643,21 +831,62 @@ switch ($Action) {
             $pids = (& $adb -s $TargetAdb shell "pidof $PackageName 2>/dev/null" 2>&1).ToString().Trim()
             Write-Host "      Processo attivo : $(if ($pids) { "ATTIVO (PID $pids)" } else { "NON ATTIVO" })"
             
+            # Estrazione reale di versionCode e versionName tramite dumpsys package
+            $dumpsysOut = (& $adb -s $TargetAdb shell "dumpsys package $PackageName" 2>&1 | Out-String)
+            $vCode = if ($dumpsysOut -match "versionCode=(\d+)") { $matches[1] } else { "NON RILEVABILE" }
+            $vName = if ($dumpsysOut -match "versionName=([^\s]+)") { $matches[1] } else { "NON RILEVABILE" }
+            Write-Host "      Versione        : versionCode=$vCode, versionName=$vName"
+            
+            # Estrazione impronta SHA-256 firma APK installato (read-only)
+            if ($pathLine -match "package:(.+)") {
+                $installedRemoteApk = $matches[1].Trim()
+                $tempProbeApk = Join-Path ([System.IO.Path]::GetTempPath()) "akai_preflight_probe_$([System.Guid]::NewGuid().ToString('N')).apk"
+                try {
+                    $pullRes = & $adb -s $TargetAdb pull $installedRemoteApk $tempProbeApk 2>&1
+                    if ((Test-Path $tempProbeApk) -and (Get-Item $tempProbeApk).Length -gt 0) {
+                        $installedFp = Get-ApkCertificateFingerprint $tempProbeApk
+                        if ($installedFp -and $installedFp.Length -eq 64) {
+                            Write-Host "      Firma SHA-256   : $installedFp" -ForegroundColor Green
+                        } else {
+                            Write-Host "      Firma SHA-256   : INACCESSIBILE (apksigner non ha estratto digest valido)" -ForegroundColor Yellow
+                        }
+                    } else {
+                        Write-Host "      Firma SHA-256   : INACCESSIBILE (pull APK negato o privilegi limitati)" -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host "      Firma SHA-256   : INACCESSIBILE ($($_.Exception.Message))" -ForegroundColor Yellow
+                } finally {
+                    if (Test-Path $tempProbeApk) { Remove-Item $tempProbeApk -Force -ErrorAction SilentlyContinue }
+                }
+            } else {
+                Write-Host "      Firma SHA-256   : INACCESSIBILE (percorso APK non determinabile)" -ForegroundColor Yellow
+            }
+
             # Verifica accessibilita' dati (read-only probe senza force-stop)
             $probeRunAs = (& $adb -s $TargetAdb shell "run-as $PackageName ls databases/ 2>&1").ToString().Trim()
-            Write-Host "      Accesso run-as  : $(if ($LASTEXITCODE -eq 0) { "DISPONIBILE ($probeRunAs)" } else { "NON DISPONIBILE (app non-debuggable o utente limitato)" })"
+            $dbAccessStatus = if ($LASTEXITCODE -eq 0 -and $probeRunAs -notmatch "denied|not debuggable|error") {
+                "DISPONIBILE ($probeRunAs)"
+            } else {
+                "UNKNOWN / INACCESSIBLE (build release non-debuggable o privilegi limitati)"
+            }
+            Write-Host "      Accesso run-as  : $dbAccessStatus"
         } else {
-            Write-Host "      Stato pacchetto : NON INSTALLATO (Greenfield Start raccomandato)" -ForegroundColor Yellow
+            Write-Host "      Stato pacchetto : NON INSTALLATO (Clean-Start Greenfield applicabile)" -ForegroundColor Yellow
         }
 
-        # 2. Verifica Pacchetto Launcher Home v8 (it.akai.customhome) - SALVAGUARDIA ASSOLUTA
-        Write-Host "`n[2/5] Verifica salvaguardia Home v8 (it.akai.customhome)..." -ForegroundColor Cyan
-        $homePackages = (& $adb -s $TargetAdb shell "pm list packages customhome" 2>&1).ToString().Trim()
-        Write-Host "      Launcher rilevati: $homePackages"
-        if ($homePackages -match "it\.akai\.customhome") {
-            Write-Host "      Home Custom     : PRESENTE E PROTETTA (Nessuna modifica autorizzata su questo package)" -ForegroundColor Green
+        # 2. Verifica Pacchetti Launcher (Home v8: it.akai.customhome.v8 vs Home v7: it.akai.customhome) - SALVAGUARDIA ASSOLUTA
+        Write-Host "`n[2/5] Verifica salvaguardia Home Launcher (Home v8 / Home v7)..." -ForegroundColor Cyan
+        $homeV8Installed = (& $adb -s $TargetAdb shell "pm list packages it.akai.customhome.v8" 2>&1).ToString().Trim()
+        $homeV7Installed = (& $adb -s $TargetAdb shell "pm list packages it.akai.customhome" 2>&1).ToString().Trim()
+        if ($homeV8Installed -match "it\.akai\.customhome\.v8") {
+            Write-Host "      Home v8 (it.akai.customhome.v8) : PRESENTE E PROTETTA (Tasto MENU fisico e launcher v8 intatti)" -ForegroundColor Green
         } else {
-            Write-Host "      Home Custom     : Non rilevata via 'customhome'" -ForegroundColor Yellow
+            Write-Host "      Home v8 (it.akai.customhome.v8) : NON INSTALLATA" -ForegroundColor Yellow
+        }
+        if ($homeV7Installed -match "(^|\s)package:it\.akai\.customhome($|\s)") {
+            Write-Host "      Home v7 (it.akai.customhome)    : PRESENTE E PROTETTA (Fallback v7 conservato)" -ForegroundColor Green
+        } else {
+            Write-Host "      Home v7 (it.akai.customhome)    : NON INSTALLATA" -ForegroundColor Yellow
         }
 
         # 3. Spazio disco su /data
@@ -928,18 +1157,9 @@ switch ($Action) {
                 }
             }
 
-            # VERIFICA FAIL-CLOSED CATEGORICA O GREENFIELD START
+            # VERIFICA FAIL-CLOSED CATEGORICA SUL DATABASE
             if (-not $dbExtracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
-                if (-not $GreenfieldStart) {
-                    throw "ERRORE FAIL-CLOSED: Impossibile estrarre un backup integro del database dal dispositivo (permessi negati run-as/su o database non accessibile). L'installazione e' categoricamente INTERROTTA per prevenire perdite irrecuperabili di dati.`nSe si intende procedere con un avvio pulito greenfield (dopo aver verificato l'inventario con -Action preflight), specificare esplicitamente il parametro: -GreenfieldStart"
-                } else {
-                    Write-Host "      AVVISO GREENFIELD: Estrazione database non possibile (mancanza permessi run-as/su o database assente)." -ForegroundColor Yellow
-                    Write-Host "      Parametro -GreenfieldStart attivo: autorizzato avvio pulito greenfield (clean-start)." -ForegroundColor Yellow
-                    Write-Host "      Home v8 (it.akai.customhome) e dati di sistema rimangono rigorosamente intatti." -ForegroundColor Green
-                    if (Test-Path $backupDb) { Remove-Item $backupDb -Force -ErrorAction SilentlyContinue }
-                    $backupDb = $null
-                    $backupDbHash = $null
-                }
+                throw "ERRORE FAIL-CLOSED: Rilevata installazione precedente di $PackageName (v5) ma estrazione del database SQLite fallita (permessi negati run-as/su o DB inaccessibile). L'installazione e' categoricamente BLOCCATA.`nIl parametro -GreenfieldStart e' consentito esclusivamente per nuove installazioni (clean-start con package assente) per evitare che un aggiornamento in-place migri irreversibilmente lo schema SQLite da v5 a v6 senza possibilita' di rollback garantito."
             } else {
                 # Pulizia WAL vuoto se presente
                 if (Test-Path $backupDbWal) {
@@ -973,7 +1193,12 @@ switch ($Action) {
             }
             Write-Host "      Compatibilità firma SHA-256 verificata con successo al 100%." -ForegroundColor Green
         } else {
-            Write-Host "[1/6] Nessun APK precedente installato sulla TV; skip backup e check firme." -ForegroundColor Yellow
+            Write-Host "[1/6] Nessun APK precedente installato sulla TV ($PackageName assente)." -ForegroundColor Yellow
+            if (-not $GreenfieldStart) {
+                throw "ERRORE FAIL-CLOSED: Il package $PackageName non e' presente sulla TV. Per autorizzare una prima installazione pulita (clean-start) specificare esplicitamente il parametro: -GreenfieldStart"
+            }
+            Write-Host "      Parametro -GreenfieldStart attivo: autorizzata prima installazione pulita." -ForegroundColor Green
+            Write-Host "      Home v8 (it.akai.customhome.v8) e Home v7 (it.akai.customhome) rimangono intatte al 100%." -ForegroundColor Green
         }
 
         # 3. Installazione conservativa (mai uninstall, preserva /data/data)
@@ -1025,15 +1250,17 @@ switch ($Action) {
                 $httpsOk = $false
                 $httpsStatusMsg = ""
                 if ($isHttpsUpgradeMode) {
-                    # Se HTTP 8088 impone 426, il Web Remote DEVE rispondere su HTTPS 8443. Eseguiamo il probe reale TLS con SAN:
+                    # Se HTTP 8088 impone 426, il Web Remote DEVE rispondere su HTTPS 8443. Eseguiamo il probe reale TLS con validazione SAN e CA:
                     $tlsRes = Test-HttpsTlsEndpoint -TargetHost $TargetTv -Port $HttpsPort -ExpectedCaSha256 $ExpectedCaFingerprint -TimeoutMs 4000
-                    if ($tlsRes.Success) {
+                    if ($tlsRes.Success -and $tlsRes.Status -eq "APPROVED") {
                         $httpsOk = $true
-                        $sanInfo = if ($tlsRes.SanMatched) { "SAN=$TargetTv OK" } else { "SAN mismatch" }
-                        $httpsStatusMsg = "OK (Porta $HttpsPort, Handshake TLS riuscito, $sanInfo, SHA256=$($tlsRes.CertSha256))"
+                        $httpsStatusMsg = "APPROVED (Porta $HttpsPort, Handshake TLS OK, SAN=$TargetTv OK, Root CA SHA256=$($tlsRes.RootCaSha256) Verificata)"
+                    } elseif ($tlsRes.Status -eq "TLS_HANDSHAKE_ONLY/UNVERIFIED") {
+                        $httpsOk = $false
+                        $httpsStatusMsg = "UNVERIFIED: Handshake TLS attivo ma Root CA non ancora validata fuori banda. Stato: TLS_HANDSHAKE_ONLY/UNVERIFIED (Collaudo bloccato prima del bootstrap)"
                     } else {
                         $httpsOk = $false
-                        $httpsStatusMsg = "FALLITO ($($tlsRes.Error)) - Web Remote HTTPS NON operativo"
+                        $httpsStatusMsg = "FALLITO ($($tlsRes.Status): $($tlsRes.Error)) - Web Remote HTTPS NON approvato"
                     }
                 } else {
                     # Baseline v5: HTTPS 8443 non esisteva, solo HTTP 200 plaintext
@@ -1067,20 +1294,6 @@ switch ($Action) {
                 # VALIDAZIONE PREREQUISITI RIGOROSA PRE-ROLLBACK (P0-2 FAIL-CLOSED)
                 if (-not (Test-Path $backupApk) -or (Get-Item $backupApk).Length -eq 0) {
                     throw "ERRORE FAIL-CLOSED FATALE: Impossibile eseguire il rollback. File APK precedente mancante ($backupApk)."
-                }
-
-                # Se si e' proceduto in Greenfield (-GreenfieldStart) e non esiste backup DB, esegui rollback solo APK
-                if ($GreenfieldStart -and (-not $backupDb -or -not (Test-Path $backupDb))) {
-                    Write-Host "[ROLLBACK GREENFIELD 1/2] Reinstallazione APK precedente (adb install -r -d)..." -ForegroundColor Yellow
-                    $rbRes = & $adb -s $TargetAdb install -r -d $backupApk
-                    Write-Host "      Esito adb install rollback: $rbRes"
-                    if ($LASTEXITCODE -ne 0 -or $rbRes -notmatch "Success") {
-                        throw "FATALE: Reinstallazione rollback APK fallita!"
-                    }
-                    Write-Host "[ROLLBACK GREENFIELD 2/2] Riavvio servizio RemoteServerService..." -ForegroundColor Yellow
-                    & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
-                    Write-Host "ROLLBACK GREENFIELD COMPLETATO: Ripristinato APK precedente (zero alterazioni database/Home v8)." -ForegroundColor Green
-                    exit 1
                 }
 
                 if (-not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
@@ -1178,7 +1391,11 @@ $chownTarget = "${appUid}:${appUid}"
                     throw "ERRORE FAIL-CLOSED: Watchdog post-rollback non superato. Il servizio non risponde con status=ok."
                 }
             } else {
-                Write-Host "Nessun APK precedente disponibile per il ripristino." -ForegroundColor Red
+                # Rollback per clean-start (prima installazione fallita al watchdog)
+                Write-Host "[ROLLBACK CLEAN-START 1/1] Disinstallazione nuovo APK per ripristino stato vergine..." -ForegroundColor Yellow
+                $rbRes = & $adb -s $TargetAdb uninstall $PackageName
+                Write-Host "      Esito adb uninstall rollback: $rbRes"
+                Write-Host "ROLLBACK CLEAN-START COMPLETATO: Package $PackageName rimosso, dispositivo riportato allo stato vergine iniziale." -ForegroundColor Green
             }
             exit 1
         }
@@ -1199,18 +1416,6 @@ $chownTarget = "${appUid}:${appUid}"
             throw "ERRORE FAIL-CLOSED: File di backup APK non trovato in $backupApk."
         }
         if (-not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
-            if ($GreenfieldStart) {
-                Write-Host "Avviso: Database non presente nella sessione di backup ($backupDb). Esecuzione rollback APK greenfield (-GreenfieldStart)..." -ForegroundColor Yellow
-                Write-Host "[1/2] Reinstallazione APK precedente: $backupApk..."
-                $res = & $adb -s $TargetAdb install -r -d $backupApk
-                if ($LASTEXITCODE -ne 0 -or $res -notmatch "Success") {
-                    throw "ERRORE FAIL-CLOSED: Rollback fallito: adb non e' riuscito a reinstallare l'APK ($res)"
-                }
-                Write-Host "[2/2] Riavvio servizio RemoteServerService..."
-                & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
-                Write-Host "Rollback APK greenfield completato." -ForegroundColor Green
-                return
-            }
             throw "ERRORE FAIL-CLOSED: Prerequisito critico mancante per il rollback manuale. File database di backup mancante o non integro in $backupDb. Impossibile procedere al downgrade dell'APK senza ripristino DB (rischio crash per schema v6 non supportato da v5)."
         }
 
