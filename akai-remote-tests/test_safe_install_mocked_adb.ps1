@@ -2114,7 +2114,10 @@ $ErrorActionPreference = "Continue"
 $out22 = & $psExe -ExecutionPolicy Bypass -Command $cmd22 2>&1 | Out-String
 $ErrorActionPreference = $prevEap
 
-if ($out22 -match "ERRORE FAIL-CLOSED: Rilevata installazione precedente di it\.akai\.customremote" -and
+if ($out22 -match "ERRORE FAIL-CLOSED" -and
+    $out22 -match "Rilevata installazione precedente" -and
+    $out22 -match "it\.akai\.customremote" -and
+    $out22 -match "estrazione del database SQLite fallita" -and
     $out22 -notmatch "VIOLATION_INSTALL_CALLED_ON_FAIL_CLOSED") {
     Write-Host "[PASS] [TEST NEGATIVO / DATA SAFETY FAIL-CLOSED] Test 22: Greenfield Start bloccato categoricamente se pacchetto precedente e' presente ma DB inaccessibile (zero installazioni)" -ForegroundColor Green
     $passed++

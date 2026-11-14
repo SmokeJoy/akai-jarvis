@@ -1328,16 +1328,21 @@ public class UnitTests {
 
         // Simuliamo occupazione esterna della porta (BindException)
         testRebindCtrl.close();
+        int collisionPort = 0;
+        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
+            collisionPort = probe.getLocalPort();
+        } catch (Exception ignored) {}
+
         java.net.ServerSocket rogueSocket = new java.net.ServerSocket();
         rogueSocket.setReuseAddress(true);
-        rogueSocket.bind(new java.net.InetSocketAddress(testPort));
+        rogueSocket.bind(new java.net.InetSocketAddress(collisionPort));
 
         // Re-inizializziamo controller per test collisione ed errore di bind
         readyEvents.clear();
         degradedEvents.clear();
         java.util.concurrent.ExecutorService testExec2 = java.util.concurrent.Executors.newSingleThreadExecutor();
         HttpsRebindController testRebindCtrl2 = new HttpsRebindController(
-            testPort,
+            collisionPort,
             null,
             new HttpsRebindController.ListenerCallback() {
                 @Override public void onServerReady(String ip, int port) { readyEvents.add(ip); }
