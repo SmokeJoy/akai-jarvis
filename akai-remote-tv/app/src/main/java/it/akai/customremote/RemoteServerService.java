@@ -71,6 +71,32 @@ public class RemoteServerService extends Service {
     private TvController tvController;
     private RestApiRouter restApiRouter;
 
+    private static final java.util.List<ServiceStateListener> sStateListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    public static void registerStateListener(ServiceStateListener listener) {
+        if (listener != null) {
+            sStateListeners.add(listener);
+            RemoteServerService instance = getInstance();
+            if (instance != null && instance.isReady()) {
+                try {
+                    listener.onServerReady(instance.getLocalIpAddress(), HTTP_PORT, HTTPS_PORT);
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    public static void unregisterStateListener(ServiceStateListener listener) {
+        if (listener != null) {
+            sStateListeners.remove(listener);
+        }
+    }
+
+    public boolean isReady() {
+        boolean httpOk = (httpServerSocket != null && !httpServerSocket.isClosed() && httpServerSocket.isBound());
+        boolean httpsOk = (httpsServerSocket != null && !httpsServerSocket.isClosed() && httpsServerSocket.isBound());
+        return isRunning && httpOk && httpsOk && securityManager != null;
+    }
+
     public static RemoteServerService getInstance() {
         return sInstance;
     }
@@ -87,6 +113,7 @@ public class RemoteServerService extends Service {
     public void onCreate() {
         super.onCreate();
         sInstance = this;
+        TlsCertificateManager.setApplicationContext(this);
         securityManager = new SecurityManager(this);
         tvController = new TvController(this);
         final TlsCertificateManager tlsMgr = TlsCertificateManager.getInstance();
@@ -436,6 +463,15 @@ public class RemoteServerService extends Service {
                     httpsAcceptorThread.start();
                 } else {
                     Log.w(TAG, "SSLContext not available; HTTPS server skipped.");
+                }
+            }
+
+            if (isReady()) {
+                Log.i(TAG, "AKAI Remote Dual Server READY (HTTP:" + HTTP_PORT + ", HTTPS:" + HTTPS_PORT + ")");
+                for (ServiceStateListener l : sStateListeners) {
+                    try {
+                        l.onServerReady(getLocalIpAddress(), HTTP_PORT, HTTPS_PORT);
+                    } catch (Exception ignored) {}
                 }
             }
         } catch (Exception e) {

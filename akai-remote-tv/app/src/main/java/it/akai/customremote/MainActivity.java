@@ -14,12 +14,36 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import it.akai.customremote.qr.QrBitmapUtil;
+import android.os.Handler;
+import android.os.Looper;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final String TAG = "AKAI_MainActivity";
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
+    private final Handler retryHandler = new Handler(Looper.getMainLooper());
+    private int retryCount = 0;
+    private static final int MAX_RETRIES = 15;
+    private ServiceStateListener stateListener = null;
+
+    private final Runnable retryRunnable = new Runnable() {
+        @Override
+        public void run() {
+            RemoteServerService s = RemoteServerService.getInstance();
+            if (s == null || !s.isReady()) {
+                if (retryCount < MAX_RETRIES && !isFinishing()) {
+                    retryCount++;
+                    updateUI();
+                    retryHandler.postDelayed(this, 1000);
+                } else {
+                    updateUI();
+                }
+            } else {
+                updateUI();
+            }
+        }
+    };
 
     private TextView tvServiceStatus;
     private TextView tvServerUrl;
@@ -65,28 +89,40 @@ public class MainActivity extends Activity {
             startService(serviceIntent);
         }
 
+        stateListener = new ServiceStateListener() {
+            @Override
+            public void onServerReady(String localIpAddress, int httpPort, int httpsPort) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        retryHandler.removeCallbacks(retryRunnable);
+                        updateUI();
+                    }
+                });
+            }
+        };
+        RemoteServerService.registerStateListener(stateListener);
+        retryHandler.postDelayed(retryRunnable, 1000);
+
         updateUI();
 
         btnShowPin.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 RemoteServerService s = RemoteServerService.getInstance();
-                String ip = (s != null) ? s.getLocalIpAddress() : getLocalIpAddress();
+                if (s == null || !s.isReady() || s.getSecurityManager() == null) {
+                    Toast.makeText(MainActivity.this, "Inizializzazione server sicuro in corso... Riprova tra pochi secondi.", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String ip = s.getLocalIpAddress();
                 String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
                 TlsCertificateManager.TlsInfo info = TlsCertificateManager.getInstance().getOrGenerateTlsInfo(MainActivity.this, ip);
                 String caFp = (info != null) ? info.caFingerprintSha256 : null;
 
-                if (s != null && s.getSecurityManager() != null) {
-                    String pin = s.getSecurityManager().generateNewPin();
-                    int remaining = s.getSecurityManager().getPinRemainingSeconds();
-                    PinOverlayDialog.show(MainActivity.this, pin, remaining, httpsUrl, caFp);
-                    Toast.makeText(MainActivity.this, "Schermata PIN aperta a schermo (valida 120s)", Toast.LENGTH_SHORT).show();
-                } else {
-                    SecurityManager sec = new SecurityManager(MainActivity.this);
-                    String pin = sec.generateNewPin();
-                    PinOverlayDialog.show(MainActivity.this, pin, 120, httpsUrl, caFp);
-                    Toast.makeText(MainActivity.this, "Schermata PIN aperta a schermo (valida 120s)", Toast.LENGTH_SHORT).show();
-                }
+                String pin = s.getSecurityManager().generateNewPin();
+                int remaining = s.getSecurityManager().getPinRemainingSeconds();
+                PinOverlayDialog.show(MainActivity.this, pin, remaining, httpsUrl, caFp);
+                Toast.makeText(MainActivity.this, "Schermata PIN aperta a schermo (valida 120s)", Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -120,6 +156,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (stateListener != null) {
+            RemoteServerService.unregisterStateListener(stateListener);
+        }
+        retryHandler.removeCallbacks(retryRunnable);
         try {
             bgExecutor.shutdownNow();
         } catch (Exception ignored) {}
@@ -127,11 +167,11 @@ public class MainActivity extends Activity {
 
     private void updateUI() {
         RemoteServerService s = RemoteServerService.getInstance();
-        boolean running = (s != null);
+        boolean serviceReady = (s != null && s.isReady());
 
         if (tvServiceStatus != null) {
-            tvServiceStatus.setText(running ? "Stato Server: IN ASCOLTO (Porte " + RemoteServerService.HTTP_PORT + " HTTP / " + RemoteServerService.HTTPS_PORT + " HTTPS)" : "Stato Server: In avvio...");
-            tvServiceStatus.setTextColor(running ? 0xFF10B981 : 0xFFF59E0B);
+            tvServiceStatus.setText(serviceReady ? "Stato Server: IN ASCOLTO (Porte " + RemoteServerService.HTTP_PORT + " HTTP / " + RemoteServerService.HTTPS_PORT + " HTTPS)" : "Stato Server: In avvio... (attesa listener HTTP/HTTPS)");
+            tvServiceStatus.setTextColor(serviceReady ? 0xFF10B981 : 0xFFF59E0B);
         }
 
         boolean uinputOk = (s != null && s.getTvController() != null && s.getTvController().isUInputReady());
@@ -145,7 +185,23 @@ public class MainActivity extends Activity {
             tvPairedCount.setText("Sessioni attive: " + activeSessions);
         }
 
-        final String ip = (s != null) ? s.getLocalIpAddress() : getLocalIpAddress();
+        if (btnShowPin != null) {
+            btnShowPin.setEnabled(serviceReady);
+            btnShowPin.setAlpha(serviceReady ? 1.0f : 0.6f);
+        }
+
+        if (!serviceReady) {
+            if (tvCaFingerprint != null) {
+                tvCaFingerprint.setText("In attesa dell'avvio completo del server (listener HTTP " + RemoteServerService.HTTP_PORT + " / HTTPS " + RemoteServerService.HTTPS_PORT + ")...");
+            }
+            if (tvCaUrl != null) tvCaUrl.setText("Server in avvio...");
+            if (tvHttpsUrl != null) tvHttpsUrl.setText("Server in avvio...");
+            if (ivQrCa != null) ivQrCa.setImageBitmap(null);
+            if (ivQrHttps != null) ivQrHttps.setImageBitmap(null);
+            return;
+        }
+
+        final String ip = s.getLocalIpAddress();
         boolean isLocalLoopback = (ip == null || ip.trim().isEmpty() || "127.0.0.1".equals(ip.trim()));
 
         if (isLocalLoopback) {

@@ -73,6 +73,7 @@ jobs:
             akai-remote-tests/host_mock/org/json/*.java \
             akai-remote-tests/host_mock/it/akai/customremote/ai/*.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/qr/*.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ServiceStateListener.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/SecurityManager.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/UInputDriver.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/CommandResult.java \
@@ -83,7 +84,7 @@ jobs:
             akai-remote-tests/UnitTests.java
 
           java -cp test_bin it.akai.customremote.UnitTests
-          echo "All 30 Java unit tests passed with 100% success."
+          echo "All 31 Java unit tests passed with 100% success."
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |

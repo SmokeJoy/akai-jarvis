@@ -95,6 +95,14 @@ public class TlsCertificateManager {
 
     private TlsInfo cachedTlsInfo = null;
 
+    private static Context sAppContext = null;
+
+    public static void setApplicationContext(Context context) {
+        if (context != null) {
+            sAppContext = context.getApplicationContext();
+        }
+    }
+
     public static synchronized TlsCertificateManager getInstance() {
         if (sInstance == null) {
             sInstance = new TlsCertificateManager();
@@ -106,6 +114,11 @@ public class TlsCertificateManager {
      * Carica o genera i certificati TLS a bordo TV garantendo SAN aggiornati.
      */
     public synchronized TlsInfo getOrGenerateTlsInfo(Context context, String localIp) {
+        if (context != null && sAppContext == null) {
+            sAppContext = context.getApplicationContext();
+        }
+        Context effectiveCtx = (context != null) ? context : sAppContext;
+
         if (cachedTlsInfo != null && cachedTlsInfo.keystoreFile != null && cachedTlsInfo.keystoreFile.exists()) {
             boolean ipValid = (localIp == null || localIp.trim().isEmpty() || "127.0.0.1".equals(localIp.trim()) ||
                                (cachedTlsInfo.serverSanList != null && cachedTlsInfo.serverSanList.contains(localIp.trim())));
@@ -115,7 +128,7 @@ public class TlsCertificateManager {
             Log.i(TAG, "Certificato TLS in scadenza o IP TV mutato (" + localIp + "). Avvio rigenerazione...");
         }
 
-        File filesDir = (context != null) ? context.getFilesDir() : new File(".");
+        File filesDir = (effectiveCtx != null) ? effectiveCtx.getFilesDir() : new File(".");
         File ksFile = new File(filesDir, KEYSTORE_FILE_NAME);
         File passFile = new File(filesDir, PASSWORD_FILE_NAME);
         File caPemFile = new File(filesDir, CA_PEM_FILE_NAME);
@@ -197,7 +210,11 @@ public class TlsCertificateManager {
                                         Log.i(TAG, "Certificato Server rinnovato con successo per IP " + localIp + " preservando la Root CA (Fingerprint invariata: " + caFp + ")");
                                         return cachedTlsInfo;
                                     } catch (Exception renewalEx) {
-                                        Log.w(TAG, "Fallimento rinnovo con Root CA esistente (" + renewalEx.getMessage() + "). Rigenerazione completa in corso...");
+                                        Log.e(TAG, "Fallimento rinnovo con Root CA esistente: " + renewalEx.getMessage() + ". Fail-closed: Root CA preservata, nessuna rigenerazione distruttiva.");
+                                        if (cachedTlsInfo != null) {
+                                            return cachedTlsInfo;
+                                        }
+                                        throw new IllegalStateException("Impossibile rinnovare certificato server mantenendo la Root CA: " + renewalEx.getMessage(), renewalEx);
                                     }
                                 }
                             }
@@ -205,7 +222,9 @@ public class TlsCertificateManager {
                     }
                 }
             } catch (Exception e) {
-                Log.w(TAG, "Errore caricamento keystore esistente (" + e.getMessage() + "). Rigenerazione in corso...");
+                if (e instanceof IllegalStateException) throw (IllegalStateException) e;
+                Log.w(TAG, "Errore caricamento keystore esistente (" + e.getMessage() + ").");
+                if (cachedTlsInfo != null) return cachedTlsInfo;
             }
         }
 
