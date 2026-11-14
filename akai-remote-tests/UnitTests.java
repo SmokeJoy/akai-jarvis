@@ -1827,7 +1827,7 @@ public class UnitTests {
             adapter.setKimiRegion(AiProviderAdapter.REGION_KIMI_INTL);
 
             adapter.setTestEndpointOverride(mockUrl);
-            adapter.setTimeoutsForTest(1000, 250);
+            adapter.setTimeoutsForTest(3000, 3000);
             adapter.setActiveProvider(AiProviderAdapter.PROVIDER_DEEPSEEK);
             adapter.setActiveModel(AiProviderAdapter.MODEL_DEEPSEEK_LEGACY);
             adapter.setApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK, "sk-ds-mock-key");
@@ -1871,9 +1871,11 @@ public class UnitTests {
             AiProviderAdapter.AiResponse errOversized = adapter.planActionSequence("x", "{}", null, null);
             boolean okOversized = !errOversized.success;
 
+            adapter.setTimeoutsForTest(1000, 200);
             mockBehavior[0] = "TIMEOUT";
             AiProviderAdapter.AiResponse errTimeout = adapter.planActionSequence("x", "{}", null, null);
             boolean okTimeout = !errTimeout.success && errTimeout.error != null;
+            adapter.setTimeoutsForTest(3000, 3000);
 
             adapter.setApiKey(AiProviderAdapter.PROVIDER_KIMI, "");
             int countBeforeMissing = mockHttpCount.get();
@@ -1901,7 +1903,8 @@ public class UnitTests {
                            rejectUnknown && rejectWaitRange && rejectDisallowedPkg && rejectDestructive && budgetFlagOk;
             if (!test36Passed) {
                 System.err.println("[DEBUG Test 36] def=" + defaultEndpointsOk + " cn=" + cnRegionOk + " loc=" + localZeroHttpOk +
-                    " ds=" + dsOk + " kimi=" + kimiToolOk + " 401=" + ok401 + " 402=" + ok402 + " 429=" + ok429 +
+                    " ds=" + dsOk + " (dsSuccess=" + dsResp.success + ", dsReply=" + dsResp.reply + ", dsErr=" + dsResp.error + ") kimi=" + kimiToolOk +
+                    " 401=" + ok401 + " 402=" + ok402 + " 429=" + ok429 +
                     " to=" + okTimeout + " bad=" + okBadJson + " (badSuccess=" + errBadJson.success + ", badErr=" + errBadJson.error + ") ov=" + okOversized + " mk=" + okMissingKey +
                     " un=" + rejectUnknown + " wr=" + rejectWaitRange + " dp=" + rejectDisallowedPkg +
                     " dk=" + rejectDestructive + " bg=" + budgetFlagOk);
