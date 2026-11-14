@@ -1,0 +1,82 @@
+name: JARVIS Cloud Developer — proposal only
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Describe a single AI skill/code improvement (max 1800 chars)"
+        required: true
+        type: string
+      provider:
+        description: "Cloud model provider"
+        required: true
+        type: choice
+        default: deepseek
+        options: [deepseek, kimi]
+      target:
+        description: "Exact AI Java source path: agent will touch no other file"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: jarvis-developer-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout (without persisted write credentials)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify sandbox allowlist and mock tests (zero API cost)
+        run: python -m unittest discover -s jarvis-cloud-agent -p 'test_*.py' -v
+      - name: Prepare isolated proposal branch
+        shell: bash
+        run: git switch -c "jarvis-cloud/run-${{ github.run_id }}-${{ github.run_attempt }}"
+      - name: Ask LLM to propose a single change (no deploy)
+        shell: bash
+        env:
+          TASK: ${{ inputs.task }}
+          PROVIDER: ${{ inputs.provider }}
+          TARGET: ${{ inputs.target }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          MOONSHOT_MODEL: ${{ vars.MOONSHOT_MODEL }}
+        run: python jarvis-cloud-agent/developer.py --root . --task "$TASK" --provider "$PROVIDER" --target "$TARGET"
+      - name: Check generated change without executing model code
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          git diff --check
+          git status --short
+          git add -- "$TARGET"
+          git diff --cached --quiet && { echo 'No changes generated'; exit 1; }
+      - name: Open draft PR for HUMAN review (never merge)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TASK: ${{ inputs.task }}
+          PROVIDER: ${{ inputs.provider }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          git config user.name 'jarvis-cloud-developer[bot]'
+          git config user.email 'jarvis-cloud-developer[bot]@users.noreply.github.com'
+          git commit -m "agent: propose single AI Java change [manual review required]"
+          gh auth setup-git
+          git push -u origin HEAD
+          gh pr create --draft --base main --head "$(git branch --show-current)" \
+            --title "JARVIS cloud proposal: ${TARGET##*/}" \
+            --body "Untrusted LLM-generated code proposal by the manual JARVIS Cloud Developer workflow. Provider: $PROVIDER. Task supplied by owner. File: $TARGET. Run host unit tests and Android build, review diff and secrets, and obtain owner approval before merge or install. NO TV access or deployment."
