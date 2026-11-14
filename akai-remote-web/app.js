@@ -1497,8 +1497,10 @@
             return;
         }
 
-        if (elements.chkConfirmCaTv && !elements.chkConfirmCaTv.checked) {
-            elements.pairingError.textContent = "Conferma obbligatoria: confronta l'impronta mostrata sullo schermo della TV con quella qui sopra e spunta la casella prima di associare.";
+        // HTTPS must verify CA fingerprint. Classic HTTP LAN remote retains v5 PIN
+        // compatibility; never use this path for AI credentials or voice capture.
+        if (state.proto === 'https' && elements.chkConfirmCaTv && !elements.chkConfirmCaTv.checked) {
+            elements.pairingError.textContent = "Conferma obbligatoria su HTTPS: confronta l'impronta mostrata sulla TV e spunta la casella prima di associare.";
             elements.pairingError.classList.remove('hidden');
             return;
         }
