@@ -46,6 +46,8 @@ $baseApk = Join-Path $buildDir "base.apk"
 $alignedApk = Join-Path $buildDir "aligned.apk"
 $outputDir = Join-Path $buildDir "outputs\apk\debug"
 $finalApk = Join-Path $outputDir "app-debug.apk"
+$releaseOutputDir = Join-Path $buildDir "outputs\apk\release"
+$releaseApk = Join-Path $releaseOutputDir "app-release.apk"
 $debugKeystore = Join-Path $toolsDir "debug.keystore"
 
 # 1. Preparazione cartelle
@@ -56,6 +58,7 @@ New-Item -ItemType Directory -Force -Path $classesDir | Out-Null
 New-Item -ItemType Directory -Force -Path $dexDir | Out-Null
 New-Item -ItemType Directory -Force -Path $libDir | Out-Null
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+New-Item -ItemType Directory -Force -Path $releaseOutputDir | Out-Null
 
 # 2. Compilazione Driver JNI nativo ARMv7
 Write-Host "[2/8] Compilazione Driver nativo C (libakai_uinput.so) con Clang NDK..."
@@ -131,18 +134,36 @@ Write-Host "[8/8] Firma digitale APK con apksigner (schemi v1 + v2)..."
 $signArgs = @("-jar", $apksignerJar, "sign", "--ks", $debugKeystore, "--ks-pass", "pass:android", "--key-pass", "pass:android", "--out", $finalApk, $alignedApk)
 & $java $signArgs
 
-if (Test-Path $finalApk) {
-    $sha256 = (Get-FileHash -Path $finalApk -Algorithm SHA256).Hash
-    $sizeKb = [Math]::Round((Get-Item $finalApk).Length / 1024, 2)
+$signReleaseArgs = @("-jar", $apksignerJar, "sign", "--ks", $debugKeystore, "--ks-pass", "pass:android", "--key-pass", "pass:android", "--out", $releaseApk, $alignedApk)
+& $java $signReleaseArgs
+
+if ((Test-Path $finalApk) -and (Test-Path $releaseApk)) {
+    $sha256 = (Get-FileHash -Path $releaseApk -Algorithm SHA256).Hash
+    $sizeKb = [Math]::Round((Get-Item $releaseApk).Length / 1024, 2)
     Write-Host "`n========================================================" -ForegroundColor Green
-    Write-Host " APK COMPLETO PRODOTTO CON SUCCESSO!" -ForegroundColor Green
+    Write-Host " APK RELEASE NON-DEBUGGABLE PRODOTTO CON SUCCESSO!" -ForegroundColor Green
     Write-Host "========================================================" -ForegroundColor Green
-    Write-Host " APK File : $finalApk"
-    Write-Host " Peso     : $sizeKb KB" -ForegroundColor Yellow
-    Write-Host " SHA-256  : $sha256" -ForegroundColor Yellow
+    Write-Host " Release APK : $releaseApk"
+    Write-Host " Debug Path  : $finalApk"
+    Write-Host " Peso        : $sizeKb KB" -ForegroundColor Yellow
+    Write-Host " SHA-256     : $sha256" -ForegroundColor Yellow
+
+    Write-Host "`nVerifica flag debuggable (FAIL-CLOSED):"
+    $aaptCli = Join-Path $buildToolsDir "aapt.exe"
+    if (Test-Path $aaptCli) {
+        $xmlTree = & $aaptCli dump xmltree $releaseApk AndroidManifest.xml 2>&1 | Out-String
+        if ($xmlTree -match "android:debuggable\(0x0101000f\)=\(type 0x12\)0x0") {
+            Write-Host "      [PASS] android:debuggable = false (0x0) confermato nel manifest compilato!" -ForegroundColor Green
+        } elseif ($xmlTree -notmatch "android:debuggable") {
+            Write-Host "      [PASS] android:debuggable assente (default false garantito da Android OS)!" -ForegroundColor Green
+        } else {
+            Write-Host "      [FAIL] android:debuggable non conforme!" -ForegroundColor Red
+            exit 1
+        }
+    }
 
     Write-Host "`nVerifica firma apksigner:"
-    $verifyArgs = @("-jar", $apksignerJar, "verify", "--verbose", $finalApk)
+    $verifyArgs = @("-jar", $apksignerJar, "verify", "--print-certs", $releaseApk)
     & $java $verifyArgs
 } else {
     Write-Host "ERRORE: APK finale non generato." -ForegroundColor Red

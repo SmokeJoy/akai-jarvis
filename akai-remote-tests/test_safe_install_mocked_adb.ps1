@@ -76,6 +76,54 @@ try {
     throw "Impossibile creare database SQLite di mock: nessun interprete disponibile (Python, sqlite3, Node.js)."
 }
 
+function New-MockTlsPfx {
+    param([string]$FilePath, [string]$SanIp = "127.0.0.1", [string]$Password = "pass123")
+    $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+    $san.AddIpAddress([System.Net.IPAddress]::Parse($SanIp))
+    $req = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new("CN=$SanIp", $rsa, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $req.CertificateExtensions.Add($san.Build())
+    $cert = $req.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+    [System.IO.File]::WriteAllBytes($FilePath, $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $Password))
+    return $cert.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+}
+
+function Start-MockHttpsNodeServer {
+    param([string]$PfxPath, [string]$BaseDir, [string]$Password = "pass123")
+    $jsPath = Join-Path $BaseDir "srv_https_$([Guid]::NewGuid().ToString('N')).js"
+    $pFile = Join-Path $BaseDir "port_https_$([Guid]::NewGuid().ToString('N')).txt"
+    $escapedPfx = $PfxPath.Replace('\', '/')
+    $escapedPort = $pFile.Replace('\', '/')
+
+    $srvCode = @"
+const https = require('https');
+const fs = require('fs');
+const srv = https.createServer({ pfx: fs.readFileSync('$escapedPfx'), passphrase: '$Password' }, (req, res) => res.end('ok'));
+srv.on('error', () => {});
+srv.on('tlsClientError', () => {});
+srv.listen(0, '127.0.0.1', () => {
+    fs.writeFileSync('$escapedPort', srv.address().port.toString());
+});
+setInterval(() => {}, 1000);
+"@
+    [System.IO.File]::WriteAllText($jsPath, $srvCode)
+    $proc = Start-Process -FilePath "$validNode" -ArgumentList "`"$jsPath`"" -PassThru -NoNewWindow
+    $cnt = 50
+    [int]$port = 0
+    while ($cnt -gt 0) {
+        if (Test-Path $pFile) {
+            $rawPort = Get-Content $pFile -Raw -ErrorAction SilentlyContinue
+            if ($rawPort -and $rawPort -match '^\s*(\d+)\s*$' -and ([int]$matches[1] -gt 0)) {
+                $port = [int]$matches[1]
+                break
+            }
+        }
+        Start-Sleep -Milliseconds 100
+        $cnt--
+    }
+    return @{ Process = $proc; Port = $port }
+}
+
 # -----------------------------------------------------------------------------
 # PARTE 1: TEST NEGATIVI / FAIL-CLOSED
 # -----------------------------------------------------------------------------
@@ -425,6 +473,11 @@ try {
         throw "Server HTTP mock Test 7 non pronto o terminato prematuramente (HasExited=$($httpProc7.HasExited))"
     }
 
+    $pfx7 = Join-Path $testDir7 "cert7.pfx"
+    $shaCa7 = New-MockTlsPfx -FilePath $pfx7 -SanIp "127.0.0.1"
+    $httpsProc7 = Start-MockHttpsNodeServer -PfxPath $pfx7 -BaseDir $testDir7
+    $httpsPort7 = $httpsProc7.Port
+
     $scriptEscaped = $scriptPath.Replace('\', '/')
     $candidateEscaped = $candidateApk7.Replace('\', '/')
     $mockAdbEscaped = $mockAdbCmd7.Replace('\', '/')
@@ -443,7 +496,7 @@ try {
 `$env:WATCHDOG_ATTEMPTS = '2'
 `$env:WATCHDOG_SLEEP_SEC = '1'
 
-& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort $port7 -AuthToken 'mock_v5_token' -BackupDir '$backupDirEscaped' -AllowHardwareExecution
+& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort $port7 -HttpsPort $httpsPort7 -AuthToken 'mock_v5_token' -BackupDir '$backupDirEscaped' -AllowHardwareExecution
 "@
     $res7 = & $psExe -ExecutionPolicy Bypass -Command $testCmd7 2>&1 | Out-String
 
@@ -459,6 +512,7 @@ try {
     $failed++
 } finally {
     if ($httpProc7 -and -not $httpProc7.HasExited) { Stop-Process -Id $httpProc7.Id -Force -ErrorAction SilentlyContinue }
+    if ($httpsProc7 -and $httpsProc7.Process -and -not $httpsProc7.Process.HasExited) { Stop-Process -Id $httpsProc7.Process.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $readyFile7 -Force -ErrorAction SilentlyContinue
     Remove-Item $testDir7 -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -2344,6 +2398,11 @@ server.listen($port24, '127.0.0.1', () => { fs.writeFileSync('$readyEsc24', '1')
 
 $srvProc24 = $null
 try {
+    $pfx24 = Join-Path $testDir24 "cert24.pfx"
+    $null = New-MockTlsPfx -FilePath $pfx24 -SanIp "127.0.0.1"
+    $httpsProc24 = Start-MockHttpsNodeServer -PfxPath $pfx24 -BaseDir $testDir24
+    $httpsPort24 = $httpsProc24.Port
+
     $srvProc24 = Start-Process -FilePath $validNode -ArgumentList "`"$nodeServerScript24`"" -PassThru -NoNewWindow
     $wait24 = 100
     while (-not (Test-Path $readyFile24) -and -not $srvProc24.HasExited -and $wait24 -gt 0) {
@@ -2361,7 +2420,7 @@ try {
 `$env:PATH = '$mockDirEscaped24' + [System.IO.Path]::PathSeparator + `$env:PATH
 `$env:WATCHDOG_ATTEMPTS = '2'
 `$env:WATCHDOG_SLEEP_SEC = '1'
-& '$scriptEscaped' -Action install -ApkPath '$candApkEscaped24' -TargetTv '127.0.0.1' -HttpPort $port24 -AllowHardwareExecution -GreenfieldStart
+& '$scriptEscaped' -Action install -ApkPath '$candApkEscaped24' -TargetTv '127.0.0.1' -HttpPort $port24 -HttpsPort $httpsPort24 -AllowHardwareExecution -GreenfieldStart
 "@
     $out24 = & $psExe -ExecutionPolicy Bypass -Command $cmd24 2>&1 | Out-String
 
@@ -2380,6 +2439,7 @@ try {
     $failed++
 } finally {
     if ($srvProc24 -and -not $srvProc24.HasExited) { Stop-Process -Id $srvProc24.Id -Force -ErrorAction SilentlyContinue }
+    if ($httpsProc24 -and $httpsProc24.Process -and -not $httpsProc24.Process.HasExited) { Stop-Process -Id $httpsProc24.Process.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $readyFile24 -Force -ErrorAction SilentlyContinue
     Remove-Item $testDir24 -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -3433,6 +3493,320 @@ if ($subPassed29 -eq 14) {
 } else {
     Write-Host "[FAIL] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Sotto-test superati: $subPassed29 / 14" -ForegroundColor Red
     $failed++
+}
+
+# -----------------------------------------------------------------------------
+# TEST 30: Watchdog Fail-Closed quando HTTP 8088=200 ma HTTPS 8443 NON ascolta -> Auto-Rollback a v5 (P0-2)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 30: Watchdog Fail-Closed su HTTPS 8443 Spento (Porta Chiusa) con Rollback Atomico ---" -ForegroundColor Cyan
+$testDir30 = Join-Path $tempDir "e2e_watchdog_https_down_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir30 | Out-Null
+
+$mockHttpScript30 = Join-Path $testDir30 "mock_http_30.js"
+$mockAdbJs30 = Join-Path $testDir30 "mock_adb_30.js"
+$mockSignerJs30 = Join-Path $testDir30 "mock_signer_30.js"
+$realDb30 = Join-Path $testDir30 "device_db.sqlite"
+$deviceApk30 = Join-Path $testDir30 "device_backup.apk"
+$candidateApk30 = Join-Path $testDir30 "candidate_release.apk"
+$backupDir30 = Join-Path $testDir30 "backup_target"
+$restoredTargetDb30 = Join-Path $testDir30 "restored_on_device.sqlite"
+
+New-MockRealDatabase -FilePath $realDb30
+[System.IO.File]::WriteAllText($deviceApk30, "PK_DEVICE_BACKUP_APK_MOCK_30")
+[System.IO.File]::WriteAllText($candidateApk30, "PK_CANDIDATE_RELEASE_APK_MOCK_30")
+
+@"
+console.log('Signer #1 certificate SHA-256 digest: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs30 -Encoding ascii
+
+$mockSignerCmd30 = if ($isWin) { Join-Path $testDir30 "apksigner.cmd" } else { Join-Path $testDir30 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs30`" %*" | Out-File -FilePath $mockSignerCmd30 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs30`" `"`$@`"" | Out-File -FilePath $mockSignerCmd30 -Encoding ascii
+    & chmod +x $mockSignerCmd30
+}
+
+@"
+const fs = require('fs');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
+
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
+if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
+if (args.includes('pull')) {
+    const dest = process.argv[process.argv.length - 1];
+    fs.copyFileSync(process.env.DEVICE_APK_FILE, dest);
+    process.exit(0);
+}
+if (args.includes('exec-in')) {
+    const target = process.env.DEVICE_RESTORE_TARGET;
+    const chunks = [];
+    process.stdin.on('data', chunk => chunks.push(chunk));
+    process.stdin.on('end', () => {
+        fs.writeFileSync(target, Buffer.concat(chunks));
+        process.exit(0);
+    });
+    return;
+}
+if (args.includes('exec-out')) {
+    const target = fs.existsSync(process.env.DEVICE_RESTORE_TARGET) ? process.env.DEVICE_RESTORE_TARGET : process.env.DEVICE_DB_FILE;
+    const buf = fs.readFileSync(target);
+    process.stdout.write(buf, () => process.exit(0));
+    return;
+}
+if (args.includes('install')) { console.log('Success'); process.exit(0); }
+if (args.includes('PIDOF_CHECK') || args.includes('pids=')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+if (args.includes('pidof')) { console.log('1234'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
+if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
+if (args.includes('shell')) { process.exit(0); }
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs30 -Encoding ascii
+
+$mockAdbCmd30 = if ($isWin) { Join-Path $testDir30 "adb.cmd" } else { Join-Path $testDir30 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs30`" %*" | Out-File -FilePath $mockAdbCmd30 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs30`" `"`$@`"" | Out-File -FilePath $mockAdbCmd30 -Encoding ascii
+    & chmod +x $mockAdbCmd30
+}
+
+$port30 = Get-FreeLoopbackPort
+$closedHttpsPort30 = Get-FreeLoopbackPort
+$readyFile30 = Join-Path $testDir30 "ready_30.txt"
+$readyEsc30 = $readyFile30.Replace('\', '/')
+@"
+const http = require('http');
+const fs = require('fs');
+const server = http.createServer((req, res) => {
+  if (req.url === '/api/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
+  } else if (req.url === '/index.html') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<!DOCTYPE html><html><body>AKAI Web Remote</body></html>');
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+server.listen($port30, '127.0.0.1', () => { fs.writeFileSync('$readyEsc30', '1'); });
+"@ | Out-File -FilePath $mockHttpScript30 -Encoding ascii
+
+$httpProc30 = $null
+try {
+    $httpProc30 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript30`"" -PassThru -NoNewWindow
+    $wait30 = 100
+    while (-not (Test-Path $readyFile30) -and -not $httpProc30.HasExited -and $wait30 -gt 0) {
+        Start-Sleep -Milliseconds 100
+        $wait30--
+    }
+
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $candidateEscaped = $candidateApk30.Replace('\', '/')
+    $mockAdbEscaped = $mockAdbCmd30.Replace('\', '/')
+    $mockSignerEscaped = $mockSignerCmd30.Replace('\', '/')
+    $realDbEscaped = $realDb30.Replace('\', '/')
+    $deviceApkEscaped = $deviceApk30.Replace('\', '/')
+    $backupDirEscaped = $backupDir30.Replace('\', '/')
+    $nodeEscaped = $validNode.Replace('\', '/')
+    $targetRestoreEsc = $restoredTargetDb30.Replace('\', '/')
+
+    $testCmd30 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped'
+`$env:DEVICE_DB_FILE = '$realDbEscaped'
+`$env:DEVICE_APK_FILE = '$deviceApkEscaped'
+`$env:DEVICE_RESTORE_TARGET = '$targetRestoreEsc'
+`$env:WATCHDOG_ATTEMPTS = '2'
+`$env:WATCHDOG_SLEEP_SEC = '1'
+
+& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort $port30 -HttpsPort $closedHttpsPort30 -BackupDir '$backupDirEscaped' -AllowHardwareExecution
+"@
+    $res30 = & $psExe -ExecutionPolicy Bypass -Command $testCmd30 2>&1 | Out-String
+
+    if ($res30 -match "ALLARME: Health check fallito entro 30s! Avvio ROLLBACK" -and
+        $res30 -match "ROLLBACK RIUSCITO E VERIFICATO" -and
+        $res30 -match "TCP_TIMEOUT|NON operativo") {
+        Write-Host "[PASS] [TEST NEGATIVO / WATCHDOG HTTPS DOWN FAIL-CLOSED] Test 30: Watchdog fallito su HTTPS 8443 spento (HTTP=200 non sufficiente) -> Rollback atomico a v5 eseguito e verificato" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / WATCHDOG HTTPS DOWN FAIL-CLOSED] Test 30: Mancato rollback su HTTPS spento: $res30" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST NEGATIVO / WATCHDOG HTTPS DOWN FAIL-CLOSED] Test 30: Eccezione imprevista: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($httpProc30 -and -not $httpProc30.HasExited) { Stop-Process -Id $httpProc30.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir30 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# -----------------------------------------------------------------------------
+# TEST 31: Watchdog Fail-Closed su SAN Mismatch Certificato HTTPS 8443 -> Auto-Rollback a v5 (P0-2)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 31: Watchdog Fail-Closed su SAN Mismatch Certificato HTTPS con Rollback Atomico ---" -ForegroundColor Cyan
+$testDir31 = Join-Path $tempDir "e2e_watchdog_san_mismatch_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir31 | Out-Null
+
+$mockHttpScript31 = Join-Path $testDir31 "mock_http_31.js"
+$mockAdbJs31 = Join-Path $testDir31 "mock_adb_31.js"
+$mockSignerJs31 = Join-Path $testDir31 "mock_signer_31.js"
+$realDb31 = Join-Path $testDir31 "device_db.sqlite"
+$deviceApk31 = Join-Path $testDir31 "device_backup.apk"
+$candidateApk31 = Join-Path $testDir31 "candidate_release.apk"
+$backupDir31 = Join-Path $testDir31 "backup_target"
+$restoredTargetDb31 = Join-Path $testDir31 "restored_on_device.sqlite"
+$pfxBadSan31 = Join-Path $testDir31 "cert_badsan.pfx"
+
+New-MockRealDatabase -FilePath $realDb31
+[System.IO.File]::WriteAllText($deviceApk31, "PK_DEVICE_BACKUP_APK_MOCK_31")
+[System.IO.File]::WriteAllText($candidateApk31, "PK_CANDIDATE_RELEASE_APK_MOCK_31")
+$null = New-MockTlsPfx -FilePath $pfxBadSan31 -SanIp "192.168.1.99"
+$httpsProc31 = Start-MockHttpsNodeServer -PfxPath $pfxBadSan31 -BaseDir $testDir31
+$httpsPort31 = $httpsProc31.Port
+
+@"
+console.log('Signer #1 certificate SHA-256 digest: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs31 -Encoding ascii
+
+$mockSignerCmd31 = if ($isWin) { Join-Path $testDir31 "apksigner.cmd" } else { Join-Path $testDir31 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs31`" %*" | Out-File -FilePath $mockSignerCmd31 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs31`" `"`$@`"" | Out-File -FilePath $mockSignerCmd31 -Encoding ascii
+    & chmod +x $mockSignerCmd31
+}
+
+@"
+const fs = require('fs');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
+
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
+if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
+if (args.includes('pull')) {
+    const dest = process.argv[process.argv.length - 1];
+    fs.copyFileSync(process.env.DEVICE_APK_FILE, dest);
+    process.exit(0);
+}
+if (args.includes('exec-in')) {
+    const target = process.env.DEVICE_RESTORE_TARGET;
+    const chunks = [];
+    process.stdin.on('data', chunk => chunks.push(chunk));
+    process.stdin.on('end', () => {
+        fs.writeFileSync(target, Buffer.concat(chunks));
+        process.exit(0);
+    });
+    return;
+}
+if (args.includes('exec-out')) {
+    const target = fs.existsSync(process.env.DEVICE_RESTORE_TARGET) ? process.env.DEVICE_RESTORE_TARGET : process.env.DEVICE_DB_FILE;
+    const buf = fs.readFileSync(target);
+    process.stdout.write(buf, () => process.exit(0));
+    return;
+}
+if (args.includes('install')) { console.log('Success'); process.exit(0); }
+if (args.includes('PIDOF_CHECK') || args.includes('pids=')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+if (args.includes('pidof')) { console.log('1234'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
+if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
+if (args.includes('shell')) { process.exit(0); }
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs31 -Encoding ascii
+
+$mockAdbCmd31 = if ($isWin) { Join-Path $testDir31 "adb.cmd" } else { Join-Path $testDir31 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs31`" %*" | Out-File -FilePath $mockAdbCmd31 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs31`" `"`$@`"" | Out-File -FilePath $mockAdbCmd31 -Encoding ascii
+    & chmod +x $mockAdbCmd31
+}
+
+$port31 = Get-FreeLoopbackPort
+$readyFile31 = Join-Path $testDir31 "ready_31.txt"
+$readyEsc31 = $readyFile31.Replace('\', '/')
+@"
+const http = require('http');
+const fs = require('fs');
+const server = http.createServer((req, res) => {
+  if (req.url === '/api/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
+  } else if (req.url === '/index.html') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<!DOCTYPE html><html><body>AKAI Web Remote</body></html>');
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+server.listen($port31, '127.0.0.1', () => { fs.writeFileSync('$readyEsc31', '1'); });
+"@ | Out-File -FilePath $mockHttpScript31 -Encoding ascii
+
+$httpProc31 = $null
+try {
+    $httpProc31 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript31`"" -PassThru -NoNewWindow
+    $wait31 = 100
+    while (-not (Test-Path $readyFile31) -and -not $httpProc31.HasExited -and $wait31 -gt 0) {
+        Start-Sleep -Milliseconds 100
+        $wait31--
+    }
+
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $candidateEscaped = $candidateApk31.Replace('\', '/')
+    $mockAdbEscaped = $mockAdbCmd31.Replace('\', '/')
+    $mockSignerEscaped = $mockSignerCmd31.Replace('\', '/')
+    $realDbEscaped = $realDb31.Replace('\', '/')
+    $deviceApkEscaped = $deviceApk31.Replace('\', '/')
+    $backupDirEscaped = $backupDir31.Replace('\', '/')
+    $nodeEscaped = $validNode.Replace('\', '/')
+    $targetRestoreEsc = $restoredTargetDb31.Replace('\', '/')
+
+    $testCmd31 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped'
+`$env:DEVICE_DB_FILE = '$realDbEscaped'
+`$env:DEVICE_APK_FILE = '$deviceApkEscaped'
+`$env:DEVICE_RESTORE_TARGET = '$targetRestoreEsc'
+`$env:WATCHDOG_ATTEMPTS = '2'
+`$env:WATCHDOG_SLEEP_SEC = '1'
+
+& '$scriptEscaped' -Action install -ApkPath '$candidateEscaped' -TargetTv '127.0.0.1' -HttpPort $port31 -HttpsPort $httpsPort31 -BackupDir '$backupDirEscaped' -AllowHardwareExecution
+"@
+    $res31 = & $psExe -ExecutionPolicy Bypass -Command $testCmd31 2>&1 | Out-String
+
+    if ($res31 -match "ALLARME: Health check fallito entro 30s! Avvio ROLLBACK" -and
+        $res31 -match "ROLLBACK RIUSCITO E VERIFICATO" -and
+        $res31 -match "SAN_MISMATCH") {
+        Write-Host "[PASS] [TEST NEGATIVO / WATCHDOG SAN MISMATCH FAIL-CLOSED] Test 31: Watchdog fallito su SAN mismatch certificato HTTPS -> Rollback atomico a v5 eseguito e verificato" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / WATCHDOG SAN MISMATCH FAIL-CLOSED] Test 31: Mancato rollback su SAN mismatch: $res31" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST NEGATIVO / WATCHDOG SAN MISMATCH FAIL-CLOSED] Test 31: Eccezione imprevista: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($httpProc31 -and -not $httpProc31.HasExited) { Stop-Process -Id $httpProc31.Id -Force -ErrorAction SilentlyContinue }
+    if ($httpsProc31 -and $httpsProc31.Process -and -not $httpsProc31.Process.HasExited) { Stop-Process -Id $httpsProc31.Process.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir31 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan

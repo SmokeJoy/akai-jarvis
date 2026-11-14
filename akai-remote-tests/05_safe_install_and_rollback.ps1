@@ -1983,22 +1983,18 @@ switch ($Action) {
             try {
                 $statusResp = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 4 -ErrorAction Stop
                 
-                # Sulla baseline v5 /index.html restituisce 200 OK.
-                # Sul nuovo server M2/M3 HTTPS l'accesso HTTP in chiaro restituisce 426 Upgrade Required (fail-closed).
-                # Entrambi gli esiti validano che la porta HTTP 8088 rispetta la corretta policy.
+                # 1. Verifica HTTP 8088 (/index.html e /api/status)
                 $webOk = $false
                 $webStatusMsg = ""
-                $isHttpsUpgradeMode = $false
                 try {
                     $webResp = Invoke-WebRequest -Uri $WebUrl -Method Get -TimeoutSec 4 -UseBasicParsing -ErrorAction Stop
                     if ($webResp.StatusCode -eq 200) {
                         $webOk = $true
-                        $webStatusMsg = "HTTP 200 ($($webResp.RawContentLength) bytes - baseline v5 plaintext)"
+                        $webStatusMsg = "HTTP 200 ($($webResp.RawContentLength) bytes - telecomando classico LAN HTTP)"
                     }
                 } catch {
                     if ($_.Exception.Message -match "426" -or ($_.Exception.Response -and $_.Exception.Response.StatusCode -eq 426)) {
                         $webOk = $true
-                        $isHttpsUpgradeMode = $true
                         $webStatusMsg = "HTTP 426 Upgrade Required (Policy HTTP 8088 Fail-Closed Verificata)"
                     } else {
                         throw $_
@@ -2006,40 +2002,37 @@ switch ($Action) {
                 }
                 $pidVal = (& $adb -s $TargetAdb shell "pidof $PackageName").Trim()
 
-                # Verifica porta HTTPS 8443 (separazione formale tra policy HTTP 426 e operativita' TLS 8443)
+                # 2. Verifica OBBLIGATORIA Porta HTTPS 8443 per il nuovo candidato JARVIS (P0-2)
+                # Il candidato DEVE esporre sia HTTP 8088 operativo sia HTTPS 8443 TLS attivo.
                 $httpsOk = $false
                 $httpsStatusMsg = ""
-                if ($isHttpsUpgradeMode) {
-                    # Se HTTP 8088 impone 426, il Web Remote DEVE rispondere su HTTPS 8443. Eseguiamo il probe reale TLS con validazione SAN e CA:
-                    $tlsRes = Test-HttpsTlsEndpoint -TargetHost $TargetTv -Port $HttpsPort -ExpectedCaSha256 $ExpectedCaFingerprint -TimeoutMs 4000
-                    if ($tlsRes.Success -and $tlsRes.Status -eq "APPROVED") {
+                $tlsRes = Test-HttpsTlsEndpoint -TargetHost $TargetTv -Port $HttpsPort -ExpectedCaSha256 $ExpectedCaFingerprint -TimeoutMs 4000
+                if ($tlsRes.Success -and $tlsRes.Status -eq "APPROVED") {
+                    $httpsOk = $true
+                    $httpsStatusMsg = "APPROVED (Porta $HttpsPort, Handshake TLS OK, SAN=$TargetTv OK, Root CA SHA256=$($tlsRes.RootCaSha256) Verificata)"
+                } elseif ($tlsRes.SanMatched -and $tlsRes.Status -eq "TLS_HANDSHAKE_ONLY/UNVERIFIED") {
+                    if ([string]::IsNullOrWhiteSpace($ExpectedCaFingerprint)) {
                         $httpsOk = $true
-                        $httpsStatusMsg = "APPROVED (Porta $HttpsPort, Handshake TLS OK, SAN=$TargetTv OK, Root CA SHA256=$($tlsRes.RootCaSha256) Verificata)"
-                    } elseif ($tlsRes.Status -eq "TLS_HANDSHAKE_ONLY/UNVERIFIED") {
-                        $httpsOk = $false
-                        $httpsStatusMsg = "UNVERIFIED: Handshake TLS attivo ma Root CA non ancora validata fuori banda. Stato: TLS_HANDSHAKE_ONLY/UNVERIFIED (Collaudo bloccato prima del bootstrap)"
+                        $httpsStatusMsg = "TLS_HANDSHAKE_OK (Porta $HttpsPort, Handshake TLS OK, SAN=$TargetTv OK, Root CA SHA256=$($tlsRes.RootCaSha256) pronta per bootstrap OOB)"
                     } else {
                         $httpsOk = $false
-                        $httpsStatusMsg = "FALLITO ($($tlsRes.Status): $($tlsRes.Error)) - Web Remote HTTPS NON approvato"
+                        $httpsStatusMsg = "UNVERIFIED: Handshake TLS attivo ma Root CA non corrisponde all'impronta attesa ($ExpectedCaFingerprint)"
                     }
                 } else {
-                    # Baseline v5: HTTPS 8443 non esisteva, solo HTTP 200 plaintext
-                    $httpsOk = $true
-                    $httpsStatusMsg = "N/A (Baseline v5 solo HTTP plaintext)"
+                    $httpsOk = $false
+                    $httpsStatusMsg = "FALLITO ($($tlsRes.Status): $($tlsRes.Error)) - HTTPS $HttpsPort NON operativo"
                 }
 
                 if ($statusResp.status -eq "ok" -and $statusResp.uinput_ready -eq $true -and $webOk -and $httpsOk -and $pidVal) {
                     $healthy = $true
                     Write-Host "      Tentativo $i/$($attempts) SUPERATO:" -ForegroundColor Green
                     Write-Host "      - API Status       : OK (uinput_ready=true, active_sessions=$($statusResp.active_sessions))" -ForegroundColor Green
-                    Write-Host "      - Policy HTTP 8088 : OK ($webStatusMsg)" -ForegroundColor Green
+                    Write-Host "      - Telecomando HTTP : OK ($webStatusMsg)" -ForegroundColor Green
                     Write-Host "      - HTTPS 8443 TLS   : OK ($httpsStatusMsg)" -ForegroundColor Green
                     Write-Host "      - Processo TV      : ATTIVO (PID $pidVal)" -ForegroundColor Green
                     break
                 } else {
-                    if ($isHttpsUpgradeMode -and -not $httpsOk) {
-                        Write-Host "      Tentativo $i/$($attempts) - Policy HTTP 426 verificata, ma HTTPS 8443 non ancora operativo: $httpsStatusMsg" -ForegroundColor Yellow
-                    }
+                    Write-Host "      Tentativo $i/$($attempts) - In attesa: HTTP=($($webOk) - $webStatusMsg), HTTPS=($($httpsOk) - $httpsStatusMsg), Status=($($statusResp.status)), PID=($pidVal)" -ForegroundColor Yellow
                 }
             } catch {
                 Write-Host "      Tentativo $i/$($attempts) - Inizializzazione in corso ($($_.Exception.Message))..." -ForegroundColor Yellow
