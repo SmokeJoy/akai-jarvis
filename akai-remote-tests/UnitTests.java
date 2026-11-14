@@ -1055,19 +1055,39 @@ public class UnitTests {
         // =========================================================================
         // Test 29 (PR-01 M2/M3 Security Hardening): Channel Security (HTTP 426), Whitelist Bootstrap, RFC 1918 Subnet Isolation & Dynamic IP Cert Renewal
         // =========================================================================
-        // 1. Canale HTTP in chiaro (isTls=false) su endpoint sensibili -> HTTP 426 Upgrade Required
-        MockHttpResponse rHttpPair = dispatch(router, "POST", "/api/auth/pair", new HashMap<>(), "{\"pin\":\"123456\"}", "192.168.1.10", false);
-        boolean okHttpPairBlocked = (rHttpPair.statusCode == 426) && (rHttpPair.json != null) &&
-                                    "HTTPS_REQUIRED".equals(rHttpPair.json.optString("error")) &&
-                                    (rHttpPair.json.optInt("https_port") == 8443);
+        // 1. Proprietario P0: remote v5 compatibile via HTTP LAN, AI sensibile solo HTTPS.
+        // No PIN/token HTTP security assertion: HTTP is not encrypted; RFC1918 + PIN/Token guard.
+        MockHttpResponse rHttpPair = dispatch(router, "POST", "/api/auth/pair",
+                new HashMap<>(), "{\"pin\":\"\"}", "192.168.1.10", false);
+        boolean okHttpPairRejected = (rHttpPair.statusCode == 401);
 
-        MockHttpResponse rHttpPairReq = dispatch(router, "POST", "/api/auth/pair/request", new HashMap<>(), "{\"client\":\"web_remote\"}", "192.168.1.10", false);
-        boolean okHttpPairReqBlocked = (rHttpPairReq.statusCode == 426) && (rHttpPairReq.json != null) &&
-                                       "HTTPS_REQUIRED".equals(rHttpPairReq.json.optString("error"));
+        MockHttpResponse rHttpPairReq = dispatch(router, "POST", "/api/auth/pair/request",
+                new HashMap<>(), "{\"client\":\"web_remote\"}", "192.168.1.10", false);
+        boolean okHttpPairReqAllowed = (rHttpPairReq.statusCode == 200)
+                && rHttpPairReq.json != null && rHttpPairReq.json.optBoolean("success");
 
-        MockHttpResponse rHttpCommand = dispatch(router, "POST", "/api/command", authHeaders, "{\"action\":\"home\"}", "192.168.1.10", false);
-        boolean okHttpCommandBlocked = (rHttpCommand.statusCode == 426) && (rHttpCommand.json != null) &&
-                                       "HTTPS_REQUIRED".equals(rHttpCommand.json.optString("error"));
+        MockHttpResponse rHttpCommand = dispatch(router, "POST", "/api/command",
+                authHeaders, "{\"action\":\"volume_up\"}", "192.168.1.10", false);
+        boolean okHttpCommandAllowed = (rHttpCommand.statusCode == 200)
+                && rHttpCommand.json != null && rHttpCommand.json.optBoolean("success");
+
+        MockHttpResponse rHttpControl = dispatch(router, "POST", "/api/control/command",
+                authHeaders, "{\"action\":\"channel_up\"}", "192.168.1.10", false);
+        boolean okHttpControlAllowed = (rHttpControl.statusCode == 200)
+                && rHttpControl.json != null && rHttpControl.json.optBoolean("success");
+
+        MockHttpResponse rHttpText = dispatch(router, "POST", "/api/control/text",
+                authHeaders, "{\"text\":\"Rai 1\"}", "192.168.1.10", false);
+        boolean okHttpTextAllowed = (rHttpText.statusCode == 200)
+                && rHttpText.json != null && rHttpText.json.optBoolean("success");
+
+        MockHttpResponse rHttpNoAuth = dispatch(router, "POST", "/api/command",
+                new HashMap<>(), "{\"action\":\"volume_up\"}", "192.168.1.10", false);
+        boolean okHttpNoAuth = (rHttpNoAuth.statusCode == 401);
+
+        MockHttpResponse rHttpWan = dispatch(router, "POST", "/api/command",
+                authHeaders, "{\"action\":\"volume_up\"}", "8.8.8.8", false);
+        boolean okHttpWan = (rHttpWan.statusCode == 403);
 
         MockHttpResponse rHttpAi = dispatch(router, "POST", "/api/ai/ask", authHeaders, "{\"query\":\"alza il volume\"}", "192.168.1.10", false);
         boolean okHttpAiBlocked = (rHttpAi.statusCode == 426) && (rHttpAi.json != null) &&
@@ -1101,16 +1121,18 @@ public class UnitTests {
                                    originalCaFp.equals(updatedTls.caFingerprintSha256) &&
                                    updatedTls.serverSanList.contains("10.0.0.42");
 
-        boolean test29Passed = okHttpPairBlocked && okHttpPairReqBlocked && okHttpCommandBlocked && okHttpAiBlocked &&
+        boolean test29Passed = okHttpPairRejected && okHttpPairReqAllowed && okHttpCommandAllowed &&
+                               okHttpControlAllowed && okHttpTextAllowed && okHttpNoAuth && okHttpWan && okHttpAiBlocked &&
                                okHttpStatusAllowed && okHttpCaAllowed && okHttpTlsInfoAllowed &&
                                okRfc10 && okRfc172 && okRfc192 && okWanRejected && okDynamicRenewal;
 
         if (test29Passed) {
-            System.out.println("[PASS] Test 29 (PR-01 M2/M3 Security): Enforcement HTTP 426 Upgrade Required su canali in chiaro, whitelist bootstrap (status, ca.crt, tls_info), isolamento subnet RFC 1918 (10/8, 172.16/12, 192.168/16) e rinnovo SAN su IP dinamico con conservazione immutabile della Root CA");
+            System.out.println("[PASS] Test 29 (P0 Legacy Remote): LAN HTTP PIN/remote with auth, WAN blocked, AI still HTTPS only, bootstrap and SAN renewal");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 29: okPair=" + okHttpPairBlocked + " okPairReq=" + okHttpPairReqBlocked +
-                " okCmd=" + okHttpCommandBlocked + " okAi=" + okHttpAiBlocked +
+            System.err.println("[FAIL] Test 29: okPair=" + okHttpPairRejected + " okPairReq=" + okHttpPairReqAllowed +
+                " okCmd=" + okHttpCommandAllowed + " okControl=" + okHttpControlAllowed + " okText=" + okHttpTextAllowed +
+                " okNoAuth=" + okHttpNoAuth + " okWanHttp=" + okHttpWan + " okAi=" + okHttpAiBlocked +
                 " okStatus=" + okHttpStatusAllowed + " okCa=" + okHttpCaAllowed + " okTls=" + okHttpTlsInfoAllowed +
                 " okRfc10=" + okRfc10 + " okRfc172=" + okRfc172 + " okRfc192=" + okRfc192 +
                 " okWan=" + okWanRejected + " okRenewal=" + okDynamicRenewal);
@@ -1130,11 +1152,15 @@ public class UnitTests {
         QrCode qrHttps = QrCode.encodeText(qrHttpsUrl, QrCode.Ecc.MEDIUM);
         boolean okQrEncoding = (qrCa != null && qrCa.size > 0) && (qrHttps != null && qrHttps.size > 0);
 
-        // 2. Protezione canale in chiaro: GET / su HTTP 8088 DEVE restituire 426 Upgrade Required (nessun leak Web Remote in chiaro)
-        MockHttpResponse rHttpRoot = dispatch(router, "GET", "/", new HashMap<>(), "", "192.168.1.10", false);
-        boolean okHttpRootBlocked = (rHttpRoot.statusCode == 426) && (rHttpRoot.json != null) &&
-                                    "HTTPS_REQUIRED".equals(rHttpRoot.json.optString("error")) &&
-                                    rHttpRoot.json.has("ca_download_url");
+        // 2. Legacy LAN web remote must remain available over HTTP without leaking APIs.
+        // Router delegates only safe static paths to RemoteServerService; no actual TV test here.
+        boolean okHttpRootAllowed = RestApiRouter.isPublicRemoteAssetRequest("GET", "/")
+                && RestApiRouter.isPublicRemoteAssetRequest("GET", "/index.html")
+                && RestApiRouter.isPublicRemoteAssetRequest("GET", "/app.js")
+                && RestApiRouter.isPublicRemoteAssetRequest("GET", "/styles.css")
+                && !RestApiRouter.isPublicRemoteAssetRequest("GET", "/api/ai/config")
+                && !RestApiRouter.isPublicRemoteAssetRequest("GET", "/../secret.js")
+                && !RestApiRouter.isPublicRemoteAssetRequest("POST", "/index.html");
 
         // 3. Endpoint Bootstrap HTTP: download CA (/ca.crt) e guida statica (/setup) accessibili in chiaro senza token
         MockHttpResponse rCaShort = dispatch(router, "GET", "/ca.crt", new HashMap<>(), "", "192.168.1.10", false);
@@ -1162,15 +1188,15 @@ public class UnitTests {
                                    "tune_channel_1".equals(cmdHandler.lastExecutedAction) &&
                                    (rAiTyped.json.optInt("tokens") == 0);
 
-        boolean test30Passed = okQrEncoding && okHttpRootBlocked && okCaShortAllowed && okSetupAllowed &&
+        boolean test30Passed = okQrEncoding && okHttpRootAllowed && okCaShortAllowed && okSetupAllowed &&
                                okPairReqHttps && okAiTypedCommand;
 
         if (test30Passed) {
-            System.out.println("[PASS] Test 30 (PR-01 M2/M3 Bootstrap OOB): Risoluzione dipendenza circolare verificata: separazione QR CA Bootstrap (http://...:8088/api/auth/ca.crt) vs Telecomando JARVIS (https://...:8443/), blocco HTTP 426 su root non protetta, guida /setup priva di segreti, endpoint pairing HTTPS e separazione comandi JARVIS a 0 token vs keystroke TV");
+            System.out.println("[PASS] Test 30 (PR-01 M2/M3 Bootstrap OOB): Risoluzione dipendenza circolare verificata: separazione QR CA Bootstrap (http://...:8088/api/auth/ca.crt) vs Telecomando JARVIS (https://...:8443/), retrocompatibilità web remote HTTP LAN statica, guida /setup priva di segreti, endpoint pairing HTTPS e separazione comandi JARVIS a 0 token vs keystroke TV");
             passed++;
         } else {
             System.err.println("[FAIL] Test 30: Fallimento bootstrap OOB o separazione contratti (okQrEncoding=" + okQrEncoding +
-                ", okHttpRootBlocked=" + okHttpRootBlocked + ", okCaShortAllowed=" + okCaShortAllowed +
+                ", okHttpRootAllowed=" + okHttpRootAllowed + ", okCaShortAllowed=" + okCaShortAllowed +
                 ", okSetupAllowed=" + okSetupAllowed + ", okPairReqHttps=" + okPairReqHttps +
                 ", okAiTypedCommand=" + okAiTypedCommand + ")");
             failed++;
