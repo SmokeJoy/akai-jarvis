@@ -1,5 +1,7 @@
 # JARVIS AUTOEVOLUTIVO — Decisione approvata e piano POST-BETA
 
+> **Aggiornamento owner P0 (14/11/2026):** la roadmap sotto resta la visione di lungo periodo, ma la priorità è stata anticipata: **prima ripristinare in codice e test la compatibilità del telecomando HTTP LAN v5, poi consegnare JARVIS MVP realmente integrato, quindi avviare il Cloud Developer in un branch isolato**, senza attendere la distribuzione sulla TV per scrivere/testare l'agente cloud. Questa istruzione prevale sui riferimenti storici «solo dopo beta» relativamente allo **sviluppo su GitHub**, non autorizza auto-deploy o chiamate cloud fatturabili. [Direttiva P0](https://github.com/SmokeJoy/akai-jarvis/pull/1#issuecomment-6883455180).
+
 **Decisione del proprietario confermata il 14/11/2026**. Approvata la direzione progettuale **autonomia progressiva senza ChatGPT/Antigravity come dipendenza operativa**. **Non** è un'affermazione che il codice esista o una richiesta di iniziare nuovi refactor oggi. Priorità non modificabile: **PR #1 stabilizzazione + prima beta TV**, poi l'autonomia software.
 
 ## 1. Invarianti di progetto
