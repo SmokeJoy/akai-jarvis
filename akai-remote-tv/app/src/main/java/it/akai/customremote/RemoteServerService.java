@@ -158,6 +158,23 @@ public class RemoteServerService extends Service {
                 @Override public JSONArray getSupportedCatalog() {
                     return AkaiAiController.getSupportedCatalog();
                 }
+                @Override public JSONObject testConnection(String requestBody) {
+                    try {
+                        JSONObject req = new JSONObject(requestBody != null && !requestBody.trim().isEmpty() ? requestBody : "{}");
+                        String prov = req.optString("provider", "deepseek");
+                        String key = req.optString("api_key", null);
+                        String model = req.optString("model", null);
+                        AkaiAiController ai = AkaiAiController.getInstance(RemoteServerService.this, tvController);
+                        return ai.getAiAdapter().testConnection(prov, key, model);
+                    } catch (Exception e) {
+                        JSONObject err = new JSONObject();
+                        try {
+                            err.put("success", false);
+                            err.put("message", "Errore test connessione: " + e.getMessage());
+                        } catch (Exception ignored) {}
+                        return err;
+                    }
+                }
                 @Override public boolean speak(String text, boolean interrupt) {
                     return it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).speak(text, interrupt);
                 }
@@ -881,8 +898,13 @@ public class RemoteServerService extends Service {
             AkaiMemoryEngine mem = ai.getMemoryEngine();
 
             JSONObject cfg = new JSONObject();
+            cfg.put("strict_local_only", AkaiAiController.isStrictLocalOnly());
+            cfg.put("execution_mode", AkaiAiController.getExecutionMode());
             cfg.put("active_provider", adapter.getActiveProvider());
             cfg.put("active_model", adapter.getActiveModel());
+            cfg.put("kimi_region", adapter.getKimiRegion());
+            cfg.put("cloud_context_consent", adapter.hasCloudContextConsent());
+            cfg.put("budget_is_client_estimate", true);
             boolean hasDeepSeek = !adapter.getApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK).isEmpty();
             boolean hasKimi = !adapter.getApiKey(AiProviderAdapter.PROVIDER_KIMI).isEmpty();
             cfg.put("has_deepseek_key", hasDeepSeek);
@@ -910,7 +932,22 @@ public class RemoteServerService extends Service {
 
             JSONObject req = new JSONObject(body);
 
-            // Rigoroso blocco cloud in profilo STRICT_LOCAL_ONLY
+            // Aggiornamento esplicito modalita CLOUD_OPTIONAL vs LOCAL_ONLY (se richiesto)
+            if (req.has("execution_mode")) {
+                try {
+                    it.akai.customremote.ai.AkaiAiController.persistExecutionMode(this, req.getString("execution_mode"));
+                } catch (IllegalArgumentException badMode) {
+                    sendJsonResponse(os, 400, new JSONObject().put("success", false).put("error", badMode.getMessage()));
+                    return;
+                }
+            } else if (req.has("strict_local_only")) {
+                boolean sl = req.getBoolean("strict_local_only");
+                it.akai.customremote.ai.AkaiAiController.persistExecutionMode(this,
+                        sl ? it.akai.customremote.ai.AkaiAiController.MODE_LOCAL_ONLY
+                           : it.akai.customremote.ai.AkaiAiController.MODE_CLOUD_OPTIONAL);
+            }
+
+            // Blocco configurazione chiavi cloud se il profilo effettivo e LOCAL_ONLY
             if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly()) {
                 boolean settingDeepSeek = req.has("deepseek_key") && !req.optString("deepseek_key", "").isEmpty();
                 boolean settingKimi = req.has("kimi_key") && !req.optString("kimi_key", "").isEmpty();
@@ -918,7 +955,7 @@ public class RemoteServerService extends Service {
                 if (settingDeepSeek || settingKimi || settingCloudProvider) {
                     sendJsonResponse(os, 403, new JSONObject()
                             .put("success", false)
-                            .put("error", "Configurazione provider cloud inibita nel profilo STRICT_LOCAL_ONLY")
+                            .put("error", "Configurazione provider cloud inibita nel profilo STRICT_LOCAL_ONLY (imposta execution_mode=CLOUD_OPTIONAL per abilitare)")
                             .put("strict_local_only", true));
                     return;
                 }
@@ -934,17 +971,34 @@ public class RemoteServerService extends Service {
             if (req.has("model")) {
                 adapter.setActiveModel(req.getString("model"));
             }
-            if (req.has("deepseek_key")) {
-                String k = req.getString("deepseek_key");
-                if (!k.contains("••••")) {
-                    adapter.setApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK, k);
-                }
+            if (req.has("custom_model")) {
+                adapter.setCustomModel(req.getString("custom_model"));
             }
-            if (req.has("kimi_key")) {
-                String k = req.getString("kimi_key");
-                if (!k.contains("••••")) {
-                    adapter.setApiKey(AiProviderAdapter.PROVIDER_KIMI, k);
+            if (req.has("kimi_region")) {
+                adapter.setKimiRegion(req.getString("kimi_region"));
+            }
+            if (req.has("cloud_context_consent")) {
+                adapter.setCloudContextConsent(req.getBoolean("cloud_context_consent"));
+            }
+            try {
+                if (req.has("deepseek_key")) {
+                    String k = req.getString("deepseek_key");
+                    if (!k.contains("••••")) {
+                        adapter.setApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK, k);
+                    }
                 }
+                if (req.has("kimi_key")) {
+                    String k = req.getString("kimi_key");
+                    if (!k.contains("••••")) {
+                        adapter.setApiKey(AiProviderAdapter.PROVIDER_KIMI, k);
+                    }
+                }
+            } catch (IllegalStateException ksFail) {
+                sendJsonResponse(os, 500, new JSONObject()
+                        .put("success", false)
+                        .put("keystore_unavailable", true)
+                        .put("error", ksFail.getMessage()));
+                return;
             }
             if (req.has("preferences")) {
                 JSONObject prefs = req.getJSONObject("preferences");
@@ -963,6 +1017,8 @@ public class RemoteServerService extends Service {
 
             JSONObject res = new JSONObject();
             res.put("success", true);
+            res.put("execution_mode", it.akai.customremote.ai.AkaiAiController.getExecutionMode());
+            res.put("strict_local_only", it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly());
             res.put("message", "Configurazione AI salvata con successo");
             sendJsonResponse(os, 200, res);
             return;
@@ -991,6 +1047,13 @@ public class RemoteServerService extends Service {
             String token = extractBearerToken(headers);
             if (!securityManager.validateToken(token)) {
                 sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return;
+            }
+            if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly()) {
+                sendJsonResponse(os, 403, new JSONObject()
+                        .put("success", false)
+                        .put("error", "Chiamate verso provider cloud disabilitate nel profilo STRICT_LOCAL_ONLY")
+                        .put("strict_local_only", true));
                 return;
             }
 

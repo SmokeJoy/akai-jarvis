@@ -54,6 +54,10 @@ public class JSONObject {
         return map.containsKey(key);
     }
 
+    public Object remove(String key) {
+        return map.remove(key);
+    }
+
     public String getString(String key) throws JSONException {
         Object val = get(key);
         return val != null ? String.valueOf(val) : null;

@@ -22,6 +22,11 @@ public class JSONArray {
         return this;
     }
 
+    public Object remove(int index) {
+        if (index < 0 || index >= list.size()) return null;
+        return list.remove(index);
+    }
+
     public int length() {
         return list.size();
     }
@@ -48,8 +53,12 @@ public class JSONArray {
     }
 
     public String optString(int index) {
+        return optString(index, "");
+    }
+
+    public String optString(int index, String fallback) {
         Object val = opt(index);
-        return val != null ? String.valueOf(val) : "";
+        return val != null ? String.valueOf(val) : fallback;
     }
 
     public String getString(int index) throws JSONException {

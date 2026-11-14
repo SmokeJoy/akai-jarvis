@@ -28,6 +28,14 @@ if ($validNode) {
     $env:PATH = $nodeDir + [System.IO.Path]::PathSeparator + $env:PATH
 }
 
+function Get-FreeLoopbackPort {
+    $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $freePort = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    $listener.Stop()
+    return $freePort
+}
+
 function New-MockRealDatabase {
     param([string]$FilePath)
     $fpEscaped = $FilePath.Replace('\', '/')
@@ -365,7 +373,7 @@ if ($isWin) {
 }
 
 # 5. Mock HTTP Server (porta dinamica $port7)
-$port7 = Get-Random -Minimum 21000 -Maximum 28000
+$port7 = Get-FreeLoopbackPort
 $readyFile7 = Join-Path $testDir7 "ready_7_$([Guid]::NewGuid().ToString('N')).txt"
 $readyEsc7 = $readyFile7.Replace('\', '/')
 if (Test-Path $readyFile7) { Remove-Item $readyFile7 -Force -ErrorAction SilentlyContinue }
@@ -407,7 +415,7 @@ $httpErrLog7 = Join-Path $testDir7 "http_err.log"
 $httpProc7 = $null
 
 try {
-    $httpProc7 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript7`"" -RedirectStandardError $httpErrLog7 -PassThru
+    $httpProc7 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript7`"" -RedirectStandardError $httpErrLog7 -PassThru -NoNewWindow
     $wait7 = 100
     while (-not (Test-Path $readyFile7) -and -not $httpProc7.HasExited -and $wait7 -gt 0) {
         Start-Sleep -Milliseconds 100
@@ -547,7 +555,7 @@ if ($isWin) {
 }
 
 # 4. Mock HTTP Server: fallisce sul watchdog upgrade, ma risponde OK sul watchdog post-rollback!
-$port8 = Get-Random -Minimum 28001 -Maximum 36000
+$port8 = Get-FreeLoopbackPort
 $readyFile8 = Join-Path $testDir8 "ready_8_$([Guid]::NewGuid().ToString('N')).txt"
 $readyEsc8 = $readyFile8.Replace('\', '/')
 if (Test-Path $readyFile8) { Remove-Item $readyFile8 -Force -ErrorAction SilentlyContinue }
@@ -599,7 +607,7 @@ $httpErrLog8 = Join-Path $testDir8 "http_err.log"
 $httpProc8 = $null
 
 try {
-    $httpProc8 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript8`"" -RedirectStandardError $httpErrLog8 -PassThru
+    $httpProc8 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript8`"" -RedirectStandardError $httpErrLog8 -PassThru -NoNewWindow
     $wait8 = 100
     while (-not (Test-Path $readyFile8) -and -not $httpProc8.HasExited -and $wait8 -gt 0) {
         Start-Sleep -Milliseconds 100
@@ -729,7 +737,7 @@ if ($isWin) {
 }
 
 # Mock HTTP Server che forza il fallimento del candidate per innescare rollback
-$port9 = Get-Random -Minimum 36001 -Maximum 44000
+$port9 = Get-FreeLoopbackPort
 @"
 const http = require('http');
 const send = (res, code, ctype, body) => {
@@ -760,7 +768,7 @@ server.listen($port9, '127.0.0.1');
 
 $httpErrLog9 = Join-Path $testDir9 "http_err.log"
 $mockLogFile9 = Join-Path $testDir9 "mock_state.log"
-$httpProc9 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript9`"" -RedirectStandardError $httpErrLog9 -PassThru
+$httpProc9 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript9`"" -RedirectStandardError $httpErrLog9 -PassThru -NoNewWindow
 Start-Sleep -Milliseconds 800
 
 try {
@@ -807,7 +815,7 @@ try {
 $testDir10 = Join-Path $tempDir "v5_auth_regression_$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $testDir10 | Out-Null
 $mockHttpScript10 = Join-Path $testDir10 "mock_http_10.js"
-$port10 = Get-Random -Minimum 44001 -Maximum 52000
+$port10 = Get-FreeLoopbackPort
 @"
 const http = require('http');
 const send = (res, code, ctype, body) => {
@@ -836,7 +844,7 @@ server.on('clientError', (err, socket) => { socket.destroy(); });
 server.listen($port10, '127.0.0.1');
 "@ | Out-File -FilePath $mockHttpScript10 -Encoding ascii
 
-$httpProc10 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript10`"" -PassThru
+$httpProc10 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript10`"" -PassThru -NoNewWindow
 Start-Sleep -Milliseconds 800
 try {
     # 1. Richiesta non autenticata -> DEVE fallire con 401
@@ -965,7 +973,7 @@ $mockApk12 = Join-Path $sessionDir12 "it.akai.customremote_backup.apk"
 [System.IO.File]::WriteAllBytes($mockApk12, [byte[]]@(0x50, 0x4B, 0x03, 0x04)) # Dummy zip header
 
 # NOTA: akai_memory.db NON esiste in $sessionDir12 (backup DB assente!)
-$port12 = Get-Random -Minimum 18100 -Maximum 18999
+$port12 = Get-FreeLoopbackPort
 $httpProc12 = $null
 
 try {
@@ -1104,7 +1112,7 @@ if ($isWin) {
     & chmod +x $mockAdbCmd13
 }
 
-$port13 = Get-Random -Minimum 52001 -Maximum 58000
+$port13 = Get-FreeLoopbackPort
 $httpProc13 = $null
 
 try {
@@ -2309,7 +2317,7 @@ $mockSignerEscaped24 = $mockSignerCmd24.Replace('\', '/')
 $mockDirEscaped24 = $testDir24.Replace('\', '/')
 $candApkEscaped24 = $testApkNew24.Replace('\', '/')
 
-$port24 = Get-Random -Minimum 31000 -Maximum 38000
+$port24 = Get-FreeLoopbackPort
 $readyFile24 = Join-Path $testDir24 "ready_24_$([Guid]::NewGuid().ToString('N')).txt"
 $readyEsc24 = $readyFile24.Replace('\', '/')
 if (Test-Path $readyFile24) { Remove-Item $readyFile24 -Force -ErrorAction SilentlyContinue }
@@ -2336,7 +2344,7 @@ server.listen($port24, '127.0.0.1', () => { fs.writeFileSync('$readyEsc24', '1')
 
 $srvProc24 = $null
 try {
-    $srvProc24 = Start-Process -FilePath $validNode -ArgumentList "`"$nodeServerScript24`"" -PassThru
+    $srvProc24 = Start-Process -FilePath $validNode -ArgumentList "`"$nodeServerScript24`"" -PassThru -NoNewWindow
     $wait24 = 100
     while (-not (Test-Path $readyFile24) -and -not $srvProc24.HasExited -and $wait24 -gt 0) {
         Start-Sleep -Milliseconds 100
@@ -2404,7 +2412,7 @@ srv.listen(0, '127.0.0.1', () => {
 setInterval(() => {}, 1000);
 "@
     [System.IO.File]::WriteAllText($jsPath, $srvCode)
-    $proc = Start-Process -FilePath "$validNode" -ArgumentList "`"$jsPath`"" -PassThru
+    $proc = Start-Process -FilePath "$validNode" -ArgumentList "`"$jsPath`"" -PassThru -NoNewWindow
     $cnt = 50
     [int]$port = 0
     while ($cnt -gt 0) {
@@ -2421,6 +2429,28 @@ setInterval(() => {}, 1000);
     if ($port -le 0) {
         if ($proc -and -not $proc.HasExited) { $proc.Kill() }
         throw "Server HTTPS Node.js effimero non avviato entro il timeout previsto"
+    }
+    # Breve verifica TCP connect per confermare che il listener sia effettivamente in ascolto
+    $tcpReady = $false
+    for ($probeIdx = 0; $probeIdx -lt 20; $probeIdx++) {
+        $probeClient = $null
+        try {
+            $probeClient = New-Object System.Net.Sockets.TcpClient
+            $ar = $probeClient.BeginConnect('127.0.0.1', $port, $null, $null)
+            if ($ar.AsyncWaitHandle.WaitOne(250, $false)) {
+                $probeClient.EndConnect($ar)
+                $tcpReady = $true
+                break
+            }
+        } catch {
+        } finally {
+            if ($probeClient) { $probeClient.Dispose() }
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    if (-not $tcpReady) {
+        if ($proc -and -not $proc.HasExited) { $proc.Kill() }
+        throw "Server HTTPS Node.js effimero su porta $port non raggiungibile in TCP"
     }
     return @{ Process = $proc; Port = $port }
 }
@@ -2703,9 +2733,18 @@ const argStr = args.join(' ');
 const stateFile = process.env.ADBD_STATE_FILE;
 const logFile = process.env.ADBD_LOG_FILE;
 const rootMode = process.env.MOCK_ROOT_MODE || 'allow';
+const recoveryMode = process.env.MOCK_RECOVERY_MODE || '';
+const appProcFile = process.env.APP_PROC_STATE_FILE || '';
 
 function getState() {
     try { return fs.readFileSync(stateFile, 'utf8').trim(); } catch (e) { return 'shell'; }
+}
+function getAppProcState() {
+    if (!appProcFile) return 'stopped';
+    try { return fs.readFileSync(appProcFile, 'utf8').trim(); } catch (e) { return 'stopped'; }
+}
+function setAppProcState(val) {
+    if (appProcFile) fs.writeFileSync(appProcFile, val, 'utf8');
 }
 
 if (args.includes('connect') || args.includes('wait-for-device')) {
@@ -2751,6 +2790,7 @@ if (args.includes('unroot')) {
     process.exit(0);
 }
 if (args.includes('install')) {
+    if (logFile) fs.appendFileSync(logFile, 'install\n', 'utf8');
     console.log('VIOLATION_INSTALL_CALLED_ON_FAIL_CLOSED');
     process.exit(1);
 }
@@ -2796,7 +2836,77 @@ if (args.includes('shell')) {
         }
         process.exit(0);
     }
+    if (argStr.includes('ADB_ALIVE')) {
+        if (recoveryMode === 'adb_unreachable') {
+            process.stderr.write('error: device offline\n');
+            process.exit(1);
+        }
+        console.log('ADB_ALIVE');
+        process.exit(0);
+    }
+    if (argStr.includes('am force-stop')) {
+        if (logFile) fs.appendFileSync(logFile, 'force-stop\n', 'utf8');
+        if (recoveryMode !== 'quiescence_sticky_pid') {
+            setAppProcState('stopped');
+        }
+        process.exit(0);
+    }
+    if (argStr.includes('kill -9')) {
+        if (logFile) fs.appendFileSync(logFile, 'kill -9\n', 'utf8');
+        process.exit(0);
+    }
+    if (argStr.includes('ACTION_BACKUP_DB')) {
+        process.exit(0);
+    }
+    if (argStr.includes('am startservice')) {
+        if (logFile) fs.appendFileSync(logFile, 'startservice\n', 'utf8');
+        if (recoveryMode === 'restore_ok' || recoveryMode === 'restore_status_unhealthy') {
+            setAppProcState('4399');
+            process.exit(0);
+        }
+        if (recoveryMode === 'restore_start_fail') {
+            process.stderr.write('Permission Denial: not exported\n');
+            process.exit(1);
+        }
+        process.exit(0);
+    }
+    if (argStr.includes('cmd activity start-service')) {
+        if (logFile) fs.appendFileSync(logFile, 'cmd_start_service\n', 'utf8');
+        if (recoveryMode === 'restore_start_fail') {
+            process.exit(1);
+        }
+        process.exit(0);
+    }
+    if (argStr.includes('am start -n')) {
+        if (logFile) fs.appendFileSync(logFile, 'start_main_activity\n', 'utf8');
+        if (recoveryMode === 'restore_mainactivity_ok') {
+            setAppProcState('4401');
+            process.exit(0);
+        }
+        if (recoveryMode === 'restore_start_fail') {
+            process.exit(1);
+        }
+        process.exit(0);
+    }
+    if (argStr.includes('/api/status')) {
+        if (recoveryMode === 'restore_status_unhealthy') {
+            console.log('{"status":"error","uinput_ready":false}');
+            process.exit(0);
+        }
+        if (recoveryMode === 'restore_ok' || recoveryMode === 'restore_mainactivity_ok') {
+            console.log('{"status":"ok","uinput_ready":true}');
+            process.exit(0);
+        }
+        process.exit(1);
+    }
     if (argStr.includes('PIDOF_CHECK') || argStr.includes('pidof')) {
+        if (recoveryMode && appProcFile) {
+            const stApp = getAppProcState();
+            if (stApp && stApp !== 'stopped') {
+                console.log('PIDOF_CHECK:pids=[' + stApp + ']:exit=[0]');
+                process.exit(0);
+            }
+        }
         console.log('PIDOF_CHECK:pids=[]:exit=[1]');
         process.exit(0);
     }
@@ -3149,15 +3259,179 @@ try {
     } else {
         Write-Host "   [FAIL] Sotto-test 29i fallito: $out29i" -ForegroundColor Red
     }
+
+    $appProcFile29 = Join-Path $testDir29 "app_proc_state.txt"
+    $appProcEsc29 = $appProcFile29.Replace('\', '/')
+
+    # --- Sotto-test 29j: Positivo Fase A - backup v5 valido + servizio attivo -> finally riavvia v5 + /api/status sano, zero install ---
+    $backupDir29j = Join-Path $testDir29 "backup_29j"
+    $backupEsc29j = $backupDir29j.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    [System.IO.File]::WriteAllText($appProcFile29, "4321")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29j = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:APP_PROC_STATE_FILE = '$appProcEsc29'
+`$env:MOCK_ROOT_MODE = 'allow'
+`$env:MOCK_RECOVERY_MODE = 'restore_ok'
+try {
+    & '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -HttpPort 59988 -BackupDir '$backupEsc29j' -AllowHardwareExecution
+    Write-Output 'EXIT_OK_29J'
+} catch {
+    Write-Output ('CAUGHT_29J:' + `$_.Exception.Message)
+}
+"@
+    $out29j = & $psExe -ExecutionPolicy Bypass -Command $cmd29j 2>&1 | Out-String
+    $finalAppState29j = (Get-Content $appProcFile29 -Raw).Trim()
+    $logLines29j = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+    if ($out29j -match "EXIT_OK_29J" -and $out29j -match "Sessione di backup completata" -and $out29j -match "\[RECOVERY V5\] Servizio it\.akai\.customremote ripristinato e verificato" -and $finalAppState29j -eq "4399" -and $logLines29j -match "force-stop" -and $logLines29j -match "startservice" -and $logLines29j -notmatch "\binstall\b" -and $logLines29j -notmatch "kill -9") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29j: Backup valido + finally riavvia v5 con /api/status sano (zero install, zero kill -9)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29j fallito (appState=$finalAppState29j, log='$logLines29j'): $out29j" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29k: Negativo - errore stream WAL dopo force-stop -> finally ripristina v5 e propaga errore backup ---
+    $backupDir29k = Join-Path $testDir29 "backup_29k"
+    $backupEsc29k = $backupDir29k.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    [System.IO.File]::WriteAllText($appProcFile29, "4321")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29k = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:APP_PROC_STATE_FILE = '$appProcEsc29'
+`$env:MOCK_ROOT_MODE = 'wal_fail'
+`$env:MOCK_RECOVERY_MODE = 'restore_ok'
+try {
+    & '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -HttpPort 59988 -BackupDir '$backupEsc29k' -AllowHardwareExecution
+    Write-Output 'FAIL_NO_THROW_29K'
+} catch {
+    Write-Output ('CAUGHT_29K:' + `$_.Exception.Message)
+}
+"@
+    $out29k = & $psExe -ExecutionPolicy Bypass -Command $cmd29k 2>&1 | Out-String
+    $finalAppState29k = (Get-Content $appProcFile29 -Raw).Trim()
+    $logLines29k = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+    if ($out29k -match "CAUGHT_29K:ERRORE FAIL-CLOSED: File WAL" -and $out29k -match "\[RECOVERY V5\] Servizio it\.akai\.customremote ripristinato e verificato" -and $finalAppState29k -eq "4399" -and $logLines29k -match "startservice" -and $out29k -notmatch "FAIL_NO_THROW_29K") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29k: Errore WAL post-stop -> finally ripristina v5 e propaga errore fail-closed" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29k fallito (appState=$finalAppState29k, log='$logLines29k'): $out29k" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29l: Negativo - startservice / cmd activity / MainActivity falliscono nel finally -> STATO SERVIZIO V5 UNKNOWN ---
+    $backupDir29l = Join-Path $testDir29 "backup_29l"
+    $backupEsc29l = $backupDir29l.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    [System.IO.File]::WriteAllText($appProcFile29, "4321")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29l = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:APP_PROC_STATE_FILE = '$appProcEsc29'
+`$env:MOCK_ROOT_MODE = 'allow'
+`$env:MOCK_RECOVERY_MODE = 'restore_start_fail'
+try {
+    & '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -HttpPort 59988 -BackupDir '$backupEsc29l' -AllowHardwareExecution
+    Write-Output 'FAIL_NO_THROW_29L'
+} catch {
+    Write-Output ('CAUGHT_29L:' + `$_.Exception.Message)
+}
+"@
+    $out29l = & $psExe -ExecutionPolicy Bypass -Command $cmd29l 2>&1 | Out-String
+    $logLines29l = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+    if ($out29l -match "CAUGHT_29L:ERRORE FAIL-CLOSED POST-BACKUP \[STATO SERVIZIO V5 UNKNOWN / RECUPERO MANUALE RICHIESTO\]" -and $logLines29l -match "startservice" -and $logLines29l -match "cmd_start_service" -and $logLines29l -match "start_main_activity" -and $out29l -notmatch "FAIL_NO_THROW_29L") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29l: Fallimento startservice/MainActivity post-backup segnala STATO SERVIZIO V5 UNKNOWN in Fail-Closed" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29l fallito (log='$logLines29l'): $out29l" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29m: Negativo - processo v5 riparte ma /api/status non sano -> errore fail-closed post-backup ---
+    $backupDir29m = Join-Path $testDir29 "backup_29m"
+    $backupEsc29m = $backupDir29m.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    [System.IO.File]::WriteAllText($appProcFile29, "4321")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29m = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:APP_PROC_STATE_FILE = '$appProcEsc29'
+`$env:MOCK_ROOT_MODE = 'allow'
+`$env:MOCK_RECOVERY_MODE = 'restore_status_unhealthy'
+try {
+    & '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -HttpPort 59988 -BackupDir '$backupEsc29m' -AllowHardwareExecution
+    Write-Output 'FAIL_NO_THROW_29M'
+} catch {
+    Write-Output ('CAUGHT_29M:' + `$_.Exception.Message)
+}
+"@
+    $out29m = & $psExe -ExecutionPolicy Bypass -Command $cmd29m 2>&1 | Out-String
+    if ($out29m -match "CAUGHT_29M:ERRORE FAIL-CLOSED POST-BACKUP \[STATO SERVIZIO V5 UNKNOWN / RECUPERO MANUALE RICHIESTO\]" -and $out29m -match "endpoint /api/status non sano" -and $out29m -notmatch "FAIL_NO_THROW_29M") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29m: /api/status non sano (uinput_ready=false) post-backup rifiutato in Fail-Closed" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29m fallito: $out29m" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29n: Negativo - PID residuo dopo force-stop -> fallimento immediato SENZA kill -9 implicito ---
+    $backupDir29n = Join-Path $testDir29 "backup_29n"
+    $backupEsc29n = $backupDir29n.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    [System.IO.File]::WriteAllText($appProcFile29, "4321")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29n = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:APP_PROC_STATE_FILE = '$appProcEsc29'
+`$env:MOCK_ROOT_MODE = 'allow'
+`$env:MOCK_RECOVERY_MODE = 'quiescence_sticky_pid'
+try {
+    & '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -HttpPort 59988 -BackupDir '$backupEsc29n' -AllowHardwareExecution
+    Write-Output 'FAIL_NO_THROW_29N'
+} catch {
+    Write-Output ('CAUGHT_29N:' + `$_.Exception.Message)
+}
+"@
+    $out29n = & $psExe -ExecutionPolicy Bypass -Command $cmd29n 2>&1 | Out-String
+    $logLines29n = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+    if ($out29n -match "CAUGHT_29N:ERRORE FAIL-CLOSED: Impossibile arrestare il processo dell'applicazione" -and $out29n -match "kill -9 implicito disabilitato" -and $logLines29n -notmatch "kill -9" -and $out29n -notmatch "FAIL_NO_THROW_29N") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29n: PID residuo dopo force-stop blocca in Fail-Closed senza alcuna invocazione kill -9" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29n fallito (log='$logLines29n'): $out29n" -ForegroundColor Red
+    }
 } finally {
     Remove-Item $testDir29 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($subPassed29 -eq 9) {
-    Write-Host "[PASS] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Elevation root/unroot, WAL checkpoint, EACCES e P1/P2 Fail-Closed gates verificati al 100% (9/9)" -ForegroundColor Green
+if ($subPassed29 -eq 14) {
+    Write-Host "[PASS] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Elevation root/unroot, WAL checkpoint, EACCES, P1/P2 Fail-Closed e recovery v5 verificati al 100% (14/14)" -ForegroundColor Green
     $passed++
 } else {
-    Write-Host "[FAIL] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Sotto-test superati: $subPassed29 / 9" -ForegroundColor Red
+    Write-Host "[FAIL] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Sotto-test superati: $subPassed29 / 14" -ForegroundColor Red
     $failed++
 }
 

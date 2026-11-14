@@ -508,12 +508,28 @@
                             </div>
 
                             <div class="form-group">
-                                <label for="ai-api-key-input">API Key Privata (salvata in modo sicuro solo sulla TV):</label>
+                                <label for="ai-kimi-region-select">Regione Endpoint Moonshot Open Platform (solo per Kimi):</label>
+                                <select id="ai-kimi-region-select" class="form-select">
+                                    <option value="intl" selected>Globale / Internazionale (api.moonshot.ai - predefinita)</option>
+                                    <option value="cn">Cina Continentale (api.moonshot.cn)</option>
+                                </select>
+                                <span class="form-hint">Usa una API Key di Moonshot Open Platform (platform.moonshot.ai / .cn), non chiavi Kimi Coding.</span>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="ai-api-key-input">API Key Privata (cifrata AES-GCM in Android Keystore su TV):</label>
                                 <div class="password-input-group">
                                     <input type="password" id="ai-api-key-input" placeholder="sk-..." class="form-input">
                                     <button type="button" id="btn-toggle-key-visibility" class="key-eye-btn" aria-label="Mostra o nascondi chiave">👁</button>
                                 </div>
-                                <span class="form-hint">Le chiavi risiedono esclusivamente nel chip sicuro (TrustZone) della TV.</span>
+                                <span class="form-hint">Nessun salvataggio in chiaro o Base64 di ripiego se il Keystore TV non è disponibile.</span>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="ca-confirm-checkbox-row">
+                                    <input type="checkbox" id="chk-cloud-context-consent" checked>
+                                    <span>Consenso invio contesto UI minimizzato e redatto al provider cloud selezionato</span>
+                                </label>
                             </div>
 
                             <div class="test-connection-row">
@@ -527,7 +543,7 @@
                             <div class="budget-card-header">
                                 <div class="budget-card-title">
                                     <span class="budget-icon">🛡️</span>
-                                    <span>Controllo Budget Condiviso</span>
+                                    <span>Controllo Budget Locale (Stima client)</span>
                                 </div>
                                 <span id="budget-status-badge" class="budget-status-pill ok">✓ Normale (&lt; 3,00 €)</span>
                             </div>

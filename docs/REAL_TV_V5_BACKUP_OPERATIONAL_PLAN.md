@@ -9,8 +9,8 @@ L'hardware freeze sulla TV fisica (`192.168.1.101`) resta attivo. Nessun comando
 
 | Autorizzazione | Perimetro Operativo Esatto | Cosa Tocca sulla TV | Prerequisito di Avvio |
 | :--- | :--- | :--- | :--- |
-| **Autorizzazione (A)** *(Richiesta ora)* | **Solo Backup Reale JARVIS v5 + Prova Ripristinabilità Offline + Riavvio Immediato Servizio v5** | Breve arresto di `it.akai.customremote` (~10–15 s), elevazione temporanea `adb root` -> estrazione DB+WAL -> `adb unroot`, riavvio `RemoteServerService` v5. **Zero modifiche a APK o DB sulla TV.** | Approvazione esplicita dell'utente per **Fase (A)** |
-| **Autorizzazione (B)** *(Successiva e separata)* | **Upgrade In-Place a JARVIS v6, Watchdog HTTPS `8443` (SAN `192.168.1.101`), Provisioning TLS ed Eventuale Rollback** | Sostituzione APK (`adb install -r -d`), generazione/validazione certificato TLS `AKAI Jarvis Local CA` per `192.168.1.101`, collaudo Safari iPhone a PC spento. | Completamento + verifica integrità offline del backup **Fase (A)** e **nuova autorizzazione esplicita** dell'utente per **Fase (B)** |
+| **Autorizzazione (A)** *(Richiesta ora)* | **Solo Backup Reale JARVIS v5 + Prova Ripristinabilità Offline + Ripristino Verificato Servizio v5 (`try/finally`)** | **Zero scritture persistenti su APK o DB sulla TV**, ma **modifiche temporanee allo stato runtime**: `am force-stop` arresta temporaneamente `it.akai.customremote` (**stima nominale ~10–15 s**, timeout massimo cumulativo stimato **~35–45 s**), elevazione temporanea controllata `adb root` (riavvio temporaneo `adbd`) -> estrazione sola lettura DB+WAL -> `adb unroot` verificato (`uid=2000`), ripristino automatico `finally` di v5 compatibile Android 9 con verifica `/api/status`. In caso di disconnessione ADB: stato dichiarato `UNKNOWN` e procedura manuale esplicita. | Approvazione esplicita dell'utente per **Fase (A)** |
+| **Autorizzazione (B)** *(Successiva e separata)* | **Upgrade In-Place a JARVIS v6, Watchdog HTTPS `8443` (SAN `192.168.1.101`), Provisioning TLS ed Eventuale Rollback** | Verifica `applicationId`, `versionCode >= installedVersionCode` e firma SHA-256 -> `adb install -r` (**senza `-d`**, downgrade vietato salvo piano separato / `-Action rollback`), generazione/validazione certificato TLS `AKAI Jarvis Local CA` per `192.168.1.101`, collaudo Safari iPhone a PC spento. | Completamento + verifica integrità offline del backup **Fase (A)** e **nuova autorizzazione esplicita** dell'utente per **Fase (B)** |
 
 ---
 
@@ -70,11 +70,12 @@ La procedura riutilizza i meccanismi Fail-Closed già testati (29/29) in [`05_sa
 - `GET http://192.168.1.101:8088/api/ai/memory` -> salvato in `akai_memory_logical_backup.json` come copia logica aggiuntiva di sicurezza prima dell'arresto del processo (non sostituisce il backup binario SQLite).
 
 ### Passo 5.2 — Quiescenza Verificata del Writer (`Ensure-ApplicationQuiescence`)
-- Esegue `adb -s 192.168.1.101:5555 shell "am force-stop it.akai.customremote"` (richiede `exit 0`).
+- Prima di invocare `am force-stop`, registra `$wasRunning = $preStopState.IsRunning` tramite `Get-ApplicationProcessState`.
+- All'interno di un blocco `try { ... } finally { ... }`, esegue `adb -s 192.168.1.101:5555 shell "am force-stop it.akai.customremote"` (richiede `exit 0`).
 - Attende 300 ms ed esegue il probe deterministico `Get-ApplicationProcessState`:
   `pids=$(pidof it.akai.customremote 2>/dev/null); code=$?; echo PIDOF_CHECK:pids=[$pids]:exit=[$code]`.
 - Accetta **solo** `pidofExit == 1` con `pids == []` (zero processi attivi).
-- Se risulta ancora attivo un PID residuo, tenta una sola volta `kill -9 <pids>`, ripete il probe dopo 300 ms e abortisce in **Fail-Closed** se un writer rimane in esecuzione (prevenzione assoluta di copie DB incoerenti).
+- **Nessun `kill -9` implicito nella Fase A**: se dopo `am force-stop` risulta ancora attivo un PID residuo, `Ensure-ApplicationQuiescence` abortisce immediatamente in **Fail-Closed** prima di qualsiasi lettura DB, e il blocco `finally` invoca `Restore-TargetApplicationService` per garantire il ripristino del servizio v5.
 
 ### Passo 5.3 — Elevazione Controllata `adb root` -> Estrazione DB + WAL -> `adb unroot` (`Invoke-WithAdbElevation`)
 1. Verifica contesto iniziale: `adb -s 192.168.1.101:5555 shell id`.
@@ -112,26 +113,27 @@ Prima di considerare chiuso il backup **Fase (A)** e prima di chiedere in seguit
 
 ---
 
-## 7. Riavvio Immediato Servizio v5, Durata Indisponibilità e Gestione Errori
+## 7. Recovery Atomico `try/finally` del Servizio v5, Durata Stimata & Gate Fase (B)
 
-> **Nota tecnica su `05_safe_install_and_rollback.ps1`**: il ramo `-Action backup` (righe 1384–1535) arresta `it.akai.customremote` per garantire la quiescenza del DB ma non include il riavvio finale del servizio. Di conseguenza, nella **Fase (A)**, subito dopo la verifica del ritorno di `adb` a `uid=2000(shell)`, la procedura operativa riavvierà esplicitamente il servizio v5 esistente senza installare alcun APK.
+> **Wrapper eseguibile in `-Action backup`**: `05_safe_install_and_rollback.ps1` registra `$wasRunning` prima di `am force-stop` ed esegue l'intera quiescenza/estrazione/checkpoint all'interno di un blocco `try { ... } finally { ... }`. In ogni percorso (successo o eccezione su copia DB/WAL, checksum o ADB), se `$wasRunning -and $stopIssued`, il `finally` invoca `Restore-TargetApplicationService`.
 
-1. **Riavvio immediato JARVIS v5 post-backup**:
-   - `adb -s 192.168.1.101:5555 shell "am startservice it.akai.customremote/.RemoteServerService"`
-   - Verifica presenza processo (`pidof it.akai.customremote`) e verifica salute `GET http://192.168.1.101:8088/api/status` (`status == "ok"`, `uinput_ready == true`).
+1. **Riavvio v5 compatibile Android 9 (`targetSdkVersion=28`, `.RemoteServerService` non esportato vs `.MainActivity` esportata)**:
+   - Se `$UnrootVerified` è falso (`STATO ADBD UNKNOWN`), la funzione **non** dichiara mai ripristinato il servizio e segnala `[STATO SERVIZIO V5 UNKNOWN / RECUPERO MANUALE RICHIESTO]`.
+   - Verifica connettività ADB (`echo ADB_ALIVE`). Se ADB è irraggiungibile: stato **`UNKNOWN`** e stampa procedura manuale esplicita.
+   - Tenta nell'ordine: (1) `am startservice -n it.akai.customremote/.RemoteServerService`, (2) `cmd activity start-service it.akai.customremote/.RemoteServerService`, (3) fallback Activity esportata `am start -n it.akai.customremote/.MainActivity`.
+   - Verifica sia il processo attivo (`Get-ApplicationProcessState` -> PID non vuoto) sia la salute applicativa (`GET /api/status` con `status == "ok"` e `uinput_ready == true`, fino a 3 tentativi).
 
-### Tabella Compatta degli Effetti Reali sulla TV durante Fase (A)
+### Tabella Compatta degli Effetti Reali e Tempi Stimati durante Fase (A)
 
 | Aspetto | Effetto Reale sulla TV `192.168.1.101` |
 | :--- | :--- |
-| **Comando arresto** | `am force-stop it.akai.customremote` arresta temporaneamente solo il processo JARVIS v5 (~10–15 secondi) per evitare corruzione WAL durante la copia del DB. |
-| **Indisponibilità prevista** | Solo il vecchio server telecomando web v5 (`8088`) non risponde per **~10–15 secondi**; al termine viene riavviato subito (`am startservice it.akai.customremote/.RemoteServerService`). |
-| **Impatto su visione TV / telecomando fisico / Home v8** | **Nessuno.** Canali DTV/HDMI, video, audio, telecomando IR fisico, Home v8 (`it.akai.customhome.v8`) e tasto MENU restano pienamente operativi senza riavvii né interruzioni UI. |
-| **Scritture o modifiche su TV** | **Zero** modifiche a APK o DB v5 su TV. Elevazione `adb root` usata solo in lettura e revocata subito con `adb unroot` verificato a `uid=2000(shell)`. |
-| **Comandi distruttivi** | **Nessuno** (`adb uninstall`, `pm clear`, wipe, flash, modifica partizioni categoricamente esclusi). |
+| **Comando arresto** | `am force-stop it.akai.customremote` arresta temporaneamente solo il processo JARVIS v5 per evitare corruzione WAL; `adb root`/`adb unroot` riavvia temporaneamente il daemon `adbd`. |
+| **Stima indisponibilità nominale e timeout massimi** | **Stima nominale: ~10–15 secondi** per il solo server web v5 (`8088`). In caso di errori/retry (`adb root` + `unroot` + `exec-out` + 3 tentativi health check), i **timeout massimi cumulativi stimati arrivano a ~35–45 secondi** (o interruzione più lunga se ADB cade e richiede recupero manuale). |
+| **Impatto previsto su TV / telecomando fisico / Home v8** | Atteso trascurabile sulla visione video (canali DTV/HDMI, IR fisico, `it.akai.customhome.v8` e tasto MENU restano intatti e non toccati da alcun comando). |
+| **Scritture su disco / modificabilità** | **Zero scritture persistenti su APK o DB v5 della TV**, pur includendo **modifiche temporanee allo stato runtime** (`force-stop`, `adb root`/`unroot`, ripristino servizio). |
+| **Comandi distruttivi** | **Nessuno** (`adb uninstall`, `pm clear`, wipe, flash, `kill -9` implicito e `-d` su installazione categoricamente esclusi). |
 
-### Comportamento in Caso di Errore (Fail-Closed & Ripristino Servizio)
-- **Fallimento `am force-stop` / processo non quiescente**: abort immediato prima dell'estrazione; riavvio precauzionale di `RemoteServerService` v5 e verifica stato `8088`.
-- **Fallimento `adb root` o verifica `uid=0(root)`**: blocco Fail-Closed (`[ELEVAZIONE ADB ROOT FALLITA]`), esecuzione blocco `finally` con verifica `adb unroot` (`uid=2000(shell)`), riavvio di `RemoteServerService` v5; nessuna installazione possibile.
-- **Fallimento `adb unroot` (mancata conferma `uid=2000(shell)`)**: errore critico `[STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO]` con fermo immediato di qualunque operazione successiva e istruzione esplicita di recupero `adb -s 192.168.1.101:5555 unroot && adb -s 192.168.1.101:5555 shell id`.
-- **Fallimento estrazione WAL o `PRAGMA wal_checkpoint(TRUNCATE)` / `PRAGMA integrity_check`**: backup marcato **NON VALIDO / BLOCCANTE** (Autorizzazione B resta vietata), riavvio di `RemoteServerService` v5, apertura report `[BLOCKER → CHATGPT]` su PR #1 prima di ritentare.
+### Comportamento in Caso di Errore & Gate per Successiva Fase (B)
+- **Fallimento `am force-stop` / PID residuo**: abort immediato in `Ensure-ApplicationQuiescence` **senza `kill -9`**, blocco `finally` invoca comunque `Restore-TargetApplicationService` su v5 e verifica processo + `/api/status`.
+- **Fallimento `adb root` o `adb unroot` (`uid!=2000`)**: se `adb unroot` fallisce o ADB diventa irraggiungibile dopo `force-stop`, emissione di **`[STATO SERVIZIO V5 UNKNOWN / RECUPERO MANUALE RICHIESTO]`** con comandi manuali `adb -s 192.168.1.101:5555 unroot && adb -s 192.168.1.101:5555 shell id && adb -s 192.168.1.101:5555 shell am start -n it.akai.customremote/.MainActivity`.
+- **Gate obbligatorio per Fase (B) (`-Action install`)**: prima dell'installazione, `Test-PackageUpgradeGate` verifica `applicationId == it.akai.customremote`, `versionCode >= installedVersionCode` e firma SHA-256; `adb install -r` **non include più `-d`** (riservato esclusivamente a `-Action rollback` esplicito). Clean-start (`-GreenfieldStart`) resta ammesso solo con pacchetto assente e consenso specifico.

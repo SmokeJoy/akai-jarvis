@@ -126,7 +126,9 @@
 
         // Provider & API
         aiModelSelect: document.getElementById('ai-model-select'),
+        aiKimiRegionSelect: document.getElementById('ai-kimi-region-select'),
         aiApiKeyInput: document.getElementById('ai-api-key-input'),
+        chkCloudContextConsent: document.getElementById('chk-cloud-context-consent'),
         btnToggleKeyVisibility: document.getElementById('btn-toggle-key-visibility'),
         btnTestAiConnection: document.getElementById('btn-test-ai-connection'),
         testConnectionResult: document.getElementById('test-connection-result'),
@@ -956,15 +958,24 @@
             if (res.ok) {
                 const cfg = await res.json();
 
-                // Provider
+                // Provider & Execution Mode
+                const effectiveProvider = (cfg.execution_mode === 'LOCAL_ONLY' || cfg.strict_local_only)
+                    ? 'local'
+                    : (cfg.active_provider || 'deepseek');
                 const radios = document.getElementsByName('ai-provider');
                 for (const r of radios) {
-                    r.checked = (r.value === cfg.active_provider);
+                    r.checked = (r.value === effectiveProvider);
                 }
 
-                // Model
+                // Model & Kimi Region
                 if (cfg.active_model && elements.aiModelSelect) {
                     elements.aiModelSelect.value = (cfg.active_model === 'deepseek-chat') ? 'deepseek-flash' : cfg.active_model;
+                }
+                if (elements.aiKimiRegionSelect) {
+                    elements.aiKimiRegionSelect.value = cfg.kimi_region || 'intl';
+                }
+                if (elements.chkCloudContextConsent) {
+                    elements.chkCloudContextConsent.checked = (cfg.cloud_context_consent !== false);
                 }
 
                 // Masked API Keys
@@ -1068,14 +1079,23 @@
 
         const selectedRadio = document.querySelector('input[name="ai-provider"]:checked');
         const provider = selectedRadio ? selectedRadio.value : 'deepseek';
-        const model = elements.aiModelSelect.value;
-        const key = elements.aiApiKeyInput.value.trim();
+        const executionMode = (provider === 'local') ? 'LOCAL_ONLY' : 'CLOUD_OPTIONAL';
+        const model = elements.aiModelSelect ? elements.aiModelSelect.value : 'deepseek-flash';
+        const kimiRegion = elements.aiKimiRegionSelect ? elements.aiKimiRegionSelect.value : 'intl';
+        const cloudContextConsent = elements.chkCloudContextConsent ? Boolean(elements.chkCloudContextConsent.checked) : true;
+        const key = elements.aiApiKeyInput ? elements.aiApiKeyInput.value.trim() : '';
 
-        const payload = { provider, model };
+        const payload = {
+            execution_mode: executionMode,
+            provider,
+            model,
+            kimi_region: kimiRegion,
+            cloud_context_consent: cloudContextConsent
+        };
         if (key && !key.includes('••••')) {
             if (provider === 'kimi') {
                 payload.kimi_key = key;
-            } else {
+            } else if (provider === 'deepseek') {
                 payload.deepseek_key = key;
             }
         }
@@ -1089,11 +1109,13 @@
                 },
                 body: JSON.stringify(payload)
             });
-            if (res.ok) {
+            let respData = null;
+            try { respData = await res.json(); } catch (_) {}
+            if (res.ok && (!respData || respData.success !== false)) {
                 showToast('Configurazione AI salvata con successo!');
                 loadAiConfig();
             } else {
-                showToast('Errore salvataggio AI', true);
+                showToast((respData && respData.error) ? respData.error : 'Errore salvataggio AI', true);
             }
         } catch (e) {
             showToast('Errore di comunicazione', true);

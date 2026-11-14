@@ -62,15 +62,19 @@ jobs:
           python3 akai-remote-tests/test_rollback_offline_simulation.py
           echo "SQLite persistence, v5->v6 migration, offline rollback, and budget enforcement verified on real engine."
 
-      - name: 4. Compile and Run Host Java Unit Tests (34 Tests)
+      - name: 4. Compile and Run Host Java Unit Tests (37 Tests)
         run: |
           echo "=== Compiling and Running Java UnitTests ==="
           mkdir -p test_bin
           javac -encoding UTF-8 -d test_bin \
             akai-remote-tests/host_mock/android/content/*.java \
             akai-remote-tests/host_mock/android/graphics/*.java \
+            akai-remote-tests/host_mock/android/media/*.java \
+            akai-remote-tests/host_mock/android/security/keystore/*.java \
             akai-remote-tests/host_mock/android/util/*.java \
+            akai-remote-tests/host_mock/android/view/accessibility/*.java \
             akai-remote-tests/host_mock/org/json/*.java \
+            akai-remote-tests/host_mock/it/akai/customremote/*.java \
             akai-remote-tests/host_mock/it/akai/customremote/ai/*.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/qr/*.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ServiceStateListener.java \
@@ -82,10 +86,14 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/TlsCertificateManager.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/RestApiRouter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/LocalIntentParser.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/KeystoreSecurityHelper.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AkaiAiController.java \
             akai-remote-tests/UnitTests.java
 
           java -cp test_bin it.akai.customremote.UnitTests
-          echo "All 34 Java unit tests passed with 100% success."
+          echo "All 37 Java unit tests passed with 100% success."
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |

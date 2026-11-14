@@ -11,6 +11,8 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 import it.akai.customremote.AkaiAccessibilityService;
 
@@ -84,6 +86,65 @@ public class ScreenPerceptionEngine {
                 sb.append(" - [").append(el.text != null ? el.text : el.resId).append("]\n");
             }
             return sb.toString();
+        }
+
+        private static final Pattern EMAIL_PATTERN = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
+        private static final Pattern SECRET_PATTERN = Pattern.compile("(?i)(?:sk-[A-Za-z0-9_\\-]{8,}|bearer\\s+[A-Za-z0-9._\\-]{8,})");
+        private static final Pattern PHONE_OR_LONG_NUM_PATTERN = Pattern.compile("(?:\\+?\\d[\\d\\s\\-]{6,}\\d|\\b\\d{6,}\\b)");
+        private static final Pattern INJECTION_PATTERN = Pattern.compile("(?i)(?:ignore\\s+(?:all\\s+)?previous\\s+instructions|system\\s*:|assistant\\s*:|\\{\\s*\"actions\"\\s*:|\"actions\"\\s*:\\s*\\[)");
+
+        private static String sanitizeAndRedact(String raw, int maxLen) {
+            if (raw == null) return "";
+            String s = raw.replaceAll("[\\r\\n\\t\\p{Cntrl}]+", " ").trim();
+            s = SECRET_PATTERN.matcher(s).replaceAll("[REDACTED_SECRET]");
+            s = EMAIL_PATTERN.matcher(s).replaceAll("[REDACTED_EMAIL]");
+            s = PHONE_OR_LONG_NUM_PATTERN.matcher(s).replaceAll("[REDACTED_NUM]");
+            s = INJECTION_PATTERN.matcher(s).replaceAll("[FILTERED]");
+            if (s.length() > maxLen) {
+                s = s.substring(0, maxLen);
+            }
+            return s.trim();
+        }
+
+        /**
+         * Prepara un contesto JSON minimale, redatto e sanitizzato contro prompt injection e PII,
+         * sicuro da inviare all'adapter cloud solo quando hasSensitiveFields == false.
+         */
+        public String toRedactedMinimalContextPrompt() {
+            if (hasSensitiveFields) {
+                return "{\"blocked_sensitive_screen\":true}";
+            }
+            try {
+                JSONObject ctx = new JSONObject();
+                ctx.put("active_package", sanitizeAndRedact(foregroundPackage, 80));
+                if (focusedElementText != null && !focusedElementText.trim().isEmpty()) {
+                    ctx.put("focused_element", sanitizeAndRedact(focusedElementText, 60));
+                }
+                ctx.put("player_active", isPlayerActive || isMusicActive);
+
+                JSONArray arr = new JSONArray();
+                int limit = visibleTexts != null ? Math.min(20, visibleTexts.size()) : 0;
+                for (int i = 0; i < limit; i++) {
+                    String cleaned = sanitizeAndRedact(visibleTexts.get(i), 60);
+                    if (!cleaned.isEmpty()) {
+                        arr.put(cleaned);
+                    }
+                    ctx.put("visible_texts", arr);
+                    if (ctx.toString().length() > 1400) {
+                        arr.remove(arr.length() - 1);
+                        break;
+                    }
+                }
+                ctx.put("visible_texts", arr);
+                String out = ctx.toString();
+                if (out.length() > 1500) {
+                    ctx.put("visible_texts", new JSONArray());
+                    out = ctx.toString();
+                }
+                return out;
+            } catch (Exception e) {
+                return "{\"active_package\":\"unknown\"}";
+            }
         }
 
         public boolean containsText(String query, boolean exact) {

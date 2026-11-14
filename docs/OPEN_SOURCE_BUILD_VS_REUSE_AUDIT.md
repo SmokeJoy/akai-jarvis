@@ -70,43 +70,42 @@ Ispezionando [`AkaiAccessibilityService.java`](file:///c:/Users/danie/OneDrive/D
 
 ---
 
-## 4. Roadmap Agente Che Impara dai Propri Errori (`Osserva -> Pianifica -> Agisci -> Verifica -> Impara`)
+## 4. Architettura Agente Aggiornata (`#issuecomment-6881433641`: Cloud Opzionale DeepSeek/Kimi + Closed-Loop On-TV)
 
-L'obiettivo dell'agente autonomo locale su **Android 9 (`~1.4 GB` RAM, ARMv7)** non richiede né un LLM pesante in memoria né modifiche privilegiate a runtime: la struttura già presente in JARVIS consente un **ciclo chiuso deterministico** appoggiato su SQLite (`procedures`).
+In base alla **decisione definitiva del proprietario (`#issuecomment-6881433641`)**, che rettifica le proposte esplorative local-only/split-brain (`#6880750275` e `#6881298340`), **JARVIS resta interamente residente sulla AKAI TV (`192.168.1.101`)** con nessun requisito di mini PC esterno, Termux o `llama.cpp` su ARMv7. L'inferenza AI sfrutta gli adattatori cloud opzionali **DeepSeek** e **Moonshot Kimi Open Platform** (`CLOUD_OPTIONAL`) con fallback esplicito `LOCAL_ONLY` e fast-path locale a **0 token**:
 
-### Tassonomia Obbligatoria degli Esiti e Regola di Apprendimento (`#issuecomment-6881195749`)
-Inviare un comando non equivale a verificarne l'effetto reale sulla TV:
-- **`COMMAND_SENT`**: il comando o broadcast è stato inoltrato senza eccezioni locali — è ciò che attesta `CommandResult(true)` restituito da `TvController.sendMediaTekBroadcast()`, `context.startActivity(...)` o dai cambi canale/sorgente HDMI/DTV, e **non prova** che la sorgente HDMI/DTV o la schermata siano effettivamente cambiate.
-- **`STATE_VERIFIED`**: l'osservazione post-azione via `AkaiAccessibilityService` (`getCurrentForegroundPackage()`, `getScreenHierarchySummary()`) o segnale di stato confermato prova che la transizione attesa è realmente avvenuta. **Solo uno stato `STATE_VERIFIED` può incrementare `success_count` o promuovere una procedura nella tabella SQLite `procedures`.**
-- **`FAILED`**: il comando ha fallito l'invio oppure l'osservazione post-azione ha rilevato la mancata transizione entro la finestra attesa (`fail_count` incrementato e abbassamento priorità).
-- **`NOT_TESTED`**: ramo/funzione non ancora collaudata sull'hardware reale o sul flusso corrente (mai trattata come verificata).
+- **P0 Credenziali (`KeystoreSecurityHelper.java`)**: rimosso ogni fallback in chiaro (`b64:`); le nuove chiavi richiedono cifratura crittografica AES-256-GCM valida, `isHardwareBackedKeystore()` rileva realmente `KeyInfo.isInsideSecureHardware()` e i payload legacy non cifrati vengono rifiutati/migrati o purgati senza loggare segreti.
+- **P1 Provider & Validazione (`AiProviderAdapter.java`)**: supporto selezionabile DeepSeek (`https://api.deepseek.com/chat/completions`) e Moonshot Kimi internazionale (`https://api.moonshot.ai/v1/chat/completions`, con opzione regione `cn` allowlisted, distinzione chiara tra key Moonshot Open Platform e `Kimi Coding`), validazione rigorosa dello schema JSON/`tool_calls` e whitelist azioni (tipi consentiti, package approvati, `wait` limitati, blocco `power`/azioni distruttive senza conferma owner, lettura bounded max `64 KB`, contatore client dichiarato come stima locale).
+- **Privacy & Tassonomia Obbligatoria (`COMMAND_SENT`, `STATE_VERIFIED`, `FAILED`, `NOT_TESTED`)**: contesto schermo minimizzato e redatto (`toRedactedMinimalContextPrompt()`), blocco immediato su `hasSensitiveFields == true`, loop chiuso `Osserva -> Contesto Minimo Redatto -> Pianifica -> Valida -> Esegui -> Riosserva -> Verifica -> [max 1 replanning distinto] -> Salva in SQLite SOLO se STATE_VERIFIED`.
 
 ```
   [Richiesta Utente via HTTPS 8443]
                  │
                  ▼
+      0. FAST-PATH LOCALE (0 Token) + LOOKUP SQLite `procedures`
+         - Se noto e risolto -> esegue; verifica con ScreenPerceptionEngine
+                 │
+                 ▼ (solo se CLOUD_OPTIONAL + API key configurata)
       1. OSSERVA (ScreenPerceptionEngine)
-         - Package foreground + gerarchia nodi 4 livelli
          - Gate privacy obbligatorio: blocco immediato se `hasSensitiveFields == true`
+         - Preparazione contesto MINIMO e REDATTO (`toRedactedMinimalContextPrompt`)
                  │
                  ▼
-      2. PIANIFICA (Intent + SQLite `procedures`)
-         - Lookup procedura nota per intento e contesto foreground in base a `success_count` / `fail_count`
-         - Fallback a strategia deterministica base (Leanback launch, focus search, deep-link)
+      2. PIANIFICA (DeepSeek / Moonshot Kimi con JSON/tool_calls)
+         - Validazione rigorosa schema, tipi azione, package whitelist e `success_condition`
                  │
                  ▼
-      3. AGISCI (`TvController.executeActionSequence` / `sendMediaTekBroadcast`)
+      3. AGISCI (`TvController.executeActionSequence` / singolo blocco sicuro)
          - Esito immediato classificato al massimo come `COMMAND_SENT` (mai `STATE_VERIFIED`)
                  │
                  ▼
-      4. VERIFICA (Post-action Observation)
-         - Rilettura `getCurrentForegroundPackage()` e `getScreenHierarchySummary()` dopo finestra attesa
-         - Classificazione esito reale in `STATE_VERIFIED` vs `FAILED`
+      4. VERIFICA & REPLANNING (Max 1 replanning distinto su fallimento)
+         - Rilettura `ScreenPerceptionEngine` -> classificazione `STATE_VERIFIED` vs `FAILED`
                  │
                  ▼
       5. IMPARA (SQLite local memory, cap `15 MB`)
-         - Solo se `STATE_VERIFIED` -> incrementa `success_count` e consolida sequenza valida
-         - Se `FAILED` (inclusi `COMMAND_SENT` senza cambio stato osservato) -> incrementa `fail_count`, NON promuove la sequenza e seleziona fallback
+         - Solo se `STATE_VERIFIED` -> incrementa `success_count` e salva procedura verificata
+         - Se `FAILED` (inclusi `COMMAND_SENT` senza cambio stato osservato) -> NON salva come successo
 ```
 
 ### Piano Operativo per Fasi (Nessuna Deviazione sulla Baseline Beta)
@@ -115,8 +114,16 @@ Inviare un comando non equivale a verificarne l'effetto reale sulla TV:
 | :--- | :--- | :--- | :--- |
 | **Fase 0 — Backup Reale (A) e Beta Gate (B)** | Eseguire prima **Autorizzazione (A)** (solo backup reale v5 + prova offline + riavvio immediato v5) e poi **Autorizzazione (B)** (deploy v6, HTTPS `8443` SAN `192.168.1.101`, iPhone Safari) | Procedura dettagliata in [`REAL_TV_V5_BACKUP_OPERATIONAL_PLAN.md`](file:///c:/Users/danie/OneDrive/Documenti/Antygravity/Akay/docs/REAL_TV_V5_BACKUP_OPERATIONAL_PLAN.md); codice invariato rispetto alla baseline CI verde | Fase A: backup v5/WAL consolidato SHA-256 + `adb unroot` -> `uid=2000` + v5 riavviato.<br>Fase B: preflight `APPROVED` e telecomando iPhone operativo |
 | **Fase 1.1 — Quick Win #1 (Patch Java mirata post-beta)** | Risolvere D-Pad Accessibility (`View.FOCUS_*`), antenato `isClickable()` con guardia sensibile/distruttiva, `firstFocusable()`, scroll fallback, `getLeanbackLaunchIntentForPackage` & YouTube `SEARCH_LINKS` | Java puro compatibile `javac` + `d8`; nessuna lib esterna; test unitari con `uinput` disabilitato che verificano la costante esatta passata a `navigateFocus` | CI `34+` Java & `29/29` PowerShell verdi + verifica su TV |
-| **Fase 1.2 — Ciclo Autonomo Deterministico su SQLite `procedures`** | Chiudere il loop `Osserva -> Pianifica -> Agisci -> Verifica -> Impara` con tassonomia `COMMAND_SENT` / `STATE_VERIFIED` / `FAILED` / `NOT_TESTED` senza LLM su TV | Uso esclusivo di `ScreenPerceptionEngine`, `TvController` e tabella SQLite `procedures` entro il tetto `15 MB`; promozione memoria consentita **solo** dopo `STATE_VERIFIED` | Test ripetuto di sequenze multi-step con verifica esplicita che `COMMAND_SENT` non verificato non incrementa `success_count` |
+| **Fase 1.2 — Cloud DeepSeek/Kimi (`CLOUD_OPTIONAL`) & Agente Closed-Loop Verificato** | Sbloccare inferenza opzionale DeepSeek & Moonshot Kimi con P0 Keystore cifrato, validazione schema/whitelist, contesto minimo redatto e loop `Osserva -> Pianifica -> Agisci -> Verifica -> [max 1 replan] -> Salva solo STATE_VERIFIED` | Nessun mini PC / Termux / `llama.cpp`; `LOCAL_ONLY` resta selezionabile esplicitamente; mock HTTP completi su CI senza traffico fatturabile | Mock DeepSeek/Kimi HTTP (`200/401/402/429/timeout/bad JSON/schema`), test `KeystoreSecurityHelper` senza `b64:`, test scenarios `'apri YouTube'` e `'apri impostazioni audio'` verdi in CI |
 | **Fase 2 — Espansioni Opzionali Misurate (Voce Offline & Dev Tooling)** | Valutare voce on-device TV (`vosk-model-small-it-0.22` o riserva `sherpa-onnx` `int8`/VAD) e consolidare debug PC con `mobile-mcp` | **Obbligatorio benchmark RAM reale su TV (~1.4 GB)** prima di includere AAR/JNI ~250-300 MB; la dettatura da iPhone Safari via HTTPS `8443` rimane attiva a **0 MB RAM TV**. `mobile-mcp` confinato al PC host con `MOBILEMCP_DISABLE_TELEMETRY=1` | Decisione go/no-go basata su `dumpsys meminfo` reale senza OOM/LMK su player e Home v8 |
+
+### Fase B — Riuso Selettivo Pattern MobileAgent-Android & AgentPaw (`#6881898084`)
+
+Senza aggiungere librerie esterne, Kotlin/Compose, Shizuku, root agent o una seconda app sulla TV, i pattern architetturali verificati dei due progetti sono stati adattati direttamente nelle classi Java esistenti (`AkaiAiController.java`, `ScreenPerceptionEngine.java`, `AiProviderAdapter.java`):
+
+- **Da MobileAgent-Android (Stepwise Executor & State Reflector)**: esecuzione per singoli step (`executeActionsStepwise`), lettura esplicita stato pre/post (`buildReflectorContext` via `toRedactedMinimalContextPrompt()`), massimo 1 replanning non ripetitivo con scarto automatico di piani identici, distinzione categorica `STATE_VERIFIED` vs `COMMAND_SENT` vs `FAILED` vs `NOT_TESTED`, salvataggio in memoria procedurale SQLite consentito **solo** su `STATE_VERIFIED`.
+- **Da AgentPaw (Adaptive Bounded Wait & Cooperative Cancel)**: sostituzione delle attese fisse bloccanti (`800/1200/1500 ms` di `Thread.sleep`) con polling adattivo delimitato (`waitForConditionOrUiChange` / `waitForHomePackage`) che termina appena la UI o la `success_condition` soddisfa il criterio osservato, più supporto cooperativo `cancelCurrentTask()`.
+- **Tradeoff misurati**: **0 nuove dipendenze** e incremento minimo sul solo codice applicativo (`classes.dex`); telemetria per richiesta (`cloud_calls`, `snapshot_count`, `wait_elapsed_ms`, `replan_count`, `execution_outcome`). Le metriche fisiche su AKAI TV (`RAM/PSS`, `CPU`, `cold-start`, latenza D-Pad reale) restano esplicitamente `NOT_TESTED` sotto freeze hardware.
 
 ---
 

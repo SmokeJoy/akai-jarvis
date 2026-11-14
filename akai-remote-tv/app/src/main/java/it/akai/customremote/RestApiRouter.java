@@ -41,6 +41,14 @@ public class RestApiRouter {
         JSONArray getSupportedCatalog();
         default boolean speak(String text, boolean interrupt) { return false; }
         default boolean previewVoice(String voice, String text) { return false; }
+        default JSONObject testConnection(String requestBody) {
+            JSONObject res = new JSONObject();
+            try {
+                res.put("success", false);
+                res.put("message", "Test connessione non implementato su questo handler");
+            } catch (Exception ignored) {}
+            return res;
+        }
         default JSONObject getSpeechStatus() {
             JSONObject s = new JSONObject();
             try {
@@ -491,10 +499,12 @@ public class RestApiRouter {
                 return true;
             }
 
+            boolean strictLocal = (aiHandler == null) || aiHandler.isStrictLocalOnly();
             JSONObject out = new JSONObject();
-            out.put("strict_local_only", true);
-            out.put("local_only_profile", true);
-            out.put("cloud_disabled", true);
+            out.put("strict_local_only", strictLocal);
+            out.put("local_only_profile", strictLocal);
+            out.put("cloud_disabled", strictLocal);
+            out.put("execution_mode", strictLocal ? "LOCAL_ONLY" : "CLOUD_OPTIONAL");
             out.put("offline_guaranteed", false);
             out.put("offline_validation_pending", true);
             out.put("supported_commands", aiHandler != null ? aiHandler.getSupportedCatalog() : it.akai.customremote.ai.LocalIntentParser.getSupportedCatalog());
@@ -502,7 +512,7 @@ public class RestApiRouter {
             return true;
         }
 
-        // Blocco preventivo chiamate Cloud in STRICT_LOCAL_ONLY (/api/ai/test_connection)
+        // Test connessione provider AI (/api/ai/test_connection): bloccato in LOCAL_ONLY, delegato in CLOUD_OPTIONAL
         if ("/api/ai/test_connection".equals(path) && "POST".equals(method)) {
             String token = extractBearerToken(headers);
             if (!securityManager.validateToken(token)) {
@@ -510,11 +520,17 @@ public class RestApiRouter {
                 return true;
             }
 
-            JSONObject err = new JSONObject();
-            err.put("success", false);
-            err.put("error", "Chiamate verso provider cloud disabilitate nel profilo STRICT_LOCAL_ONLY");
-            err.put("strict_local_only", true);
-            sendJsonResponse(os, 403, err);
+            if (aiHandler == null || aiHandler.isStrictLocalOnly()) {
+                JSONObject err = new JSONObject();
+                err.put("success", false);
+                err.put("error", "Chiamate verso provider cloud disabilitate nel profilo STRICT_LOCAL_ONLY");
+                err.put("strict_local_only", true);
+                sendJsonResponse(os, 403, err);
+                return true;
+            }
+
+            JSONObject testRes = aiHandler.testConnection(body != null ? body : "{}");
+            sendJsonResponse(os, 200, testRes != null ? testRes : new JSONObject().put("success", false));
             return true;
         }
 

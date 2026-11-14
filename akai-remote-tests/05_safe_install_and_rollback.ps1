@@ -824,14 +824,7 @@ function Ensure-ApplicationQuiescence {
     $state = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName
     if ($state.IsRunning) {
         $pids = $state.Pids
-        Write-Host "      Processo ancora attivo (PID: $pids), tentativo terminazione forzata (kill -9)..." -ForegroundColor Yellow
-        & $AdbExe -s $TargetAdb shell "kill -9 $pids 2>/dev/null" | Out-Null
-        Start-Sleep -Milliseconds 300
-        $stateRetry = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName
-        if ($stateRetry.IsRunning) {
-            $pidsRetry = $stateRetry.Pids
-            throw "ERRORE FAIL-CLOSED: Impossibile arrestare il processo dell'applicazione ($PackageName, PID residuo: $pidsRetry). Writer non quiescente: estrazione database bloccata categoricamente per prevenire incoerenze o corruzione."
-        }
+        throw "ERRORE FAIL-CLOSED: Impossibile arrestare il processo dell'applicazione ($PackageName, PID residuo: $pids) tramite solo am force-stop (kill -9 implicito disabilitato in Fase A). Writer non quiescente: estrazione database bloccata categoricamente per prevenire incoerenze o corruzione."
     }
     Write-Host "      Quiescenza applicazione verificata e confermata (zero processi attivi)." -ForegroundColor Green
     return $true
@@ -915,6 +908,197 @@ function Invoke-WithAdbElevation {
             Write-Host "      Privilegi temporanei adbd revocati con successo (adb unroot -> $idAfter)." -ForegroundColor Gray
         }
         $ErrorActionPreference = $prevEap
+    }
+}
+
+function Restore-TargetApplicationService {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$TargetTv = "192.168.1.101",
+        [int]$ExpectedHttpPort = 8088,
+        [bool]$UnrootVerified = $true
+    )
+
+    $manualCmd = "adb -s $TargetAdb unroot && adb -s $TargetAdb shell id && adb -s $TargetAdb shell am start -n $PackageName/.MainActivity"
+
+    if (-not $UnrootVerified) {
+        return @{
+            Restored = $false
+            Status = "UNKNOWN"
+            Reason = "STATO ADBD UNKNOWN: rientro adb unroot non verificato, ripristino automatico non dichiarabile"
+            ManualRecovery = $manualCmd
+        }
+    }
+
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $aliveOut = (& $AdbExe -s $TargetAdb shell "echo ADB_ALIVE" 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $aliveOut -notmatch "ADB_ALIVE") {
+            return @{
+                Restored = $false
+                Status = "UNKNOWN"
+                Reason = "ADB irraggiungibile dopo am force-stop (exit=$LASTEXITCODE, out='$aliveOut')"
+                ManualRecovery = $manualCmd
+            }
+        }
+
+        Write-Host "[RECOVERY V5] Ripristino servizio target $PackageName compatibile Android 9..." -ForegroundColor Yellow
+
+        # 1. Tentativo primario: startservice esplicito
+        & $AdbExe -s $TargetAdb shell "am startservice -n $PackageName/.RemoteServerService" 2>&1 | Out-Null
+        Start-Sleep -Milliseconds 300
+        $procState = $null
+        try { $procState = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName } catch { $procState = $null }
+
+        # 2. Tentativo secondario: cmd activity start-service
+        if (-not $procState -or -not $procState.IsRunning) {
+            & $AdbExe -s $TargetAdb shell "cmd activity start-service $PackageName/.RemoteServerService" 2>&1 | Out-Null
+            Start-Sleep -Milliseconds 300
+            try { $procState = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName } catch { $procState = $null }
+        }
+
+        # 3. Fallback Android 9 (.RemoteServerService non esportato vs .MainActivity esportata)
+        if (-not $procState -or -not $procState.IsRunning) {
+            & $AdbExe -s $TargetAdb shell "am start -n $PackageName/.MainActivity" 2>&1 | Out-Null
+            Start-Sleep -Milliseconds 400
+            try { $procState = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName } catch { $procState = $null }
+        }
+
+        if (-not $procState -or -not $procState.IsRunning) {
+            return @{
+                Restored = $false
+                Status = "UNKNOWN"
+                Reason = "Processo $PackageName non attivo dopo tentativi startservice/cmd activity/MainActivity"
+                ManualRecovery = $manualCmd
+            }
+        }
+
+        # Verifica applicativa GET /api/status (status=ok && uinput_ready=true)
+        $statusHealthy = $false
+        $lastStatusDetail = "nessuna risposta"
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $httpSucceeded = $false
+            try {
+                $resp = Invoke-RestMethod -Uri "http://${TargetTv}:${ExpectedHttpPort}/api/status" -Method Get -TimeoutSec 2 -ErrorAction Stop
+                $httpSucceeded = $true
+                if ($resp.status -eq "ok" -and $resp.uinput_ready -eq $true) {
+                    $statusHealthy = $true
+                    break
+                }
+                $lastStatusDetail = "HTTP /api/status non sano (status=$($resp.status), uinput_ready=$($resp.uinput_ready))"
+                break
+            } catch {
+                $lastStatusDetail = $_.Exception.Message
+            }
+
+            if (-not $httpSucceeded) {
+                $curlOut = (& $AdbExe -s $TargetAdb shell "curl -s http://127.0.0.1:${ExpectedHttpPort}/api/status" 2>&1 | Out-String).Trim()
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($curlOut) -and $curlOut -match "\{") {
+                    try {
+                        $curlJson = $curlOut | ConvertFrom-Json -ErrorAction Stop
+                        if ($curlJson.status -eq "ok" -and $curlJson.uinput_ready -eq $true) {
+                            $statusHealthy = $true
+                            break
+                        }
+                        $lastStatusDetail = "on-device /api/status non sano (status=$($curlJson.status), uinput_ready=$($curlJson.uinput_ready))"
+                        break
+                    } catch {
+                        $lastStatusDetail = "JSON /api/status non valido: $curlOut"
+                    }
+                }
+            }
+            if ($attempt -lt 3) { Start-Sleep -Milliseconds 300 }
+        }
+
+        if (-not $statusHealthy) {
+            return @{
+                Restored = $false
+                Status = "UNHEALTHY"
+                Reason = "Processo attivo (PID: $($procState.Pids)) ma endpoint /api/status non sano: $lastStatusDetail"
+                ManualRecovery = $manualCmd
+            }
+        }
+
+        Write-Host "[RECOVERY V5] Servizio $PackageName ripristinato e verificato (PID=$($procState.Pids), /api/status=ok, uinput_ready=true)." -ForegroundColor Green
+        return @{
+            Restored = $true
+            Status = "RESTORED"
+            Pids = $procState.Pids
+            Reason = "OK"
+            ManualRecovery = ""
+        }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Test-PackageUpgradeGate {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$CandidateApkPath
+    )
+
+    $installedVersionCode = $null
+    $candidatePkg = $null
+    $candidateVersionCode = $null
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $dumpsysOut = (& $AdbExe -s $TargetAdb shell "dumpsys package $PackageName" 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0 -and $dumpsysOut -match "versionCode=(\d+)") {
+            $installedVersionCode = [int]$matches[1]
+        }
+
+        if (Test-Path $CandidateApkPath) {
+            $item = Get-Item $CandidateApkPath
+            if ($item.Length -ge 256) {
+                $headerBytes = New-Object byte[] 4
+                $fs = [System.IO.File]::OpenRead($CandidateApkPath)
+                try { $null = $fs.Read($headerBytes, 0, 4) } finally { $fs.Close() }
+                if ($headerBytes[0] -eq 0x50 -and $headerBytes[1] -eq 0x4B) {
+                    $apksignerJar = Get-ApkSignerJar
+                    $aapt2Path = $null
+                    if ($apksignerJar) {
+                        $buildToolsDir = Split-Path (Split-Path $apksignerJar -Parent) -Parent
+                        foreach ($cand in @("aapt2.exe", "aapt2")) {
+                            $p = Join-Path $buildToolsDir $cand
+                            if (Test-Path $p) { $aapt2Path = $p; break }
+                        }
+                    }
+                    if (-not $aapt2Path) {
+                        $cmdAapt2 = Get-Command "aapt2" -ErrorAction SilentlyContinue
+                        if ($cmdAapt2) { $aapt2Path = $cmdAapt2.Source }
+                    }
+                    if ($aapt2Path) {
+                        $badgingOut = (& $aapt2Path dump badging $CandidateApkPath 2>&1 | Out-String)
+                        if ($LASTEXITCODE -eq 0 -and $badgingOut -match "package:\s+name='([^']+)'\s+versionCode='(\d+)'") {
+                            $candidatePkg = $matches[1]
+                            $candidateVersionCode = [int]$matches[2]
+                        }
+                    }
+                }
+            }
+        }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+
+    if ($candidatePkg -and $candidatePkg -ne $PackageName) {
+        throw "ERRORE FAIL-CLOSED: applicationId APK candidato ('$candidatePkg') non corrisponde al target '$PackageName'."
+    }
+    if ($null -ne $installedVersionCode -and $null -ne $candidateVersionCode -and $candidateVersionCode -lt $installedVersionCode) {
+        throw "ERRORE FAIL-CLOSED: Downgrade non autorizzato in -Action install (candidate versionCode=$candidateVersionCode < installed versionCode=$installedVersionCode). Usare -Action rollback o un piano separato."
+    }
+
+    return @{
+        InstalledVersionCode = $installedVersionCode
+        CandidatePackageName = $candidatePkg
+        CandidateVersionCode = $candidateVersionCode
     }
 }
 
@@ -1416,121 +1600,150 @@ switch ($Action) {
             Write-Host "      Endpoint REST non raggiungibile o autenticazione 401 richiesta ($($_.Exception.Message)) - continuo con snapshot binario..." -ForegroundColor Yellow
         }
 
-        # 3. Snapshot consistente SQLite
+        # 3. Snapshot consistente SQLite con recovery atomico try/finally per v5
         $backupDb = Join-Path $sessionDir "akai_memory.db"
         $backupDbWal = Join-Path $sessionDir "akai_memory.db-wal"
-        Write-Host "[2/3] Arresto writer app e tentativo snapshot consistente (se v6+)..."
-        & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
-        & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" 2>$null | Out-Null
-        Start-Sleep -Seconds 1
+        $preStopState = Get-ApplicationProcessState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
+        $wasRunning = [bool]$preStopState.IsRunning
+        $stopIssued = $false
+        $unrootUnknown = $false
+        $backupException = $null
+        $restoreResult = $null
 
-        Write-Host "[3/3] Estrazione database SQLite e gestione file WAL..."
-        $extracted = $false
+        try {
+            Write-Host "[2/3] Arresto writer app (wasRunning=$wasRunning) e tentativo snapshot..."
+            $stopIssued = $true
+            & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
+            & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" 2>$null | Out-Null
+            Start-Sleep -Seconds 1
 
-        # Tentativo A: snapshot via run-as
-        $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/akai_memory_snapshot.db" -LocalFilePath $backupDb
-        if ($rx.Success) { $extracted = $true }
+            Write-Host "[3/3] Estrazione database SQLite e gestione file WAL..."
+            $extracted = $false
 
-        # Tentativo B: snapshot via su
-        if (-not $extracted) {
-            $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/akai_memory_snapshot.db'" -LocalFilePath $backupDb
+            # Tentativo A: snapshot via run-as
+            $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/akai_memory_snapshot.db" -LocalFilePath $backupDb
             if ($rx.Success) { $extracted = $true }
-        }
 
-        # Se snapshot v6 non presente, applica quiescenza verificata per estrazione baseline v5
-        if (-not $extracted) {
-            Ensure-ApplicationQuiescence -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
-        }
-
-        # Tentativo C: database primario + WAL via run-as (baseline v5 con probing attivo WAL)
-        if (-not $extracted) {
-            $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $backupDb
-            if ($rx.Success) {
-                $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "run-as"
-                if ($walProbe -eq "EXISTS") {
-                    Write-Host "      File WAL presente su device (run-as): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
-                    $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal -MinBytes 32
-                    if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
-                        throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via run-as."
-                    }
-                    Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                } elseif ($walProbe -eq "NOT_FOUND") {
-                    Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
-                    if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
-                }
-                $extracted = $true
+            # Tentativo B: snapshot via su
+            if (-not $extracted) {
+                $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/akai_memory_snapshot.db'" -LocalFilePath $backupDb
+                if ($rx.Success) { $extracted = $true }
             }
-        }
 
-        # Tentativo D: database primario + WAL via su (baseline v5 con probing attivo WAL)
-        if (-not $extracted) {
-            $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $backupDb
-            if ($rx.Success) {
-                $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "su"
-                if ($walProbe -eq "EXISTS") {
-                    Write-Host "      File WAL presente su device (su): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
-                    $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal -MinBytes 32
-                    if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
-                        throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via su."
-                    }
-                    Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                } elseif ($walProbe -eq "NOT_FOUND") {
-                    Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
-                    if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
-                }
-                $extracted = $true
+            # Se snapshot v6 non presente, applica quiescenza verificata per estrazione baseline v5
+            if (-not $extracted) {
+                Ensure-ApplicationQuiescence -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
             }
-        }
 
-        # Tentativo E: database primario + WAL via root adbd (firmware userdebug con probing attivo WAL)
-        if (-not $extracted) {
-            $script:rootExtracted = $false
-            $rootElevErr = ""
-            try {
-                Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
-                    $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $backupDb
-                    if ($rx.Success) {
-                        $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
-                        if ($walProbe -eq "EXISTS") {
-                            Write-Host "      File WAL presente su device (root): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
-                            $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db-wal" -LocalFilePath $backupDbWal -MinBytes 32
-                            if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
-                                throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via root."
-                            }
-                            Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                        } elseif ($walProbe -eq "NOT_FOUND") {
-                            Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
-                            if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+            # Tentativo C: database primario + WAL via run-as (baseline v5 con probing attivo WAL)
+            if (-not $extracted) {
+                $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db" -LocalFilePath $backupDb
+                if ($rx.Success) {
+                    $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "run-as"
+                    if ($walProbe -eq "EXISTS") {
+                        Write-Host "      File WAL presente su device (run-as): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                        $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat databases/akai_memory.db-wal" -LocalFilePath $backupDbWal -MinBytes 32
+                        if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                            throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via run-as."
                         }
-                        $script:rootExtracted = $true
+                        Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                    } elseif ($walProbe -eq "NOT_FOUND") {
+                        Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                        if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
                     }
+                    $extracted = $true
                 }
-            } catch {
-                if ($_.Exception.Message -match "STATO ADBD UNKNOWN" -or $_.Exception.Message -match "File WAL") { throw }
-                $rootElevErr = " [$($_.Exception.Message)]"
             }
-            if ($script:rootExtracted) {
-                $extracted = $true
+
+            # Tentativo D: database primario + WAL via su (baseline v5 con probing attivo WAL)
+            if (-not $extracted) {
+                $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db'" -LocalFilePath $backupDb
+                if ($rx.Success) {
+                    $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "su"
+                    if ($walProbe -eq "EXISTS") {
+                        Write-Host "      File WAL presente su device (su): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                        $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/databases/akai_memory.db-wal'" -LocalFilePath $backupDbWal -MinBytes 32
+                        if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                            throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via su."
+                        }
+                        Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                    } elseif ($walProbe -eq "NOT_FOUND") {
+                        Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                        if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+                    }
+                    $extracted = $true
+                }
+            }
+
+            # Tentativo E: database primario + WAL via root adbd (firmware userdebug con probing attivo WAL)
+            if (-not $extracted) {
                 $script:rootExtracted = $false
+                $rootElevErr = ""
+                try {
+                    Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
+                        $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $backupDb
+                        if ($rx.Success) {
+                            $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
+                            if ($walProbe -eq "EXISTS") {
+                                Write-Host "      File WAL presente su device (root): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                                $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db-wal" -LocalFilePath $backupDbWal -MinBytes 32
+                                if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                                    throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via root."
+                                }
+                                Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                            } elseif ($walProbe -eq "NOT_FOUND") {
+                                Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                                if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+                            }
+                            $script:rootExtracted = $true
+                        }
+                    }
+                } catch {
+                    if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { $unrootUnknown = $true; throw }
+                    if ($_.Exception.Message -match "File WAL") { throw }
+                    $rootElevErr = " [$($_.Exception.Message)]"
+                }
+                if ($script:rootExtracted) {
+                    $extracted = $true
+                    $script:rootExtracted = $false
+                }
+            }
+
+            if (-not $extracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
+                throw "ERRORE FAIL-CLOSED: Estrazione del database fallita (permessi negati o file non accessibile)$rootElevErr."
+            }
+
+            # Pulizia WAL vuoto
+            if (Test-Path $backupDbWal) {
+                if ((Get-Item $backupDbWal).Length -lt 32) {
+                    Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue
+                } else {
+                    Write-Host "      File WAL rilevato ($((Get-Item $backupDbWal).Length) bytes) - applicazione checkpoint offline..." -ForegroundColor Cyan
+                }
+            }
+
+            Verify-SQLiteIntegrityOffline $backupDb | Out-Null
+            $dbHash = Get-Sha256Hex $backupDb
+            Write-Host "      Database SQLite consolidato e verificato integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$dbHash)" -ForegroundColor Green
+        } catch {
+            $backupException = $_
+        } finally {
+            if ($wasRunning -and $stopIssued) {
+                $restoreResult = Restore-TargetApplicationService -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -TargetTv $TargetTv -ExpectedHttpPort $HttpPort -UnrootVerified (-not $unrootUnknown)
             }
         }
 
-        if (-not $extracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
-            throw "ERRORE FAIL-CLOSED: Estrazione del database fallita (permessi negati o file non accessibile)$rootElevErr."
-        }
-
-        # Pulizia WAL vuoto
-        if (Test-Path $backupDbWal) {
-            if ((Get-Item $backupDbWal).Length -lt 32) {
-                Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue
-            } else {
-                Write-Host "      File WAL rilevato ($((Get-Item $backupDbWal).Length) bytes) - applicazione checkpoint offline..." -ForegroundColor Cyan
+        if ($restoreResult -and -not $restoreResult.Restored) {
+            Write-Host "[STATO SERVIZIO V5 UNKNOWN / RECUPERO MANUALE RICHIESTO] $($restoreResult.Reason)" -ForegroundColor Red
+            Write-Host "      Procedura manuale: $($restoreResult.ManualRecovery)" -ForegroundColor Yellow
+            if ($backupException) {
+                throw "$($backupException.Exception.Message) | [STATO SERVIZIO V5 UNKNOWN / RECUPERO MANUALE RICHIESTO] $($restoreResult.Status): $($restoreResult.Reason). Manuale: $($restoreResult.ManualRecovery)"
             }
+            throw "ERRORE FAIL-CLOSED POST-BACKUP [STATO SERVIZIO V5 UNKNOWN / RECUPERO MANUALE RICHIESTO]: Backup completato ma ripristino servizio v5 fallito ($($restoreResult.Status): $($restoreResult.Reason)). Manuale: $($restoreResult.ManualRecovery)"
         }
-
-        Verify-SQLiteIntegrityOffline $backupDb | Out-Null
-        $dbHash = Get-Sha256Hex $backupDb
-        Write-Host "      Database SQLite consolidato e verificato integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$dbHash)" -ForegroundColor Green
+        if ($backupException) {
+            throw $backupException
+        }
         Write-Host "Sessione di backup completata in: $sessionDir" -ForegroundColor Green
     }
 
@@ -1714,17 +1927,27 @@ switch ($Action) {
             Write-Host "      Home v8 (it.akai.customhome.v8) e Home v7 (it.akai.customhome) rimangono intatte al 100%." -ForegroundColor Green
         }
 
-        # 3. Installazione conservativa (mai uninstall, preserva /data/data)
-        Write-Host "[4/6] Installazione nuovo APK (adb install -r -d)..."
-        $installRes = & $adb -s $TargetAdb install -r -d $ApkPath
+        # 3. Gate pre-install (applicationId + versionCode) e installazione conservativa (no -d su install)
+        $upgradeGate = Test-PackageUpgradeGate -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -CandidateApkPath $ApkPath
+        if ($upgradeGate.CandidateVersionCode) {
+            Write-Host "      Gate pacchetto verificato (target=$PackageName, installedVC=$($upgradeGate.InstalledVersionCode), candidateVC=$($upgradeGate.CandidateVersionCode))." -ForegroundColor Green
+        }
+        Write-Host "[4/6] Installazione nuovo APK (adb install -r)..."
+        $installRes = & $adb -s $TargetAdb install -r $ApkPath
         Write-Host "      Esito adb: $installRes"
         if ($LASTEXITCODE -ne 0 -or $installRes -notmatch "Success") {
             throw "ERRORE FAIL-CLOSED: Installazione fallita da adb (exit=$LASTEXITCODE): $installRes"
         }
 
-        # 4. Avvio servizio
+        # 4. Avvio servizio compatibile Android 9 (.RemoteServerService / fallback .MainActivity)
         Write-Host "[5/6] Avvio servizio RemoteServerService..."
-        & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
+        & $adb -s $TargetAdb shell "am startservice -n $PackageName/.RemoteServerService" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            & $adb -s $TargetAdb shell "cmd activity start-service $PackageName/.RemoteServerService" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                & $adb -s $TargetAdb shell "am start -n $PackageName/.MainActivity" 2>&1 | Out-Null
+            }
+        }
 
         # 5. Multi-Point Health Check Watchdog (30s)
         Write-Host "[6/6] Multi-Point Health Check Watchdog attivo (timeout 30s)..."
