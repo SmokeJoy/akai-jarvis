@@ -362,8 +362,12 @@ if ($isWin) {
 
 # 5. Mock HTTP Server (porta dinamica $port7)
 $port7 = Get-Random -Minimum 21000 -Maximum 28000
+$readyFile7 = Join-Path $testDir7 "ready_7_$([Guid]::NewGuid().ToString('N')).txt"
+$readyEsc7 = $readyFile7.Replace('\', '/')
+if (Test-Path $readyFile7) { Remove-Item $readyFile7 -Force -ErrorAction SilentlyContinue }
 @"
 const http = require('http');
+const fs = require('fs');
 const send = (res, code, ctype, body) => {
   const buf = Buffer.from(body);
   res.writeHead(code, {
@@ -392,14 +396,23 @@ const server = http.createServer((req, res) => {
 setInterval(() => {}, 1000);
 server.on('error', () => {});
 server.on('clientError', (err, socket) => { socket.destroy(); });
-server.listen($port7, '127.0.0.1');
+server.listen($port7, '127.0.0.1', () => { fs.writeFileSync('$readyEsc7', '1'); });
 "@ | Out-File -FilePath $mockHttpScript7 -Encoding ascii
 
 $httpErrLog7 = Join-Path $testDir7 "http_err.log"
-$httpProc7 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript7`"" -RedirectStandardError $httpErrLog7 -PassThru
-Start-Sleep -Milliseconds 800
+$httpProc7 = $null
 
 try {
+    $httpProc7 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript7`"" -RedirectStandardError $httpErrLog7 -PassThru
+    $wait7 = 100
+    while (-not (Test-Path $readyFile7) -and -not $httpProc7.HasExited -and $wait7 -gt 0) {
+        Start-Sleep -Milliseconds 100
+        $wait7--
+    }
+    if (-not (Test-Path $readyFile7)) {
+        throw "Server HTTP mock Test 7 non pronto o terminato prematuramente (HasExited=$($httpProc7.HasExited))"
+    }
+
     $scriptEscaped = $scriptPath.Replace('\', '/')
     $candidateEscaped = $candidateApk7.Replace('\', '/')
     $mockAdbEscaped = $mockAdbCmd7.Replace('\', '/')
@@ -434,6 +447,7 @@ try {
     $failed++
 } finally {
     if ($httpProc7 -and -not $httpProc7.HasExited) { Stop-Process -Id $httpProc7.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $readyFile7 -Force -ErrorAction SilentlyContinue
     Remove-Item $testDir7 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -526,8 +540,12 @@ if ($isWin) {
 
 # 4. Mock HTTP Server: fallisce sul watchdog upgrade, ma risponde OK sul watchdog post-rollback!
 $port8 = Get-Random -Minimum 28001 -Maximum 36000
+$readyFile8 = Join-Path $testDir8 "ready_8_$([Guid]::NewGuid().ToString('N')).txt"
+$readyEsc8 = $readyFile8.Replace('\', '/')
+if (Test-Path $readyFile8) { Remove-Item $readyFile8 -Force -ErrorAction SilentlyContinue }
 @"
 const http = require('http');
+const fs = require('fs');
 let attempts = 0;
 const send = (res, code, ctype, body) => {
   const buf = Buffer.from(body);
@@ -566,14 +584,23 @@ const server = http.createServer((req, res) => {
 setInterval(() => {}, 1000);
 server.on('error', () => {});
 server.on('clientError', (err, socket) => { socket.destroy(); });
-server.listen($port8, '127.0.0.1');
+server.listen($port8, '127.0.0.1', () => { fs.writeFileSync('$readyEsc8', '1'); });
 "@ | Out-File -FilePath $mockHttpScript8 -Encoding ascii
 
 $httpErrLog8 = Join-Path $testDir8 "http_err.log"
-$httpProc8 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript8`"" -RedirectStandardError $httpErrLog8 -PassThru
-Start-Sleep -Milliseconds 800
+$httpProc8 = $null
 
 try {
+    $httpProc8 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttpScript8`"" -RedirectStandardError $httpErrLog8 -PassThru
+    $wait8 = 100
+    while (-not (Test-Path $readyFile8) -and -not $httpProc8.HasExited -and $wait8 -gt 0) {
+        Start-Sleep -Milliseconds 100
+        $wait8--
+    }
+    if (-not (Test-Path $readyFile8)) {
+        throw "Server HTTP mock Test 8 non pronto o terminato prematuramente (HasExited=$($httpProc8.HasExited))"
+    }
+
     $scriptEscaped = $scriptPath.Replace('\', '/')
     $candidateEscaped = $candidateApk8.Replace('\', '/')
     $mockAdbEscaped = $mockAdbCmd8.Replace('\', '/')
@@ -610,6 +637,7 @@ try {
     $failed++
 } finally {
     if ($httpProc8 -and -not $httpProc8.HasExited) { Stop-Process -Id $httpProc8.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $readyFile8 -Force -ErrorAction SilentlyContinue
     Remove-Item $testDir8 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -2244,9 +2272,13 @@ $mockDirEscaped24 = $testDir24.Replace('\', '/')
 $candApkEscaped24 = $testApkNew24.Replace('\', '/')
 
 $port24 = Get-Random -Minimum 31000 -Maximum 38000
+$readyFile24 = Join-Path $testDir24 "ready_24_$([Guid]::NewGuid().ToString('N')).txt"
+$readyEsc24 = $readyFile24.Replace('\', '/')
+if (Test-Path $readyFile24) { Remove-Item $readyFile24 -Force -ErrorAction SilentlyContinue }
 $nodeServerScript24 = Join-Path $testDir24 "mock_http_server.js"
 @"
 const http = require('http');
+const fs = require('fs');
 const server = http.createServer((req, res) => {
     if (req.url === '/api/status') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2261,13 +2293,22 @@ const server = http.createServer((req, res) => {
 });
 setInterval(() => {}, 1000);
 server.on('error', () => {});
-server.listen($port24, '127.0.0.1');
+server.listen($port24, '127.0.0.1', () => { fs.writeFileSync('$readyEsc24', '1'); });
 "@ | Out-File -FilePath $nodeServerScript24 -Encoding ascii
 
-$srvProc24 = Start-Process -FilePath $validNode -ArgumentList "`"$nodeServerScript24`"" -PassThru
-Start-Sleep -Milliseconds 800
+$srvProc24 = $null
+try {
+    $srvProc24 = Start-Process -FilePath $validNode -ArgumentList "`"$nodeServerScript24`"" -PassThru
+    $wait24 = 100
+    while (-not (Test-Path $readyFile24) -and -not $srvProc24.HasExited -and $wait24 -gt 0) {
+        Start-Sleep -Milliseconds 100
+        $wait24--
+    }
+    if (-not (Test-Path $readyFile24)) {
+        throw "Server HTTP mock Test 24 non pronto o terminato prematuramente (HasExited=$($srvProc24.HasExited))"
+    }
 
-$cmd24 = @"
+    $cmd24 = @"
 `$env:NODE_EXE = '$nodeEscaped'
 `$env:ADB_EXECUTABLE = '$mockAdbEscaped24'
 `$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped24'
@@ -2276,23 +2317,26 @@ $cmd24 = @"
 `$env:WATCHDOG_SLEEP_SEC = '1'
 & '$scriptEscaped' -Action install -ApkPath '$candApkEscaped24' -TargetTv '127.0.0.1' -HttpPort $port24 -AllowHardwareExecution -GreenfieldStart
 "@
-$out24 = & $psExe -ExecutionPolicy Bypass -Command $cmd24 2>&1 | Out-String
+    $out24 = & $psExe -ExecutionPolicy Bypass -Command $cmd24 2>&1 | Out-String
 
-try {
-    if ($srvProc24 -and -not $srvProc24.HasExited) { Stop-Process -Id $srvProc24.Id -Force -ErrorAction SilentlyContinue }
-} catch {}
-
-if ($out24 -match "Nessun APK precedente installato sulla TV \(it\.akai\.customremote assente\)" -and
-    $out24 -match "Parametro -GreenfieldStart attivo: autorizzata prima installazione pulita" -and
-    $out24 -match "Home v8 \(it\.akai\.customhome\.v8\) e Home v7 \(it\.akai\.customhome\) rimangono intatte al 100%" -and
-    $out24 -match "DEPLOYMENT VERIFICATO CON SUCCESSO AL 100%") {
-    Write-Host "[PASS] [TEST AFFERMATIVO / CLEAN-START GREENFIELD] Test 24: Clean-Start Greenfield su TV vergine completato al 100% con Home protette" -ForegroundColor Green
-    $passed++
-} else {
-    Write-Host "[FAIL] [TEST AFFERMATIVO / CLEAN-START GREENFIELD] Test 24: Clean-Start fallito: $out24" -ForegroundColor Red
+    if ($out24 -match "Nessun APK precedente installato sulla TV \(it\.akai\.customremote assente\)" -and
+        $out24 -match "Parametro -GreenfieldStart attivo: autorizzata prima installazione pulita" -and
+        $out24 -match "Home v8 \(it\.akai\.customhome\.v8\) e Home v7 \(it\.akai\.customhome\) rimangono intatte al 100%" -and
+        $out24 -match "DEPLOYMENT VERIFICATO CON SUCCESSO AL 100%") {
+        Write-Host "[PASS] [TEST AFFERMATIVO / CLEAN-START GREENFIELD] Test 24: Clean-Start Greenfield su TV vergine completato al 100% con Home protette" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO / CLEAN-START GREENFIELD] Test 24: Clean-Start fallito: $out24" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO / CLEAN-START GREENFIELD] Test 24: Eccezione imprevista: $($_.Exception.Message)" -ForegroundColor Red
     $failed++
+} finally {
+    if ($srvProc24 -and -not $srvProc24.HasExited) { Stop-Process -Id $srvProc24.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $readyFile24 -Force -ErrorAction SilentlyContinue
+    Remove-Item $testDir24 -Recurse -Force -ErrorAction SilentlyContinue
 }
-Remove-Item $testDir24 -Recurse -Force -ErrorAction SilentlyContinue
 
 # -----------------------------------------------------------------------------
 # TEST 25-28: Verifica Rigorosa Autenticazione Server TLS (SAN Mismatch, CA Hostile, CA Unverified, CA Approved)
@@ -2424,6 +2468,308 @@ if ($out28 -match "SUCCESS=True:STATUS=APPROVED:SAN=True:CA=True") {
 }
 
 Remove-Item $testDirTls -Recurse -Force -ErrorAction SilentlyContinue
+
+# ==============================================================================
+# TEST 29: [ADB ROOT/UNROOT + WAL BACKUP & EACCES GUARD]
+# Verifica positiva/negativa completa del canale root adbd (Step 2):
+#   29a) Happy Path: shell(uid=2000) -> adb root -> uid=0 -> backup DB+WAL + checkpoint -> adb unroot -> uid=2000
+#   29b) Error/Interruption Path: fail streaming WAL sotto root -> ERRORE FAIL-CLOSED + adb unroot garantito in finally
+#   29c) Denied & EACCES Guard: adb root rifiutato (uid=2000) + Probe-DeviceFileState -Channel "root" su EACCES -> Fail-Closed
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 29: ADB Root/Unroot Escalation, WAL Checkpoint & EACCES Guard ---" -ForegroundColor Yellow
+$testDir29 = Join-Path $tempDir "akai_test_adb_root_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir29 | Out-Null
+$subPassed29 = 0
+
+try {
+    if (-not $validNode) {
+        throw "Node.js non disponibile per fixture SQLite/WAL Test 29."
+    }
+
+    $nodeEscaped29 = $validNode.Replace('\', '/')
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+
+    # 1. Fixture SQLite real con transazione WAL non ancora checkpointata (base row + uncommitted WAL row)
+    $devDb29 = Join-Path $testDir29 "source_wal.db"
+    $devWal29 = "$devDb29-wal"
+    $devDbEsc29 = $devDb29.Replace('\', '/')
+
+    $setupPath29 = Join-Path $testDir29 "setup29.js"
+    @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$devDbEsc29');
+db.exec('PRAGMA journal_mode=WAL;');
+db.exec('CREATE TABLE ai_memory (id INTEGER PRIMARY KEY, note TEXT);');
+db.exec("INSERT INTO ai_memory VALUES (1, 'base_v5_row');");
+db.close();
+"@ | Out-File -FilePath $setupPath29 -Encoding ascii
+    & $validNode --no-warnings $setupPath29
+    if ($LASTEXITCODE -ne 0) { throw "Setup DB Test 29 fallito." }
+
+    $childPath29 = Join-Path $testDir29 "child29.js"
+    @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$devDbEsc29');
+db.exec('PRAGMA wal_autocheckpoint=0;');
+db.exec("INSERT INTO ai_memory VALUES (2, 'wal_uncommitted_v5_row');");
+process.exit(0);
+"@ | Out-File -FilePath $childPath29 -Encoding ascii
+    & $validNode --no-warnings $childPath29
+    if (-not (Test-Path $devWal29) -or (Get-Item $devWal29).Length -lt 32) {
+        throw "Fixture WAL Test 29 assente o < 32 bytes."
+    }
+
+    # 2. Mock stateful ADB (traccia adbd_state.txt: 'shell' <-> 'root' e adbd_log.txt)
+    $adbdStateFile29 = Join-Path $testDir29 "adbd_state.txt"
+    $adbdLogFile29 = Join-Path $testDir29 "adbd_log.txt"
+    $mockAdbJs29 = Join-Path $testDir29 "mock_adb_29.js"
+    @'
+const fs = require('fs');
+const args = process.argv.slice(2);
+const argStr = args.join(' ');
+const stateFile = process.env.ADBD_STATE_FILE;
+const logFile = process.env.ADBD_LOG_FILE;
+const rootMode = process.env.MOCK_ROOT_MODE || 'allow';
+
+function getState() {
+    try { return fs.readFileSync(stateFile, 'utf8').trim(); } catch (e) { return 'shell'; }
+}
+
+if (args.includes('connect') || args.includes('wait-for-device')) {
+    process.exit(0);
+}
+if (args.includes('root')) {
+    if (rootMode === 'denied') {
+        console.log('adbd cannot run as root in production builds');
+        process.exit(1);
+    }
+    fs.writeFileSync(stateFile, 'root', 'utf8');
+    if (logFile) fs.appendFileSync(logFile, 'root\n', 'utf8');
+    console.log('restarting adbd as root');
+    process.exit(0);
+}
+if (args.includes('unroot')) {
+    fs.writeFileSync(stateFile, 'shell', 'utf8');
+    if (logFile) fs.appendFileSync(logFile, 'unroot\n', 'utf8');
+    console.log('restarting adbd as non root');
+    process.exit(0);
+}
+if (argStr.includes('pm path')) {
+    console.log('package:/data/app/it.akai.customremote-1/base.apk');
+    process.exit(0);
+}
+if (args.includes('pull')) {
+    const dest = args[args.length - 1];
+    fs.writeFileSync(dest, 'PK_DEVICE_BACKUP_APK_MOCK_29');
+    process.exit(0);
+}
+if (argStr.includes('run-as')) {
+    process.stderr.write('run-as: package not debuggable\n');
+    process.exit(1);
+}
+if (argStr.includes('su -c')) {
+    process.stderr.write('/system/bin/sh: su: not found\n');
+    process.exit(1);
+}
+if (args.includes('shell')) {
+    if (args[args.length - 1] === 'id') {
+        const st = getState();
+        if (st === 'root') {
+            console.log('uid=0(root) gid=0(root) groups=0(root) context=u:r:su:s0');
+        } else {
+            console.log('uid=2000(shell) gid=2000(shell) groups=2000(shell) context=u:r:shell:s0');
+        }
+        process.exit(0);
+    }
+    if (argStr.includes('PIDOF_CHECK') || argStr.includes('pidof')) {
+        console.log('PIDOF_CHECK:pids=[]:exit=[1]');
+        process.exit(0);
+    }
+    if (argStr.includes('FILE_PROBE_RESULT')) {
+        const st = getState();
+        if (st !== 'root') {
+            console.log('FILE_PROBE_RESULT:ACCESS_DENIED');
+            process.exit(13);
+        }
+        if (argStr.includes('akai_memory.db-wal')) {
+            console.log('FILE_PROBE_RESULT:EXISTS');
+            process.exit(0);
+        }
+        console.log('FILE_PROBE_RESULT:NOT_FOUND');
+        process.exit(0);
+    }
+    process.exit(0);
+}
+if (args.includes('exec-out')) {
+    const st = getState();
+    if (st !== 'root') {
+        process.stderr.write('cat: Permission denied\n');
+        process.exit(1);
+    }
+    if (argStr.includes('akai_memory.db-wal')) {
+        if (rootMode === 'wal_fail') {
+            process.stderr.write('I/O error reading wal\n');
+            process.exit(1);
+        }
+        const walBuf = fs.readFileSync(process.env.DEVICE_WAL_FILE);
+        process.stdout.write(walBuf, () => process.exit(0));
+        return;
+    }
+    if (argStr.includes('akai_memory.db')) {
+        const dbBuf = fs.readFileSync(process.env.DEVICE_DB_FILE);
+        process.stdout.write(dbBuf, () => process.exit(0));
+        return;
+    }
+    process.exit(1);
+}
+process.exit(0);
+'@ | Out-File -FilePath $mockAdbJs29 -Encoding ascii
+
+    $mockAdbCmd29 = if ($isWin) { Join-Path $testDir29 "adb.cmd" } else { Join-Path $testDir29 "adb" }
+    if ($isWin) {
+        "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs29`" %*" | Out-File -FilePath $mockAdbCmd29 -Encoding ascii
+    } else {
+        "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs29`" `"`$@`"" | Out-File -FilePath $mockAdbCmd29 -Encoding ascii
+        & chmod +x $mockAdbCmd29
+    }
+
+    $mockAdbEsc29 = $mockAdbCmd29.Replace('\', '/')
+    $stateEsc29 = $adbdStateFile29.Replace('\', '/')
+    $logEsc29 = $adbdLogFile29.Replace('\', '/')
+    $walEsc29 = $devWal29.Replace('\', '/')
+
+    # --- Sotto-test 29a: Happy path adb root -> uid=0 -> backup DB+WAL + checkpoint -> adb unroot -> uid=2000 ---
+    $backupDir29a = Join-Path $testDir29 "backup_29a"
+    $backupEsc29a = $backupDir29a.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+
+    $cmd29a = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:MOCK_ROOT_MODE = 'allow'
+try {
+    & '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -BackupDir '$backupEsc29a' -AllowHardwareExecution
+} catch {
+    Write-Output ('CAUGHT_EXCEPTION: ' + `$_.Exception.Message)
+}
+"@
+    $out29a = & $psExe -ExecutionPolicy Bypass -Command $cmd29a 2>&1 | Out-String
+    $finalState29a = (Get-Content $adbdStateFile29 -Raw).Trim()
+    $logLines29a = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+
+    $backedDb29a = Get-ChildItem -Path $backupDir29a -Filter "akai_memory.db" -Recurse | Select-Object -First 1
+    $walMerged29a = $false
+    if ($backedDb29a) {
+        $backedDbEsc29a = $backedDb29a.FullName.Replace('\', '/')
+        $checkPath29a = Join-Path $testDir29 "check29a.js"
+        $checkJs29a = @"
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('$backedDbEsc29a');
+const r = db.prepare("SELECT COUNT(*) as cnt FROM ai_memory WHERE note='wal_uncommitted_v5_row';").get();
+db.close();
+process.exit(r && r.cnt === 1 ? 0 : 1);
+"@
+        [System.IO.File]::WriteAllText($checkPath29a, $checkJs29a, [System.Text.Encoding]::UTF8)
+        & $validNode --no-warnings $checkPath29a
+        if ($LASTEXITCODE -eq 0) { $walMerged29a = $true }
+    }
+
+    if ($out29a -match "Sessione di backup completata" -and $out29a -match "Privilegi temporanei adbd revocati con successo \(adb unroot -> uid=2000" -and $finalState29a -eq "shell" -and $logLines29a -match "root" -and $logLines29a -match "unroot" -and $walMerged29a) {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29a: adb root -> uid=0 -> backup DB+WAL + checkpoint offline -> adb unroot -> uid=2000(shell) verificato" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29a fallito (state=$finalState29a, walMerged=$walMerged29a): $out29a" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29b: Errore/interruzione WAL stream sotto root -> FAIL-CLOSED + adb unroot garantito in finally ---
+    $backupDir29b = Join-Path $testDir29 "backup_29b"
+    $backupEsc29b = $backupDir29b.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+
+    $cmd29b = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:MOCK_ROOT_MODE = 'wal_fail'
+try {
+    & '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -BackupDir '$backupEsc29b' -AllowHardwareExecution
+} catch {
+    Write-Output ('CAUGHT_EXCEPTION: ' + `$_.Exception.Message)
+}
+"@
+    $out29b = & $psExe -ExecutionPolicy Bypass -Command $cmd29b 2>&1 | Out-String
+    $finalState29b = (Get-Content $adbdStateFile29 -Raw).Trim()
+    $logLines29b = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
+
+    if ($out29b -match "ERRORE FAIL-CLOSED: File WAL \(akai_memory\.db-wal\) presente su storage device ma estrazione fallita o non leggibile via root" -and $out29b -notmatch "Sessione di backup completata" -and $finalState29b -eq "shell" -and $logLines29b -match "unroot") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29b: Fallimento estrazione WAL sotto root blocca in Fail-Closed ed esegue comunque adb unroot (-> uid=2000) in finally" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29b fallito (state=$finalState29b, log=$logLines29b): $out29b" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29c: adb root negato + guardia EACCES su Probe-DeviceFileState -Channel "root" ---
+    $backupDir29c = Join-Path $testDir29 "backup_29c"
+    $backupEsc29c = $backupDir29c.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+
+    $cmd29cBackup = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:MOCK_ROOT_MODE = 'denied'
+try {
+    & '$scriptEscaped' -Action backup -TargetTv '127.0.0.1' -BackupDir '$backupEsc29c' -AllowHardwareExecution
+} catch {
+    Write-Output ('CAUGHT_EXCEPTION: ' + `$_.Exception.Message)
+}
+"@
+    $out29cBackup = & $psExe -ExecutionPolicy Bypass -Command $cmd29cBackup 2>&1 | Out-String
+    $finalState29c = (Get-Content $adbdStateFile29 -Raw).Trim()
+
+    $cmd29cProbe = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    `$st = Probe-DeviceFileState -AdbExe '$mockAdbEsc29' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -RelativePath 'databases/akai_memory.db-wal' -Channel 'root'
+    Write-Output ('FAIL_NO_THROW:' + `$st)
+} catch {
+    Write-Output ('CAUGHT_29C:' + `$_.Exception.Message)
+}
+"@
+    $out29cProbe = & $psExe -ExecutionPolicy Bypass -Command $cmd29cProbe 2>&1 | Out-String
+
+    if ($out29cBackup -match "ERRORE FAIL-CLOSED: Estrazione del database fallita" -and $finalState29c -eq "shell" -and $out29cProbe -match "CAUGHT_29C:ERRORE FAIL-CLOSED" -and $out29cProbe -match "FILE_PROBE_RESULT:ACCESS_DENIED" -and $out29cProbe -match "exit: 13" -and $out29cProbe -notmatch "FAIL_NO_THROW") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29c: adb root negato + guardia EACCES directory (exit 13 / ACCESS_DENIED) bloccati in Fail-Closed senza falsi NOT_FOUND" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29c fallito: backup=$out29cBackup | probe=$out29cProbe" -ForegroundColor Red
+    }
+} finally {
+    Remove-Item $testDir29 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+if ($subPassed29 -eq 3) {
+    Write-Host "[PASS] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Elevation root/unroot, WAL checkpoint e guardia EACCES verificati al 100% (3/3)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Sotto-test superati: $subPassed29 / 3" -ForegroundColor Red
+    $failed++
+}
 
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
