@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # AKAI Custom Remote - Provisioning Sicuro TLS Keystore per Dispositivo
 #
 # REGOLA DI SICUREZZA:
@@ -18,7 +18,7 @@
 # ==============================================================================
 
 param(
-    [string]$TargetTv = "192.168.1.8",
+    [string]$TargetTv = "",
     [string]$PackageName = "it.akai.customremote",
     [switch]$AllowHardwareExecution = $false
 )
@@ -31,6 +31,11 @@ if (-not $AllowHardwareExecution) {
     Write-Host "L'esecuzione su hardware fisico TV e' bloccata fino all'approvazione formale." -ForegroundColor Yellow
     Write-Host "Per autorizzare l'esecuzione e' richiesto il parametro: -AllowHardwareExecution" -ForegroundColor Yellow
     Write-Host "================================================================================" -ForegroundColor Red
+    exit 1
+}
+
+if ([string]::IsNullOrWhiteSpace($TargetTv)) {
+    Write-Host "ERRORE: Parametro -TargetTv obbligatorio mancante. Specificare l'indirizzo IP della TV." -ForegroundColor Red
     exit 1
 }
 

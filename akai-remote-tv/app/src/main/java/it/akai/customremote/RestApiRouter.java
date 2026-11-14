@@ -82,7 +82,7 @@ public class RestApiRouter {
         this.memoryHandler = memoryHandler;
         this.pinHandler = pinHandler;
         this.aiHandler = aiHandler;
-        this.localIpAddress = (localIpAddress != null && !localIpAddress.isEmpty()) ? localIpAddress : "192.168.1.8";
+        this.localIpAddress = (localIpAddress != null && !localIpAddress.isEmpty()) ? localIpAddress : "127.0.0.1";
         this.httpPort = httpPort > 0 ? httpPort : 8088;
     }
 
@@ -96,10 +96,37 @@ public class RestApiRouter {
     }
 
     public boolean routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os) throws Exception {
+        return routeRequest(method, path, headers, body, clientIp, os, true);
+    }
+
+    public boolean routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os, boolean isTls) throws Exception {
         // Subnet Verification (rifiuta IP esterni WAN non conformi a RFC 1918)
         if (!securityManager.isPrivateLanIp(clientIp)) {
             JSONObject err = new JSONObject().put("error", "Access denied: non-private LAN IP");
             sendJsonResponse(os, 403, err);
+            return true;
+        }
+
+        // Enforcement Sicurezza Canale Cifrato (P0):
+        // Se la richiesta transita su HTTP in chiaro (porta 8088 / !isTls),
+        // sono consentiti UNICAMENTE gli endpoint non-sensibili di bootstrap e trust onboarding:
+        // 1. GET /api/status (handshake iniziale di raggiungibilità)
+        // 2. GET /api/auth/ca.crt (download del certificato Root CA per installazione trust su smartphone)
+        // 3. GET /api/auth/tls_info (metadati porta HTTPS 8443 e impronta anti-MITM)
+        // Qualsiasi richiesta a endpoint sensibili (PIN pairing, token, comandi TV, modulo AI, memoria)
+        // via HTTP in chiaro viene categoricamente RIFIUTATA con HTTP 426 Upgrade Required.
+        boolean isBootstrapEndpoint = ("/api/status".equals(path) && "GET".equals(method)) ||
+                                      ("/api/auth/ca.crt".equals(path) && "GET".equals(method)) ||
+                                      ("/api/auth/tls_info".equals(path) && "GET".equals(method));
+
+        if (!isTls && !isBootstrapEndpoint) {
+            JSONObject err = new JSONObject();
+            err.put("success", false);
+            err.put("error", "HTTPS_REQUIRED");
+            err.put("status", "UPGRADE_REQUIRED");
+            err.put("message", "Questo endpoint scambia credenziali, token o comandi TV ed è accessibile esclusivamente tramite HTTPS sicuro sulla porta 8443. Scarica la CA da /api/auth/ca.crt e utilizza HTTPS.");
+            err.put("https_port", 8443);
+            sendJsonResponse(os, 426, err); // HTTP 426 Upgrade Required
             return true;
         }
 
@@ -150,6 +177,7 @@ public class RestApiRouter {
             out.put("https_enabled", info != null);
             out.put("https_port", TlsCertificateManager.HTTPS_PORT);
             out.put("ca_fingerprint_sha256", info != null ? info.caFingerprintSha256 : "NON_CONFIGURATO");
+            out.put("ca_sha256", info != null ? info.caFingerprintSha256 : "NON_CONFIGURATO");
             out.put("ca_download_url", "/api/auth/ca.crt");
             JSONArray sans = new JSONArray();
             if (info != null && info.serverSanList != null) {

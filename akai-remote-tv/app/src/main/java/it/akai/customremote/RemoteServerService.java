@@ -543,8 +543,8 @@ public class RemoteServerService extends Service {
                 return;
             }
 
-            // Route Requests
-            routeRequest(method, path, headers, body, clientIp, os);
+            // Route Requests with HTTPS channel security flag (P0)
+            routeRequest(method, path, headers, body, clientIp, os, isHttps);
 
         } catch (Exception e) {
             Log.e(TAG, "Error handling client: " + e.getMessage());
@@ -553,14 +553,24 @@ public class RemoteServerService extends Service {
         }
     }
 
-    private void routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os) throws Exception {
-        if (restApiRouter != null && restApiRouter.routeRequest(method, path, headers, body, clientIp, os)) {
+    private void routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os, boolean isHttps) throws Exception {
+        if (restApiRouter != null && restApiRouter.routeRequest(method, path, headers, body, clientIp, os, isHttps)) {
             return;
         }
         // Subnet Verification (rifiuta IP esterni WAN)
         if (!securityManager.isPrivateLanIp(clientIp)) {
             JSONObject err = new JSONObject().put("error", "Access denied: non-private LAN IP");
             sendJsonResponse(os, 403, err);
+            return;
+        }
+
+        // P0: Se HTTP in chiaro, blocca qualsiasi endpoint sensibile legacy
+        if (!isHttps && !("/api/status".equals(path) && "GET".equals(method))) {
+            JSONObject err = new JSONObject();
+            err.put("error", "HTTPS_REQUIRED");
+            err.put("status", "UPGRADE_REQUIRED");
+            err.put("https_port", HTTPS_PORT);
+            sendJsonResponse(os, 426, err);
             return;
         }
 
@@ -1073,18 +1083,35 @@ public class RemoteServerService extends Service {
         try {
             List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
             for (NetworkInterface intf : interfaces) {
+                if (!intf.isUp() || intf.isLoopback()) continue;
                 List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
                 for (InetAddress addr : addrs) {
-                    if (!addr.isLoopbackAddress()) {
+                    if (!addr.isLoopbackAddress() && addr instanceof java.net.Inet4Address) {
                         String sAddr = addr.getHostAddress();
-                        if (sAddr != null && sAddr.indexOf(':') < 0 && (sAddr.startsWith("192.168.") || sAddr.startsWith("10."))) {
+                        if (isPrivateRfc1918(sAddr)) {
                             return sAddr;
                         }
                     }
                 }
             }
         } catch (Exception ignored) {}
-        return "192.168.1.8";
+        // Fail-closed fallback: safe loopback, zero hardcoded external or static LAN IPs
+        return "127.0.0.1";
+    }
+
+    public static boolean isPrivateRfc1918(String ip) {
+        if (ip == null || ip.isEmpty()) return false;
+        if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true;
+        if (ip.startsWith("172.")) {
+            String[] parts = ip.split("\\.");
+            if (parts.length == 4) {
+                try {
+                    int second = Integer.parseInt(parts[1]);
+                    return second >= 16 && second <= 31;
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return false;
     }
 
     @Override

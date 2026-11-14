@@ -11,7 +11,7 @@
     const isInitialHttps = (location.protocol === 'https:');
     const defaultInitialPort = isInitialHttps ? '8443' : '8088';
     const state = {
-        host: localStorage.getItem('akai_host') || (location.hostname && location.hostname !== 'localhost' ? location.hostname : '192.168.1.8'),
+        host: localStorage.getItem('akai_host') || (location.hostname && location.hostname !== 'localhost' ? location.hostname : ''),
         port: localStorage.getItem('akai_port') || (location.port ? location.port : defaultInitialPort),
         proto: localStorage.getItem('akai_proto') || (isInitialHttps ? 'https' : 'http'),
         token: localStorage.getItem('akai_token') || null,
@@ -108,6 +108,7 @@
         btnSubmitPin: document.getElementById('btn-submit-pin'),
         btnClosePairing: document.getElementById('btn-close-pairing'),
         caTrustCard: document.getElementById('ca-trust-card'),
+        chkConfirmCaTv: document.getElementById('chk-confirm-ca-tv'),
         caFpVal: document.getElementById('ca-fp-val'),
         btnDownloadCa: document.getElementById('btn-download-ca'),
         btnToggleCaInstructions: document.getElementById('btn-toggle-ca-instructions'),
@@ -657,6 +658,15 @@
             if (res.ok) {
                 displayAiResponse(data, query);
                 return true;
+            } else if (res.status === 426) {
+                displayAiResponse({
+                    success: false,
+                    status: 'UPGRADE_REQUIRED',
+                    reply: 'Connessione HTTPS (porta 8443) obbligatoria. HTTP in chiaro non consentito per inviare comandi TV.',
+                    verified: false
+                }, query);
+                showToast('HTTPS obbligatorio (HTTP 426)', true);
+                return false;
             } else if (res.status === 401) {
                 handleSessionExpired();
                 return false;
@@ -776,6 +786,11 @@
                 body: JSON.stringify({ action })
             });
 
+            if (res.status === 426) {
+                showToast('HTTPS obbligatorio (HTTP 426): passa alla porta 8443', true);
+                return;
+            }
+
             if (res.status === 401) {
                 handleSessionExpired();
                 return;
@@ -809,6 +824,11 @@
                 },
                 body: JSON.stringify({ action: 'type_text', text })
             });
+
+            if (res.status === 426) {
+                showToast('HTTPS obbligatorio (HTTP 426): passa alla porta 8443', true);
+                return;
+            }
 
             if (res.ok) {
                 showToast(`Testo inviato: "${text}"`);
@@ -1345,7 +1365,21 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ client: 'web_remote' })
             });
-            if (reqRes.ok) {
+            if (reqRes.status === 426) {
+                const reqData = await reqRes.json().catch(() => ({}));
+                const httpsPort = reqData.https_port || '8443';
+                const targetHost = state.host || location.hostname || '127.0.0.1';
+                elements.pairingError.innerHTML = `Connessione non cifrata (HTTP). Per associare in sicurezza, scarica il certificato CA qui sotto e passa a HTTPS sulla porta ${httpsPort}: <a href="https://${targetHost}:${httpsPort}" target="_blank" style="color:var(--accent); text-decoration:underline;">https://${targetHost}:${httpsPort}</a>`;
+                elements.pairingError.classList.remove('hidden');
+                const infoRes = await fetch(getApiUrl('/api/auth/tls_info'));
+                if (infoRes.ok) {
+                    const infoData = await infoRes.json().catch(() => ({}));
+                    if (infoData.ca_sha256) {
+                        state.caFingerprint = infoData.ca_sha256;
+                        if (elements.caFpVal) elements.caFpVal.textContent = state.caFingerprint;
+                    }
+                }
+            } else if (reqRes.ok) {
                 const reqData = await reqRes.json();
                 if (reqData.ca_fingerprint_sha256) {
                     state.caFingerprint = reqData.ca_fingerprint_sha256;
@@ -1380,6 +1414,12 @@
             return;
         }
 
+        if (elements.chkConfirmCaTv && !elements.chkConfirmCaTv.checked) {
+            elements.pairingError.textContent = "Conferma obbligatoria: confronta l'impronta mostrata sullo schermo della TV con quella qui sopra e spunta la casella prima di associare.";
+            elements.pairingError.classList.remove('hidden');
+            return;
+        }
+
         elements.btnSubmitPin.disabled = true;
         elements.btnSubmitPin.textContent = 'Verifica in corso...';
         elements.pairingError.classList.add('hidden');
@@ -1394,7 +1434,15 @@
                 })
             });
 
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 426 || (data && data.error === 'HTTPS_REQUIRED')) {
+                const targetPort = data.https_port || '8443';
+                const targetHost = state.host || location.hostname || '127.0.0.1';
+                elements.pairingError.innerHTML = `Connessione sicura richiesta (HTTP 426). Passa a HTTPS: <a href="https://${targetHost}:${targetPort}" target="_blank" style="color:var(--accent); text-decoration:underline;">https://${targetHost}:${targetPort}</a>`;
+                elements.pairingError.classList.remove('hidden');
+                return;
+            }
+
             if (res.ok && data.token) {
                 state.token = data.token;
                 localStorage.setItem('akai_token', state.token);

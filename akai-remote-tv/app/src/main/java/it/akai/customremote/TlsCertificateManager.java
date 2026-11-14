@@ -30,6 +30,7 @@ import java.security.Signature;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -62,6 +63,7 @@ public class TlsCertificateManager {
     public static final String PASSWORD_FILE_NAME = "server_keystore.pass";
     public static final String CA_CERT_FILE_NAME = "ca.crt";
     public static final String CA_PEM_FILE_NAME = "ca.pem";
+    public static final String CA_KEY_FILE_NAME = "ca_key.der";
 
     public static final String CA_COMMON_NAME = "AKAI Jarvis Local CA";
     public static final String CA_ORGANIZATION = "AKAI Local Secure Remote";
@@ -105,10 +107,12 @@ public class TlsCertificateManager {
      */
     public synchronized TlsInfo getOrGenerateTlsInfo(Context context, String localIp) {
         if (cachedTlsInfo != null && cachedTlsInfo.keystoreFile != null && cachedTlsInfo.keystoreFile.exists()) {
-            if (System.currentTimeMillis() < (cachedTlsInfo.notAfterMs - (7L * 24 * 3600 * 1000))) {
+            boolean ipValid = (localIp == null || localIp.trim().isEmpty() || "127.0.0.1".equals(localIp.trim()) ||
+                               (cachedTlsInfo.serverSanList != null && cachedTlsInfo.serverSanList.contains(localIp.trim())));
+            if (ipValid && System.currentTimeMillis() < (cachedTlsInfo.notAfterMs - (7L * 24 * 3600 * 1000))) {
                 return cachedTlsInfo;
             }
-            Log.i(TAG, "Certificato TLS in scadenza entro 7 giorni. Avvio rotazione automatica chiavi...");
+            Log.i(TAG, "Certificato TLS in scadenza o IP TV mutato (" + localIp + "). Avvio rigenerazione...");
         }
 
         File filesDir = (context != null) ? context.getFilesDir() : new File(".");
@@ -131,12 +135,72 @@ public class TlsCertificateManager {
                         X509Certificate serverX509 = (X509Certificate) sCert;
                         X509Certificate caX509 = (X509Certificate) cCert;
                         if (System.currentTimeMillis() < (serverX509.getNotAfter().getTime() - (7L * 24 * 3600 * 1000))) {
-                            String caFp = computeSha256Fingerprint(caX509);
-                            String caPem = readStringFromFile(caPemFile);
                             List<String> sans = extractSanStrings(serverX509);
-                            cachedTlsInfo = new TlsInfo(caFp, caPem, sans, serverX509.getNotAfter().getTime(), ksFile, password);
-                            Log.i(TAG, "Keystore TLS caricato con successo. CA Fingerprint: " + caFp);
-                            return cachedTlsInfo;
+                            boolean ipValid = (localIp == null || localIp.trim().isEmpty() || "127.0.0.1".equals(localIp.trim()) || sans.contains(localIp.trim()));
+                            if (ipValid) {
+                                String caFp = computeSha256Fingerprint(caX509);
+                                String caPem = readStringFromFile(caPemFile);
+                                cachedTlsInfo = new TlsInfo(caFp, caPem, sans, serverX509.getNotAfter().getTime(), ksFile, password);
+                                Log.i(TAG, "Keystore TLS caricato con successo. CA Fingerprint: " + caFp);
+                                return cachedTlsInfo;
+                            } else {
+                                Log.i(TAG, "IP LAN TV mutato (" + localIp + " non presente in SAN). Rinnovo certificato Server con Root CA esistente...");
+                                File caKeyFile = new File(filesDir, CA_KEY_FILE_NAME);
+                                if (caKeyFile.exists() && caKeyFile.length() > 0) {
+                                    try {
+                                        byte[] keyBytes = new byte[(int) caKeyFile.length()];
+                                        try (FileInputStream kfis = new FileInputStream(caKeyFile)) {
+                                            int readBytes = kfis.read(keyBytes);
+                                            if (readBytes <= 0) throw new IOException("CA key file empty");
+                                        }
+                                        KeyFactory kf = KeyFactory.getInstance("RSA");
+                                        PrivateKey caPrivKey = kf.generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
+
+                                        KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+                                        kpg.initialize(2048, new SecureRandom());
+                                        KeyPair serverPair = kpg.generateKeyPair();
+
+                                        long now = System.currentTimeMillis();
+                                        Date notBefore = new Date(now - 60000);
+                                        Date notAfterServer = new Date(now + 1000L * 60 * 60 * 24 * 365);
+
+                                        List<String> dnsList = Arrays.asList("akai-tv.local", "localhost", "akai.local", "akai-jarvis.lan");
+                                        List<String> ipList = new ArrayList<>(Arrays.asList("127.0.0.1"));
+                                        if (localIp != null && !localIp.trim().isEmpty() && !ipList.contains(localIp.trim())) {
+                                            ipList.add(localIp.trim());
+                                        }
+
+                                        X509Certificate serverCert = generateCertificate(
+                                            SERVER_COMMON_NAME, CA_ORGANIZATION, CA_COUNTRY,
+                                            serverPair.getPublic(),
+                                            CA_COMMON_NAME, CA_ORGANIZATION, CA_COUNTRY,
+                                            caPrivKey,
+                                            notBefore, notAfterServer,
+                                            BigInteger.valueOf(System.currentTimeMillis()),
+                                            false, dnsList, ipList
+                                        );
+
+                                        ks.setCertificateEntry("akai_ca", caX509);
+                                        ks.setKeyEntry("akai_server", serverPair.getPrivate(), password, new Certificate[]{serverCert, caX509});
+
+                                        try (FileOutputStream fos = new FileOutputStream(ksFile)) {
+                                            ks.store(fos, password);
+                                        }
+
+                                        List<String> allSans = new ArrayList<>();
+                                        allSans.addAll(dnsList);
+                                        allSans.addAll(ipList);
+
+                                        String caFp = computeSha256Fingerprint(caX509);
+                                        String caPem = readStringFromFile(caPemFile);
+                                        cachedTlsInfo = new TlsInfo(caFp, caPem, allSans, notAfterServer.getTime(), ksFile, password);
+                                        Log.i(TAG, "Certificato Server rinnovato con successo per IP " + localIp + " preservando la Root CA (Fingerprint invariata: " + caFp + ")");
+                                        return cachedTlsInfo;
+                                    } catch (Exception renewalEx) {
+                                        Log.w(TAG, "Fallimento rinnovo con Root CA esistente (" + renewalEx.getMessage() + "). Rigenerazione completa in corso...");
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -209,6 +273,11 @@ public class TlsCertificateManager {
             }
             writeStringToFile(passFile, new String(password));
             writeStringToFile(caPemFile, caPem);
+
+            File caKeyFile = new File(filesDir, CA_KEY_FILE_NAME);
+            try (FileOutputStream fosKey = new FileOutputStream(caKeyFile)) {
+                fosKey.write(caPair.getPrivate().getEncoded());
+            }
 
             File caCrtFile = new File(filesDir, CA_CERT_FILE_NAME);
             writeStringToFile(caCrtFile, caPem);

@@ -375,6 +375,14 @@
                             <span class="ca-fp-label">Impronta SHA-256 Root CA TV:</span>
                             <code id="ca-fp-val" class="ca-fp-code">Caricamento impronta...</code>
                         </div>
+                        <div class="ca-oob-notice">
+                            📺 <strong>Verifica Fuori Banda (Schermo TV):</strong>
+                            Confronta manualmente questa impronta con quella mostrata sul pannello fisico della TV nel dialogo PIN. Non fidarti di certificati scaricati in rete senza riscontro visivo!
+                        </div>
+                        <label class="ca-confirm-checkbox-row">
+                            <input type="checkbox" id="chk-confirm-ca-tv">
+                            <span>Confermo che l'impronta corrisponde a quella sullo schermo della TV</span>
+                        </label>
                         <div class="ca-actions-row">
                             <a id="btn-download-ca" href="#" class="btn-subtle-link" download="akai_root_ca.crt">📥 Scarica Certificato CA</a>
                             <button type="button" id="btn-toggle-ca-instructions" class="btn-subtle-guide">Guida Onboarding</button>
@@ -431,7 +439,7 @@
                     <div id="tab-conn" class="ai-tab-content active" role="tabpanel">
                         <div class="form-group">
                             <label for="server-host">Indirizzo IP Smart TV:</label>
-                            <input type="text" id="server-host" value="192.168.1.8" class="form-input">
+                            <input type="text" id="server-host" placeholder="es. 192.168.1.xxx" class="form-input">
                         </div>
                         <div class="form-group">
                             <label for="server-port">Porta HTTP/HTTPS:</label>

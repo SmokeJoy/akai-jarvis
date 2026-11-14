@@ -29,8 +29,12 @@ public class UnitTests {
     }
 
     static MockHttpResponse dispatch(RestApiRouter router, String method, String path, Map<String, String> headers, String body, String clientIp) throws Exception {
+        return dispatch(router, method, path, headers, body, clientIp, true);
+    }
+
+    static MockHttpResponse dispatch(RestApiRouter router, String method, String path, Map<String, String> headers, String body, String clientIp, boolean isTls) throws Exception {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        router.routeRequest(method, path, headers, body, clientIp, baos);
+        router.routeRequest(method, path, headers, body, clientIp, baos, isTls);
         byte[] bytes = baos.toByteArray();
         String rawHttp = new String(bytes, StandardCharsets.UTF_8);
 
@@ -1020,12 +1024,77 @@ public class UnitTests {
             failed++;
         }
 
+        // =========================================================================
+        // Test 29 (PR-01 M2/M3 Security Hardening): Channel Security (HTTP 426), Whitelist Bootstrap, RFC 1918 Subnet Isolation & Dynamic IP Cert Renewal
+        // =========================================================================
+        // 1. Canale HTTP in chiaro (isTls=false) su endpoint sensibili -> HTTP 426 Upgrade Required
+        MockHttpResponse rHttpPair = dispatch(router, "POST", "/api/auth/pair", new HashMap<>(), "{\"pin\":\"123456\"}", "192.168.1.10", false);
+        boolean okHttpPairBlocked = (rHttpPair.statusCode == 426) && (rHttpPair.json != null) &&
+                                    "HTTPS_REQUIRED".equals(rHttpPair.json.optString("error")) &&
+                                    (rHttpPair.json.optInt("https_port") == 8443);
+
+        MockHttpResponse rHttpPairReq = dispatch(router, "POST", "/api/auth/pair/request", new HashMap<>(), "{\"client\":\"web_remote\"}", "192.168.1.10", false);
+        boolean okHttpPairReqBlocked = (rHttpPairReq.statusCode == 426) && (rHttpPairReq.json != null) &&
+                                       "HTTPS_REQUIRED".equals(rHttpPairReq.json.optString("error"));
+
+        MockHttpResponse rHttpCommand = dispatch(router, "POST", "/api/command", authHeaders, "{\"action\":\"home\"}", "192.168.1.10", false);
+        boolean okHttpCommandBlocked = (rHttpCommand.statusCode == 426) && (rHttpCommand.json != null) &&
+                                       "HTTPS_REQUIRED".equals(rHttpCommand.json.optString("error"));
+
+        MockHttpResponse rHttpAi = dispatch(router, "POST", "/api/ai/ask", authHeaders, "{\"query\":\"alza il volume\"}", "192.168.1.10", false);
+        boolean okHttpAiBlocked = (rHttpAi.statusCode == 426) && (rHttpAi.json != null) &&
+                                  "HTTPS_REQUIRED".equals(rHttpAi.json.optString("error"));
+
+        // 2. Bootstrap endpoints ammessi su HTTP in chiaro (isTls=false) per consentire scaricamento CA e info TLS
+        MockHttpResponse rHttpStatus = dispatch(router, "GET", "/api/status", new HashMap<>(), "", "192.168.1.10", false);
+        boolean okHttpStatusAllowed = (rHttpStatus.statusCode == 200) && (rHttpStatus.json != null) &&
+                                      "ok".equals(rHttpStatus.json.optString("status"));
+
+        MockHttpResponse rHttpCa = dispatch(router, "GET", "/api/auth/ca.crt", new HashMap<>(), "", "192.168.1.10", false);
+        boolean okHttpCaAllowed = (rHttpCa.statusCode == 200) && rHttpCa.rawBody.contains("BEGIN CERTIFICATE");
+
+        MockHttpResponse rHttpTlsInfo = dispatch(router, "GET", "/api/auth/tls_info", new HashMap<>(), "", "192.168.1.10", false);
+        boolean okHttpTlsInfoAllowed = (rHttpTlsInfo.statusCode == 200) && (rHttpTlsInfo.json != null) &&
+                                       (rHttpTlsInfo.json.optInt("https_port") == 8443) &&
+                                       (rHttpTlsInfo.json.has("ca_fingerprint_sha256") || rHttpTlsInfo.json.has("ca_sha256"));
+
+        // 3. RFC 1918 Subnet Isolation: verifica 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 e rigetto IP WAN
+        boolean okRfc10 = sec.isPrivateLanIp("10.5.20.100");
+        boolean okRfc172 = sec.isPrivateLanIp("172.20.1.50");
+        boolean okRfc192 = sec.isPrivateLanIp("192.168.1.8");
+        boolean okWanRejected = !sec.isPrivateLanIp("8.8.8.8") &&
+                                !sec.isPrivateLanIp("1.1.1.1") &&
+                                !sec.isPrivateLanIp("172.32.0.1");
+
+        // 4. Dynamic IP change: rigenerazione SAN mantenendo intatta la Root CA on-device
+        String originalCaFp = tlsInfo.caFingerprintSha256;
+        TlsCertificateManager.TlsInfo updatedTls = tlsMgr.getOrGenerateTlsInfo(null, "10.0.0.42");
+        boolean okDynamicRenewal = (updatedTls != null) &&
+                                   originalCaFp.equals(updatedTls.caFingerprintSha256) &&
+                                   updatedTls.serverSanList.contains("10.0.0.42");
+
+        boolean test29Passed = okHttpPairBlocked && okHttpPairReqBlocked && okHttpCommandBlocked && okHttpAiBlocked &&
+                               okHttpStatusAllowed && okHttpCaAllowed && okHttpTlsInfoAllowed &&
+                               okRfc10 && okRfc172 && okRfc192 && okWanRejected && okDynamicRenewal;
+
+        if (test29Passed) {
+            System.out.println("[PASS] Test 29 (PR-01 M2/M3 Security): Enforcement HTTP 426 Upgrade Required su canali in chiaro, whitelist bootstrap (status, ca.crt, tls_info), isolamento subnet RFC 1918 (10/8, 172.16/12, 192.168/16) e rinnovo SAN su IP dinamico con conservazione immutabile della Root CA");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 29: okPair=" + okHttpPairBlocked + " okPairReq=" + okHttpPairReqBlocked +
+                " okCmd=" + okHttpCommandBlocked + " okAi=" + okHttpAiBlocked +
+                " okStatus=" + okHttpStatusAllowed + " okCa=" + okHttpCaAllowed + " okTls=" + okHttpTlsInfoAllowed +
+                " okRfc10=" + okRfc10 + " okRfc172=" + okRfc172 + " okRfc192=" + okRfc192 +
+                " okWan=" + okWanRejected + " okRenewal=" + okDynamicRenewal);
+            failed++;
+        }
+
         // Pulizia file temporanei di test effimeri (garanzia zero leak segreti in CI e repo)
-        for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem")) {
+        for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der")) {
             try { new java.io.File(testFile).delete(); } catch (Exception ignored) {}
         }
 
-        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v18 (M1 + M2 + M3 COMPANION) ===");
+        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v19 (M1 + M2 + M3 SECURITY HARDENING) ===");
         System.out.println("Test Superati: " + passed + " / " + (passed + failed));
         if (failed > 0) {
             System.exit(1);

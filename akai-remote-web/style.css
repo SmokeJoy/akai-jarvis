@@ -1754,6 +1754,34 @@ button:focus-visible, input:focus-visible, select:focus-visible {
     user-select: all;
     background: transparent;
 }
+.ca-oob-notice {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 10.5px;
+    line-height: 1.4;
+    margin-top: 8px;
+}
+.ca-oob-notice strong {
+    color: #f87171;
+}
+.ca-confirm-checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--txt);
+    margin: 8px 0 4px;
+    cursor: pointer;
+    line-height: 1.35;
+}
+.ca-confirm-checkbox-row input {
+    margin-top: 2px;
+    accent-color: var(--mint);
+    cursor: pointer;
+}
 .ca-actions-row {
     display: flex;
     gap: 8px;
