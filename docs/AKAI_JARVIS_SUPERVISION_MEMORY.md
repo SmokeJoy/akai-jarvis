@@ -121,3 +121,10 @@ Non esporre credenziali, PIN, SSID, IP privati o dati familiari in repo/commenti
 ## 10. Prompt pronto per una nuova chat
 
 > «Riprendi come supervisore tecnico AKAI JARVIS. Apri il repo privato SmokeJoy/akai-jarvis e **leggi prima** `docs/AKAI_JARVIS_SUPERVISION_MEMORY.md` sul branch `main`, poi l'issue "AKAI JARVIS — Stato vivo della supervisione". Verifica PR #1/#2/#3, i rispettivi HEAD SHA, ultimi diff/commenti e GitHub Actions. Mantieni la decisione definitiva: DeepSeek/Kimi via API e JARVIS leggero residente su AKAI Android9, fast-path locale/SQLite e riuso OSS **solo mirato** senza appesantire la TV. ChatGPT supervisiona, Antigravity implementa, io autorizzo merge/TV/costi. Non ripetere review né riaprire decisioni vecchie. Riferisci fatti verificati vs da testare, coordina Antigravity sulla PR #1 senza toccare l'hardware.»
+
+## 11. Documentazione ufficiale e sincronizzazione del progetto ChatGPT
+
+- **[Indice ufficiale tecnico](OFFICIAL_TECH_REFERENCES.md):** Android 9 e API28, Accessibility/MediaProjection, Keystore, SQLite, rete, prestazioni e metriche RAM, D-pad/TV, WebView, DeepSeek/Moonshot, GitHub Actions e regole Google Antigravity. Consultare documenti ufficiali **prima** di proposte di codice/API e verificare minSdk/target reali.
+- **[Regole progetto ChatGPT AKAI TV BOOST](CHATGPT_PROJECT_AKAI_TV_BOOST.md):** testo operativo pronto per le *Istruzioni del progetto* nella UI ChatGPT. La UI del progetto è indipendente da GitHub: non dichiarare sincronizzate impostazioni non modificate.
+- Il file root **[AGENTS.md](../AGENTS.md)** è la regola workspace generale letta da Antigravity secondo la sua documentazione ufficiale; nessun bisogno di duplicare le stesse regole in numerosi file tecnici.
+- Registro vivo dei progressi: [issue #4](https://github.com/SmokeJoy/akai-jarvis/issues/4). Non trasformare l'issue in altra documentazione statica.
