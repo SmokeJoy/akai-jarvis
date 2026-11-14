@@ -483,8 +483,9 @@
                 },
                 body: JSON.stringify({ reason: 'user_stop' })
             });
-            if (res.ok && hadInFlight) {
-                showToast('Task AI interrotto sulla TV');
+            const cancelData = await res.json().catch(() => ({}));
+            if (res.ok && (cancelData.active_task_cancelled || (cancelData.queued_tasks_invalidated > 0) || hadInFlight)) {
+                showToast('Annullamento richiesto alla TV...');
             }
             return res.ok;
         } catch (e) {
@@ -732,7 +733,8 @@
                 displayAiResponse({
                     success: false,
                     status: 'CANCELLED',
-                    reply: 'Task AI annullato sulla TV.',
+                    client_aborted: true,
+                    reply: 'Annullamento richiesto alla TV (stop cooperativo in corso).',
                     verified: false
                 }, query);
                 return false;
@@ -801,8 +803,8 @@
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
             } else if (data.status === 'CANCELLED') {
                 elements.aiBadgeStatus.className = 'ai-badge-status blocked';
-                elements.aiBadgeStatus.textContent = '⏹ Annullato';
-                showToast('Task AI interrotto');
+                elements.aiBadgeStatus.textContent = data.client_aborted ? '⏹ Annullamento richiesto' : '⏹ Annullato';
+                showToast(data.client_aborted ? 'Annullamento richiesto' : 'Task AI annullato');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
             } else {
                 elements.aiBadgeStatus.className = 'ai-badge-status error';

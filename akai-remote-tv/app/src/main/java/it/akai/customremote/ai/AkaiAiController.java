@@ -116,6 +116,8 @@ public class AkaiAiController {
     private final PerceptionAndExecutionBridge bridge;
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
     private final AtomicLong taskSequence = new AtomicLong(0);
+    private final AtomicLong cancelGeneration = new AtomicLong(0);
+    private final AtomicLong queuedTasks = new AtomicLong(0);
     private final AtomicReference<TaskToken> activeTask = new AtomicReference<>(null);
     private final ReentrantLock sessionLock = new ReentrantLock(true);
 
@@ -186,7 +188,9 @@ public class AkaiAiController {
     }
 
     public JSONObject cancelActiveTask() {
+        long gen = cancelGeneration.incrementAndGet();
         cancelRequested.set(true);
+        int queuedInvalidated = (int) Math.max(0L, queuedTasks.get());
         TaskToken current = activeTask.get();
         boolean cancelledAny = false;
         long cancelledTaskId = -1L;
@@ -204,10 +208,21 @@ public class AkaiAiController {
         try {
             res.put("success", true);
             res.put("status", "CANCEL_SIGNALLED");
+            res.put("cooperative_cancel", true);
             res.put("active_task_cancelled", cancelledAny);
             res.put("active_task_id", cancelledTaskId);
+            res.put("queued_tasks_invalidated", queuedInvalidated);
+            res.put("cancel_generation", gen);
         } catch (Exception ignored) {}
         return res;
+    }
+
+    public void lockSessionForTest() {
+        sessionLock.lock();
+    }
+
+    public void unlockSessionForTest() {
+        sessionLock.unlock();
     }
 
     public void cancelCurrentTask() {
@@ -567,11 +582,36 @@ public class AkaiAiController {
             return completeAndSpeak(emptyResult, "", emptyReply, "ERROR", null, 0, 0.0, speak, startTime);
         }
 
+        final long generationAtEnqueue = cancelGeneration.get();
+        queuedTasks.incrementAndGet();
         final TaskToken myToken = new TaskToken(taskSequence.incrementAndGet());
         sessionLock.lock();
-        cancelRequested.set(false);
-        activeTask.set(myToken);
         try {
+            queuedTasks.decrementAndGet();
+            if (generationAtEnqueue != cancelGeneration.get() || myToken.isCancelled()) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                JSONObject cancelledRes = new JSONObject();
+                try {
+                    cancelledRes.put("success", false);
+                    cancelledRes.put("status", "CANCELLED");
+                    cancelledRes.put("execution_outcome", OUTCOME_FAILED);
+                    cancelledRes.put("verified", false);
+                    cancelledRes.put("cancelled_while_queued", true);
+                    cancelledRes.put("executed_steps", 0);
+                    cancelledRes.put("snapshot_count", 0);
+                    cancelledRes.put("wait_elapsed_ms", 0L);
+                    cancelledRes.put("cloud_calls", 0);
+                    cancelledRes.put("tokens", 0);
+                    cancelledRes.put("cost_eur", 0.0);
+                    cancelledRes.put("latency_ms", elapsed);
+                    cancelledRes.put("reply", "Operazione annullata in coda su richiesta.");
+                    cancelledRes.put("execution_mode", getExecutionMode());
+                    cancelledRes.put("strict_local_only", isStrictLocalOnly());
+                } catch (Exception ignored) {}
+                return cancelledRes;
+            }
+            cancelRequested.set(false);
+            activeTask.set(myToken);
             return processQueryLocked(userQuery, speak, startTime, myToken);
         } finally {
             activeTask.compareAndSet(myToken, null);

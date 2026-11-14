@@ -2278,18 +2278,42 @@ public class UnitTests {
 
             // Telecomando base non bloccato mentre l'agente e' in esecuzione
             MockHttpResponse rRemoteDuringAi = dispatch(routerP12, "POST", "/api/command", authHeaders, "{\"action\":\"volume_up\"}", "192.168.1.10", true);
-            // Stop autenticato via HTTPS su /api/ai/cancel annulla il task TV attivo
+            // Stop autenticato via HTTPS su /api/ai/cancel annulla il task TV attivo E invalida T2 accodato
             MockHttpResponse rCancelAuth = dispatch(routerP12, "POST", "/api/ai/cancel", authHeaders, "{\"reason\":\"user_stop\"}", "192.168.1.10", true);
             allowT1Continue.countDown();
             t1.join(3000L);
             t2.join(3000L);
 
+            // T3 inviato DOPO Stop deve eseguire normalmente e riuscire
+            JSONObject rT3 = ctrlConc.processQuery("apri YouTube", false);
+
+            // Stop quando active_task_cancelled == false ma esiste almeno una query in coda
+            ctrlConc.lockSessionForTest();
+            final JSONObject[] tQueuedOnlyHolder = new JSONObject[1];
+            Thread tQueuedOnly = new Thread(() -> tQueuedOnlyHolder[0] = ctrlConc.processQuery("apri YouTube", false));
+            tQueuedOnly.start();
+            Thread.sleep(40L);
+            MockHttpResponse rCancelQueuedOnly = dispatch(routerP12, "POST", "/api/ai/cancel", authHeaders, "{\"reason\":\"queue_stop\"}", "192.168.1.10", true);
+            ctrlConc.unlockSessionForTest();
+            tQueuedOnly.join(3000L);
+
             boolean concIsolationOk = enteredStep1 &&
                     rCancelHttp.statusCode == 426 && rCancelNoAuth.statusCode == 401 &&
-                    rCancelAuth.statusCode == 200 && rCancelAuth.json != null && rCancelAuth.json.optBoolean("active_task_cancelled") &&
+                    rCancelAuth.statusCode == 200 && rCancelAuth.json != null &&
+                    rCancelAuth.json.optBoolean("active_task_cancelled") &&
+                    rCancelAuth.json.optInt("queued_tasks_invalidated", 0) >= 1 &&
                     rRemoteDuringAi.statusCode == 200 &&
                     t1ResHolder[0] != null && "CANCELLED".equals(t1ResHolder[0].optString("status")) &&
-                    t2ResHolder[0] != null && t2ResHolder[0].optBoolean("success") &&
+                    t2ResHolder[0] != null && "CANCELLED".equals(t2ResHolder[0].optString("status")) &&
+                    t2ResHolder[0].optBoolean("cancelled_while_queued") &&
+                    t2ResHolder[0].optInt("executed_steps", -1) == 0 &&
+                    rT3 != null && rT3.optBoolean("success") &&
+                    "STATE_VERIFIED".equals(rT3.optString("execution_outcome")) &&
+                    rCancelQueuedOnly.statusCode == 200 && rCancelQueuedOnly.json != null &&
+                    !rCancelQueuedOnly.json.optBoolean("active_task_cancelled") &&
+                    rCancelQueuedOnly.json.optInt("queued_tasks_invalidated", 0) >= 1 &&
+                    tQueuedOnlyHolder[0] != null && "CANCELLED".equals(tQueuedOnlyHolder[0].optString("status")) &&
+                    tQueuedOnlyHolder[0].optBoolean("cancelled_while_queued") &&
                     actionOrder.size() == 2 && "T1:dpad_up".equals(actionOrder.get(0)) &&
                     "T2:launch_youtube".equals(actionOrder.get(1)) &&
                     !actionOrder.contains("T1:dpad_down");
