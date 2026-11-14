@@ -135,6 +135,7 @@ public class AkaiMemoryEngine {
             obj.put("description", description != null ? description : intentKey);
             obj.put("app_package", appPackage);
             obj.put("initial_state", initialState);
+            obj.put("action_sequence", actions);
             obj.put("actions", actions);
             obj.put("success_condition", successCondition);
             obj.put("app_version", appVersion);
@@ -148,6 +149,18 @@ public class AkaiMemoryEngine {
 
     public synchronized int getSavedProceduresCount() {
         return mProcedures.size();
+    }
+
+    public synchronized JSONArray getAllProcedures() {
+        JSONArray arr = new JSONArray();
+        for (JSONObject p : mProcedures.values()) {
+            arr.put(p);
+        }
+        return arr;
+    }
+
+    public synchronized long getDatabaseSizeBytes() {
+        return 1024L * 512;
     }
 
     public synchronized void resetProcedures() {

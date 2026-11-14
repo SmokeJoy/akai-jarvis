@@ -110,6 +110,7 @@ public class UnitTests {
                 case "center":
                 case "select":
                 case "enter":
+                case "ok":
                 case "dpad_center": return new CommandResult(true, "OK");
 
                 // Navigation & Power
@@ -2457,6 +2458,332 @@ public class UnitTests {
             passed++;
         } else {
             System.err.println("[FAIL] Test 37: Fallimento verifica AkaiAiController closed-loop / bounded wait / redaction");
+            failed++;
+        }
+
+        // =========================================================================
+        // Test 38: Collaudo E2E Closed-Loop JARVIS da Web Remote REST a Controller Android API28
+        //          (1) Telecomando classico HTTP LAN dopo pairing D-pad/OK/BACK/volume, static assets e HTTP 401/403/426
+        //          (2) AI via HTTPS/testo: comando noto -> 0 token, 0 chiamate cloud
+        //          (3) Comando non noto -> risposta JSON mock DeepSeek/Kimi -> stepwise plan -> verifica stato
+        //          (4) saveVerifiedProcedure SQLite -> stessa intenzione successiva: 0 chiamate cloud, 0 token, verifica stato
+        //          (5) Stop e fallimento provider/offline non bloccano i tasti telecomando legacy
+        // =========================================================================
+        boolean test38Passed = false;
+        HttpServer mockE2eCloudServer = null;
+        try {
+            KeyGenerator kg38 = KeyGenerator.getInstance("AES");
+            kg38.init(256);
+            KeystoreSecurityHelper.setForceKeystoreUnavailableForTest(false);
+            KeystoreSecurityHelper.setTestFallbackSecretKey(kg38.generateKey());
+
+            final AtomicInteger e2eCloudCalls = new AtomicInteger(0);
+            final String[] e2eScenario = new String[]{"DISCOVERY_AUDIO"};
+
+            mockE2eCloudServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            mockE2eCloudServer.createContext("/v1/chat/completions", exchange -> {
+                try {
+                    byte[] reqBytes = exchange.getRequestBody().readAllBytes();
+                    String reqBody = new String(reqBytes, StandardCharsets.UTF_8);
+
+                    if ("FAIL_500".equals(e2eScenario[0]) || reqBody.contains("provoca_errore_500")) {
+                        e2eCloudCalls.incrementAndGet();
+                        exchange.sendResponseHeaders(500, 0);
+                        exchange.close();
+                        return;
+                    }
+
+                    e2eCloudCalls.incrementAndGet();
+                    JSONObject payload = new JSONObject();
+                    payload.put("reply", "Apro impostazioni audio avanzate")
+                           .put("intent_key", "open_audio_advanced")
+                           .put("learn_procedure", true)
+                           .put("actions", new JSONArray()
+                               .put(new JSONObject().put("type", "launch_app").put("pkg", "com.android.tv.settings"))
+                               .put(new JSONObject().put("type", "wait").put("ms", 200).put("expect_pkg", "com.android.tv.settings"))
+                               .put(new JSONObject().put("type", "click_text").put("text", "Audio")))
+                           .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Uscita digitale"));
+
+                    String apiBody = new JSONObject()
+                        .put("usage", new JSONObject().put("prompt_tokens", 90).put("completion_tokens", 35).put("total_tokens", 125))
+                        .put("choices", new JSONArray().put(new JSONObject().put("message", new JSONObject().put("content", payload.toString()))))
+                        .toString();
+                    byte[] out = apiBody.getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, out.length);
+                    exchange.getResponseBody().write(out);
+                    exchange.close();
+                } catch (Exception ex) {
+                    throw new java.io.IOException(ex);
+                }
+            });
+            mockE2eCloudServer.start();
+            String e2eMockUrl = "http://127.0.0.1:" + mockE2eCloudServer.getAddress().getPort() + "/v1/chat/completions";
+
+            android.content.Context ctx38 = new android.content.Context() {};
+            AkaiMemoryEngine mem38 = AkaiMemoryEngine.getInstance(ctx38);
+            mem38.resetForTest();
+
+            AiProviderAdapter adapter38 = new AiProviderAdapter(ctx38);
+            adapter38.setTestEndpointOverride(e2eMockUrl);
+            adapter38.setActiveProvider(AiProviderAdapter.PROVIDER_DEEPSEEK);
+            adapter38.setApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK, "sk-e2e-deepseek-key");
+            adapter38.setCloudContextConsent(true);
+
+            final AtomicInteger executedActions38 = new AtomicInteger(0);
+            final List<String> actionLog38 = new ArrayList<>();
+            final String[] currentPkg38 = new String[]{"it.akai.customhome.v8"};
+            final boolean[] inAudioSettings38 = new boolean[]{false};
+
+            AkaiAiController.PerceptionAndExecutionBridge bridge38 = new AkaiAiController.PerceptionAndExecutionBridge() {
+                @Override
+                public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
+                    if (inAudioSettings38[0]) {
+                        return new ScreenPerceptionEngine.PerceptionSnapshot(
+                            "com.android.tv.settings",
+                            Arrays.asList("Impostazioni", "Audio", "Uscita digitale"),
+                            Collections.emptyList(),
+                            "Uscita digitale",
+                            false, false, false
+                        );
+                    }
+                    if ("com.android.tv.settings".equals(currentPkg38[0])) {
+                        return new ScreenPerceptionEngine.PerceptionSnapshot(
+                            "com.android.tv.settings",
+                            Arrays.asList("Impostazioni", "Rete", "Dispositivo", "Audio"),
+                            Collections.emptyList(),
+                            "Audio",
+                            false, false, false
+                        );
+                    }
+                    return new ScreenPerceptionEngine.PerceptionSnapshot(
+                        "it.akai.customhome.v8",
+                        Collections.singletonList("Home"),
+                        Collections.emptyList(),
+                        "Home",
+                        false, false, false
+                    );
+                }
+
+                @Override
+                public TvController.CommandResult executeActions(JSONArray actions) {
+                    if (actions != null) {
+                        for (int i = 0; i < actions.length(); i++) {
+                            JSONObject act = actions.optJSONObject(i);
+                            if (act != null) {
+                                String type = act.optString("type", "");
+                                actionLog38.add(type);
+                                executedActions38.incrementAndGet();
+                                if ("launch_app".equals(type) || "open_app".equals(type)) {
+                                    currentPkg38[0] = act.optString("pkg", "com.android.tv.settings");
+                                } else if ("click_text".equals(type) && "Audio".equals(act.optString("text", ""))) {
+                                    inAudioSettings38[0] = true;
+                                }
+                            }
+                        }
+                    }
+                    return new TvController.CommandResult(true, "Eseguito con successo su bridge E2E");
+                }
+
+                @Override
+                public void sleepMs(long ms) {
+                    try { Thread.sleep(Math.min(ms, 15L)); } catch (InterruptedException ignored) {}
+                }
+            };
+
+            AkaiAiController.setDefaultPollIntervalMsForTest(15L);
+            AkaiAiController.setExecutionMode(AkaiAiController.MODE_CLOUD_OPTIONAL);
+            TestCommandHandler cmdHandler38 = new TestCommandHandler();
+            AkaiAiController ctrl38 = AkaiAiController.createForTest(ctx38, new TvController(), mem38, adapter38, bridge38);
+
+            SecurityManager sec38 = new SecurityManager();
+            TestPinHandler pinHandler38 = new TestPinHandler();
+
+            RestApiRouter.AiHandler e2eAiHandler = new RestApiRouter.AiHandler() {
+                @Override public JSONObject processQuery(String query, boolean speak) {
+                    return ctrl38.processQuery(query, speak);
+                }
+                @Override public boolean isStrictLocalOnly() {
+                    return AkaiAiController.isStrictLocalOnly();
+                }
+                @Override public JSONArray getSupportedCatalog() {
+                    return AkaiAiController.getSupportedCatalog();
+                }
+                @Override public JSONObject testConnection(String requestBody) {
+                    return ctrl38.getAiAdapter().testConnection(AiProviderAdapter.PROVIDER_DEEPSEEK, null, null);
+                }
+                @Override public JSONObject cancelCurrentTask() {
+                    return ctrl38.cancelActiveTask();
+                }
+            };
+
+            RestApiRouter.MemoryHandler memHandler38 = new RestApiRouter.MemoryHandler() {
+                @Override public JSONArray getAllProcedures() { return mem38.getAllProcedures(); }
+                @Override public JSONObject getAllPreferences() { return mem38.getAllPreferences(); }
+                @Override public JSONObject getAllStats() { return mem38.getAllStats(); }
+                @Override public JSONArray getRecentConversations(int limit) { return mem38.getRecentConversations(limit); }
+                @Override public long getDatabaseSizeBytes() { return mem38.getDatabaseSizeBytes(); }
+                @Override public boolean isGuestMode() { return mem38.isGuestMode(); }
+                @Override public void setGuestMode(boolean enabled) { mem38.setGuestMode(enabled); }
+                @Override public void resetProcedures() { mem38.resetProcedures(); }
+                @Override public void clearPersonalPreferencesOnly() { mem38.clearPersonalPreferencesOnly(); }
+            };
+
+            RestApiRouter router38 = new RestApiRouter(sec38, cmdHandler38, memHandler38, pinHandler38, e2eAiHandler, "192.168.1.8", 8088);
+
+            // =================================================================
+            // (1) TELECOMANDO CLASSICO HTTP LAN 8088 (DOPO PAIRING PIN)
+            // =================================================================
+            // 1.1 Richiesta PIN su HTTP LAN (porta 8088)
+            MockHttpResponse rPairReq38 = dispatch(router38, "POST", "/api/auth/pair/request", new HashMap<>(), "{}", "192.168.1.55", false);
+            boolean okPairReq38 = (rPairReq38.statusCode == 200) && pinHandler38.lastPin != null && pinHandler38.lastPin.length() == 6;
+
+            // 1.2 Verifica PIN errato su HTTP LAN -> 401
+            MockHttpResponse rPairBad = dispatch(router38, "POST", "/api/auth/pair/verify", new HashMap<>(), "{\"pin\":\"000000\"}", "192.168.1.55", false);
+            boolean okPairBad = (rPairBad.statusCode == 401);
+
+            // 1.3 Verifica PIN corretto su HTTP LAN -> 200 + token valido
+            MockHttpResponse rPairGood = dispatch(router38, "POST", "/api/auth/pair/verify", new HashMap<>(),
+                    "{\"pin\":\"" + pinHandler38.lastPin + "\",\"device_name\":\"LivingRoom-Remote\"}", "192.168.1.55", false);
+            String httpToken = rPairGood.json != null ? rPairGood.json.optString("token") : "";
+            boolean okPairGood = (rPairGood.statusCode == 200) && httpToken.length() == 64 && sec38.validateToken(httpToken);
+
+            Map<String, String> httpAuthHeaders = new HashMap<>();
+            httpAuthHeaders.put("authorization", "Bearer " + httpToken);
+
+            // 1.4 Invio tasti fisici telecomando classico su HTTP LAN (D-pad, OK, BACK, HOME, volume, typing)
+            MockHttpResponse rDpadUp = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"dpad_up\"}", "192.168.1.55", false);
+            MockHttpResponse rDpadDown = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"dpad_down\"}", "192.168.1.55", false);
+            MockHttpResponse rDpadLeft = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"dpad_left\"}", "192.168.1.55", false);
+            MockHttpResponse rDpadRight = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"dpad_right\"}", "192.168.1.55", false);
+            MockHttpResponse rOk = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"ok\"}", "192.168.1.55", false);
+            MockHttpResponse rBack = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"back\"}", "192.168.1.55", false);
+            MockHttpResponse rHome = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"home\"}", "192.168.1.55", false);
+            MockHttpResponse rVolUp = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"volume_up\"}", "192.168.1.55", false);
+            MockHttpResponse rVolDown = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"volume_down\"}", "192.168.1.55", false);
+            MockHttpResponse rText38 = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"type_text\",\"text\":\"Rai 1 HD\"}", "192.168.1.55", false);
+
+            boolean okLegacyKeys = (rDpadUp.statusCode == 200) && (rDpadDown.statusCode == 200) &&
+                                   (rDpadLeft.statusCode == 200) && (rDpadRight.statusCode == 200) &&
+                                   (rOk.statusCode == 200) && (rBack.statusCode == 200) &&
+                                   (rHome.statusCode == 200) && (rVolUp.statusCode == 200) &&
+                                   (rVolDown.statusCode == 200) && (rText38.statusCode == 200) &&
+                                   "Rai 1 HD".equals(cmdHandler38.lastInjectedText);
+
+            // 1.5 Serving asset web statici su HTTP LAN (allowlist positive e negative)
+            boolean okStaticAssets = RestApiRouter.isPublicRemoteAssetRequest("GET", "/") &&
+                                     RestApiRouter.isPublicRemoteAssetRequest("GET", "/app.js") &&
+                                     RestApiRouter.isPublicRemoteAssetRequest("GET", "/style.css") &&
+                                     RestApiRouter.isPublicRemoteAssetRequest("GET", "/index.html") &&
+                                     !RestApiRouter.isPublicRemoteAssetRequest("GET", "/api/ai/ask") &&
+                                     !RestApiRouter.isPublicRemoteAssetRequest("GET", "/../secrets.json");
+
+            // 1.6 Negativi: WAN 403, No-auth 401, AI su HTTP 426
+            MockHttpResponse rWanBlocked = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"volume_up\"}", "203.0.113.10", false);
+            MockHttpResponse rNoAuthBlocked = dispatch(router38, "POST", "/api/command", new HashMap<>(), "{\"action\":\"volume_up\"}", "192.168.1.55", false);
+            MockHttpResponse rAiOnHttpBlocked = dispatch(router38, "POST", "/api/ai/ask", httpAuthHeaders, "{\"query\":\"alza il volume\"}", "192.168.1.55", false);
+
+            boolean okNegativeSecurity = (rWanBlocked.statusCode == 403) &&
+                                         (rNoAuthBlocked.statusCode == 401) &&
+                                         (rAiOnHttpBlocked.statusCode == 426);
+
+            boolean part1Ok = okPairReq38 && okPairBad && okPairGood && okLegacyKeys && okStaticAssets && okNegativeSecurity;
+
+            // =================================================================
+            // (2) AI VIA HTTPS: COMANDO NOTO -> 0 TOKEN, 0 CHIAMATE CLOUD
+            // =================================================================
+            Map<String, String> httpsAuthHeaders = new HashMap<>();
+            httpsAuthHeaders.put("authorization", "Bearer " + httpToken);
+
+            int cloudCallsBeforeP2 = e2eCloudCalls.get();
+            MockHttpResponse rKnownAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"alza il volume\"}", "192.168.1.55", true);
+
+            boolean part2Ok = (rKnownAi.statusCode == 200) &&
+                              rKnownAi.json != null &&
+                              rKnownAi.json.optBoolean("success") &&
+                              rKnownAi.json.optInt("tokens", -1) == 0 &&
+                              rKnownAi.json.optInt("cloud_calls", -1) == 0 &&
+                              rKnownAi.json.optString("source", "").contains("local") &&
+                              (e2eCloudCalls.get() == cloudCallsBeforeP2);
+
+            // =================================================================
+            // (3) COMANDO NON NOTO -> DISCOVERY MOCK DEEPSEEK -> STEPWISE PLAN -> STATE VERIFIED
+            // =================================================================
+            e2eScenario[0] = "DISCOVERY_AUDIO";
+            int cloudCallsBeforeP3 = e2eCloudCalls.get();
+
+            MockHttpResponse rUnknownAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"apri impostazioni audio avanzate\"}", "192.168.1.55", true);
+
+            boolean part3Ok = (rUnknownAi.statusCode == 200) &&
+                              rUnknownAi.json != null &&
+                              rUnknownAi.json.optBoolean("success") &&
+                              rUnknownAi.json.optBoolean("learned_new_procedure") &&
+                              "STATE_VERIFIED".equals(rUnknownAi.json.optString("execution_outcome")) &&
+                              rUnknownAi.json.optInt("cloud_calls", 0) >= 1 &&
+                              (e2eCloudCalls.get() == cloudCallsBeforeP3 + 1) &&
+                              mem38.getSavedProceduresCount() >= 1;
+
+            // =================================================================
+            // (4) SQLITE REUSE: STESSA INTENZIONE -> 0 CHIAMATE CLOUD, 0 TOKEN, STATE VERIFIED
+            // =================================================================
+            int cloudCallsBeforeP4 = e2eCloudCalls.get();
+            inAudioSettings38[0] = false;
+            currentPkg38[0] = "it.akai.customhome.v8";
+
+            MockHttpResponse rReuseAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"apri impostazioni audio avanzate\"}", "192.168.1.55", true);
+
+            boolean part4Ok = (rReuseAi.statusCode == 200) &&
+                              rReuseAi.json != null &&
+                              rReuseAi.json.optBoolean("success") &&
+                              rReuseAi.json.optInt("tokens", -1) == 0 &&
+                              rReuseAi.json.optInt("cloud_calls", -1) == 0 &&
+                              "procedural_memory".equals(rReuseAi.json.optString("source")) &&
+                              "STATE_VERIFIED".equals(rReuseAi.json.optString("execution_outcome")) &&
+                              (e2eCloudCalls.get() == cloudCallsBeforeP4);
+
+            // =================================================================
+            // (5) STOP E RESILIENZA: STOP ANNULLA TASK, ERRORE CLOUD NON BLOCCA IL TELECOMANDO
+            // =================================================================
+            // 5.1 Endpoint Stop / Cancel su HTTPS
+            MockHttpResponse rStop = dispatch(router38, "POST", "/api/ai/stop", httpsAuthHeaders, "{}", "192.168.1.55", true);
+            boolean okStop = (rStop.statusCode == 200) && rStop.json != null && rStop.json.optBoolean("success");
+
+            // 5.2 Errore Provider Cloud (HTTP 500 simulato)
+            e2eScenario[0] = "FAIL_500";
+            MockHttpResponse rFailAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"provoca_errore_500\"}", "192.168.1.55", true);
+            boolean okFailHandled = (rFailAi.statusCode == 400 || !rFailAi.json.optBoolean("success"));
+
+            // 5.3 Telecomando classico continua a rispondere su HTTP LAN anche se il Cloud AI fallisce o è offline
+            MockHttpResponse rKeyAfterFail1 = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"dpad_up\"}", "192.168.1.55", false);
+            MockHttpResponse rKeyAfterFail2 = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"ok\"}", "192.168.1.55", false);
+            MockHttpResponse rKeyAfterFail3 = dispatch(router38, "POST", "/api/command", httpAuthHeaders, "{\"action\":\"back\"}", "192.168.1.55", false);
+
+            boolean okLegacyResilient = (rKeyAfterFail1.statusCode == 200) &&
+                                        (rKeyAfterFail2.statusCode == 200) &&
+                                        (rKeyAfterFail3.statusCode == 200);
+
+            boolean part5Ok = okStop && okFailHandled && okLegacyResilient;
+
+            test38Passed = part1Ok && part2Ok && part3Ok && part4Ok && part5Ok;
+            if (!test38Passed) {
+                System.err.println("[FAIL] Test 38: Fallimento collaudo E2E (p1=" + part1Ok + " [req=" + okPairReq + ", bad=" + okPairBad + ", good=" + okPairGood + ", keys=" + okLegacyKeys + ", static=" + okStaticAssets + ", sec=" + okNegativeSecurity + "]" +
+                        ", p2=" + part2Ok + ", p3=" + part3Ok + ", p4=" + part4Ok + ", p5=" + part5Ok + " [stop=" + okStop + ", fail=" + okFailHandled + ", legacy=" + okLegacyResilient + "])");
+            }
+        } catch (Throwable t38) {
+            System.err.println("[FAIL] Test 38 eccezione: " + t38.getMessage());
+            t38.printStackTrace();
+        } finally {
+            if (mockE2eCloudServer != null) mockE2eCloudServer.stop(0);
+            AkaiAiController.setDefaultPollIntervalMsForTest(200L);
+            AkaiAiController.setStrictLocalOnly(true);
+            KeystoreSecurityHelper.setForceKeystoreUnavailableForTest(false);
+            KeystoreSecurityHelper.setTestFallbackSecretKey(null);
+        }
+        if (test38Passed) {
+            System.out.println("[PASS] Test 38 (Collaudo E2E Closed-Loop JARVIS Web Remote REST -> Mock Cloud -> State Verified -> SQLite Memory -> 0-Token Reuse): (1) telecomando HTTP LAN 8088 100% operativo con D-pad/OK/BACK/volume/typing e asset statici; (2) AI noto 0 token; (3) discovery mock DeepSeek -> stepwise -> STATE_VERIFIED; (4) persistenza SQLite e riuso zero-token confermato; (5) stop e fallimenti cloud non degradano il telecomando legacy");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 38: Fallimento collaudo E2E closed-loop JARVIS");
             failed++;
         }
 
