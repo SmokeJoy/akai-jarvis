@@ -47,18 +47,13 @@
             </intent-filter>
         </activity>
 
-        <!-- Transparent PIN Display Activity -->
+        <!-- Internal Protected PIN Display Activity (exported=false to prevent third-party spoofing) -->
         <activity
             android:name=".PinActivity"
-            android:exported="true"
+            android:exported="false"
             android:theme="@style/Theme.TransparentDialog"
             android:excludeFromRecents="true"
-            android:launchMode="singleTop">
-            <intent-filter>
-                <action android:name="it.akai.customremote.ACTION_PAIR" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
+            android:launchMode="singleTop" />
 
         <!-- Background Remote Daemon Service (Server HTTP Porta 8088 LAN) -->
         <service

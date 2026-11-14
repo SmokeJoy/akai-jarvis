@@ -1197,6 +1197,62 @@ public class UnitTests {
             failed++;
         }
 
+        // =========================================================================
+        // Test 32 (PR-01 M2/M3 Anti-Spoofing & Fail-Closed Cryptographic Boundaries):
+        // 1. AndroidManifest: PinActivity exported="false" e rimozione action it.akai.customremote.ACTION_PAIR
+        // 2. TlsCertificateManager Fail-Closed: Preservazione CA su ca_key.der mancante
+        // 3. TlsCertificateManager Fail-Closed: Rifiuto assoluto di generare nuova Root CA se esistono tracce di identità precedente
+        // =========================================================================
+        // 1. Verifica hardening AndroidManifest.xml: PinActivity DEVE essere non esportata
+        boolean manifestPinHardened = false;
+        try {
+            java.io.File manifestFile = new java.io.File("akai-remote-tv/app/src/main/AndroidManifest.xml");
+            if (!manifestFile.exists()) {
+                manifestFile = new java.io.File("../akai-remote-tv/app/src/main/AndroidManifest.xml");
+            }
+            if (manifestFile.exists()) {
+                String manifestContent = new String(java.nio.file.Files.readAllBytes(manifestFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+                boolean hasExportedFalse = manifestContent.contains("android:name=\".PinActivity\"") &&
+                                           manifestContent.contains("android:exported=\"false\"");
+                boolean hasNoRogueAction = !manifestContent.contains("it.akai.customremote.ACTION_PAIR");
+                manifestPinHardened = hasExportedFalse && hasNoRogueAction;
+            }
+        } catch (Exception e) {
+            manifestPinHardened = false;
+        }
+
+        // 2. Fail-Closed CA: se ca_key.der viene rimosso, il rinnovo SAN non distrugge la Root CA ma preserva quella esistente
+        java.io.File caKeyFile = new java.io.File("ca_key.der");
+        if (caKeyFile.exists()) caKeyFile.delete();
+        TlsCertificateManager.TlsInfo preservedTls = tlsMgr.getOrGenerateTlsInfo(null, "192.168.1.188");
+        boolean okCaPreservedWithoutKey = (preservedTls != null) &&
+                                          caFpBefore.equals(preservedTls.caFingerprintSha256);
+
+        // 3. Fail-Closed CA: se i file di identità sono frammentari/incompleti ma presenti, è severamente vietata la rigenerazione automatica
+        boolean okFailClosedRefusal = false;
+        try {
+            java.io.File ksFile = new java.io.File("server_keystore.p12");
+            if (ksFile.exists()) ksFile.delete(); // rimuoviamo keystore lasciando password / pem
+            // Reset della cache interna per forzare riesame del filesystem
+            java.lang.reflect.Field cachedField = TlsCertificateManager.class.getDeclaredField("cachedTlsInfo");
+            cachedField.setAccessible(true);
+            cachedField.set(tlsMgr, null);
+            tlsMgr.getOrGenerateTlsInfo(null, "192.168.1.188");
+        } catch (IllegalStateException expected) {
+            okFailClosedRefusal = (expected.getMessage() != null && expected.getMessage().contains("Rifiuto rigenerazione automatica"));
+        } catch (Exception ignored) {}
+
+        boolean test32Passed = manifestPinHardened && okCaPreservedWithoutKey && okFailClosedRefusal;
+
+        if (test32Passed) {
+            System.out.println("[PASS] Test 32 (PR-01 M2/M3 Anti-Spoofing & Fail-Closed Bounds): PinActivity chiusa al pubblico (exported=\"false\", rimossa ACTION_PAIR), preservazione fail-closed della Root CA su ca_key.der assente, e rifiuto categorico di rigenerazione nuova Root CA in presenza di identità preesistente");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 32: Fallimento anti-spoofing o confini fail-closed (manifestPinHardened=" + manifestPinHardened +
+                ", okCaPreservedWithoutKey=" + okCaPreservedWithoutKey + ", okFailClosedRefusal=" + okFailClosedRefusal + ")");
+            failed++;
+        }
+
         // Pulizia file temporanei di test effimeri (garanzia zero leak segreti in CI e repo)
         for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der")) {
             try { new java.io.File(testFile).delete(); } catch (Exception ignored) {}

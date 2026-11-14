@@ -132,6 +132,9 @@ public class TlsCertificateManager {
         File ksFile = new File(filesDir, KEYSTORE_FILE_NAME);
         File passFile = new File(filesDir, PASSWORD_FILE_NAME);
         File caPemFile = new File(filesDir, CA_PEM_FILE_NAME);
+        File caKeyFile = new File(filesDir, CA_KEY_FILE_NAME);
+
+        boolean identityFilesExist = (ksFile.exists() || passFile.exists() || caPemFile.exists() || caKeyFile.exists());
 
         // Se già presenti e validi, carica dallo storage privato
         if (ksFile.exists() && passFile.exists() && caPemFile.exists() && ksFile.length() > 0 && passFile.length() > 0) {
@@ -158,7 +161,6 @@ public class TlsCertificateManager {
                                 return cachedTlsInfo;
                             } else {
                                 Log.i(TAG, "IP LAN TV mutato (" + localIp + " non presente in SAN). Rinnovo certificato Server con Root CA esistente...");
-                                File caKeyFile = new File(filesDir, CA_KEY_FILE_NAME);
                                 if (caKeyFile.exists() && caKeyFile.length() > 0) {
                                     try {
                                         byte[] keyBytes = new byte[(int) caKeyFile.length()];
@@ -216,6 +218,12 @@ public class TlsCertificateManager {
                                         }
                                         throw new IllegalStateException("Impossibile rinnovare certificato server mantenendo la Root CA: " + renewalEx.getMessage(), renewalEx);
                                     }
+                                } else {
+                                    Log.e(TAG, "ca_key.der mancante per il rinnovo SAN. Fail-closed: conservazione certificato e Root CA esistente.");
+                                    String caFp = computeSha256Fingerprint(caX509);
+                                    String caPem = readStringFromFile(caPemFile);
+                                    cachedTlsInfo = new TlsInfo(caFp, caPem, sans, serverX509.getNotAfter().getTime(), ksFile, password);
+                                    return cachedTlsInfo;
                                 }
                             }
                         }
@@ -226,6 +234,13 @@ public class TlsCertificateManager {
                 Log.w(TAG, "Errore caricamento keystore esistente (" + e.getMessage() + ").");
                 if (cachedTlsInfo != null) return cachedTlsInfo;
             }
+        }
+
+        // Fail-Closed: se esistono già tracce di identità precedente, è VIETATA qualsiasi rigenerazione automatica
+        if (identityFilesExist) {
+            Log.e(TAG, "Fail-closed: Tracce di identità TLS preesistenti rilevate ma incomplete. Rifiuto rigenerazione automatica di una nuova Root CA.");
+            if (cachedTlsInfo != null) return cachedTlsInfo;
+            throw new IllegalStateException("Materiale crittografico TLS preesistente non rinnovabile. Rifiuto rigenerazione automatica per proteggere il trust store.");
         }
 
         // Generazione on-device ex-novo
@@ -303,7 +318,7 @@ public class TlsCertificateManager {
 
             writeStringToFile(caPemFile, caPem);
 
-            File caKeyFile = new File(filesDir, CA_KEY_FILE_NAME);
+            caKeyFile = new File(filesDir, CA_KEY_FILE_NAME);
             try (FileOutputStream fosKey = new FileOutputStream(caKeyFile)) {
                 fosKey.write(caPair.getPrivate().getEncoded());
             }

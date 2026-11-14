@@ -92,24 +92,29 @@ public class PinActivity extends Activity {
     private void handleIntent(Intent intent) {
         if (intent == null) return;
 
-        String pin = intent.getStringExtra("pin");
-        int duration = intent.getIntExtra("duration", 120);
-        String serverUrl = intent.getStringExtra("serverUrl");
-        String caFingerprint = intent.getStringExtra("caFingerprint");
-
         RemoteServerService s = RemoteServerService.getInstance();
-        String ip = (s != null) ? s.getLocalIpAddress() : "127.0.0.1";
-
-        if (serverUrl == null || serverUrl.isEmpty() || serverUrl.startsWith("http://")) {
-            serverUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
+        if (s == null || !s.isReady() || s.getSecurityManager() == null) {
+            Log.w(TAG, "PinActivity invocata ma il server non è pronto. Chiusura di sicurezza fail-closed.");
+            finish();
+            return;
         }
 
-        if (caFingerprint == null || caFingerprint.isEmpty()) {
-            TlsCertificateManager.TlsInfo info = TlsCertificateManager.getInstance().getOrGenerateTlsInfo(this, ip);
-            if (info != null) {
-                caFingerprint = info.caFingerprintSha256;
-            }
+        // Validazione rigorosa: il PIN mostrato deve provenire esclusivamente dallo stato interno del SecurityManager
+        String realPin = s.getSecurityManager().getCurrentPin();
+        if (realPin == null || realPin.trim().isEmpty() || realPin.length() < 6) {
+            Log.w(TAG, "Nessun PIN attivo nel SecurityManager del server. Chiusura di sicurezza.");
+            finish();
+            return;
         }
+
+        int duration = s.getSecurityManager().getPinRemainingSeconds();
+        if (duration <= 0) duration = 120;
+
+        String ip = s.getLocalIpAddress();
+        String serverUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
+
+        TlsCertificateManager.TlsInfo info = TlsCertificateManager.getInstance().getOrGenerateTlsInfo(this, ip);
+        String caFingerprint = (info != null) ? info.caFingerprintSha256 : null;
 
         TextView tvPin = findViewById(R.id.tv_pin_code);
         final TextView tvCountdown = findViewById(R.id.tv_countdown);
@@ -124,8 +129,8 @@ public class PinActivity extends Activity {
             tvBootstrapHint.setText("Primo accesso? Scarica prima la Root CA da:\n" + caUrl);
         }
 
-        if (pin != null && pin.length() >= 6 && tvPin != null) {
-            tvPin.setText(pin.substring(0, 3) + " " + pin.substring(3));
+        if (realPin != null && realPin.length() >= 6 && tvPin != null) {
+            tvPin.setText(realPin.substring(0, 3) + " " + realPin.substring(3));
         }
 
         if (tvCaFp != null) {

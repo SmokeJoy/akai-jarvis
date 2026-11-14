@@ -14,6 +14,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import it.akai.customremote.qr.QrBitmapUtil;
+import android.net.ConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.os.Handler;
 import android.os.Looper;
 import java.util.concurrent.ExecutorService;
@@ -26,12 +31,17 @@ public class MainActivity extends Activity {
     private int retryCount = 0;
     private static final int MAX_RETRIES = 15;
     private ServiceStateListener stateListener = null;
+    private ConnectivityManager.NetworkCallback networkCallback = null;
 
     private final Runnable retryRunnable = new Runnable() {
         @Override
         public void run() {
             RemoteServerService s = RemoteServerService.getInstance();
-            if (s == null || !s.isReady()) {
+            boolean ready = (s != null && s.isReady());
+            String ip = (s != null) ? s.getLocalIpAddress() : getLocalIpAddress();
+            boolean isLoopback = (ip == null || ip.trim().isEmpty() || "127.0.0.1".equals(ip.trim()));
+
+            if (!ready || isLoopback) {
                 if (retryCount < MAX_RETRIES && !isFinishing()) {
                     retryCount++;
                     updateUI();
@@ -102,6 +112,65 @@ public class MainActivity extends Activity {
             }
         };
         RemoteServerService.registerStateListener(stateListener);
+
+        // Monitoraggio dinamico connettività di rete (Wi-Fi / Ethernet DHCP)
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                networkCallback = new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(Network network) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                retryCount = 0;
+                                retryHandler.removeCallbacks(retryRunnable);
+                                RemoteServerService s = RemoteServerService.getInstance();
+                                if (s != null) {
+                                    s.notifyIpAddressChanged(s.getLocalIpAddress());
+                                }
+                                updateUI();
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onLost(Network network) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                updateUI();
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onLinkPropertiesChanged(Network network, LinkProperties linkProperties) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                RemoteServerService s = RemoteServerService.getInstance();
+                                if (s != null) {
+                                    s.notifyIpAddressChanged(s.getLocalIpAddress());
+                                }
+                                updateUI();
+                            }
+                        });
+                    }
+                };
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    cm.registerDefaultNetworkCallback(networkCallback);
+                } else {
+                    NetworkRequest request = new NetworkRequest.Builder()
+                            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                            .build();
+                    cm.registerNetworkCallback(request, networkCallback);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Impossibile registrare NetworkCallback: " + e.getMessage());
+        }
+
         retryHandler.postDelayed(retryRunnable, 1000);
 
         updateUI();
@@ -159,6 +228,14 @@ public class MainActivity extends Activity {
         if (stateListener != null) {
             RemoteServerService.unregisterStateListener(stateListener);
         }
+        if (networkCallback != null) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    cm.unregisterNetworkCallback(networkCallback);
+                }
+            } catch (Exception ignored) {}
+        }
         retryHandler.removeCallbacks(retryRunnable);
         try {
             bgExecutor.shutdownNow();
@@ -214,6 +291,9 @@ public class MainActivity extends Activity {
             if (ivQrHttps != null) ivQrHttps.setImageBitmap(null);
             return;
         }
+
+        // Notifica al server per verificare/sincronizzare SAN del certificato server
+        s.notifyIpAddressChanged(ip);
 
         final String caDownloadUrl = "http://" + ip + ":" + RemoteServerService.HTTP_PORT + "/api/auth/ca.crt";
         final String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";

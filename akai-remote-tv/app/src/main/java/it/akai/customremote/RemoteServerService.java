@@ -263,6 +263,81 @@ public class RemoteServerService extends Service {
         Log.i(TAG, "Consistent DB restore intent completed. Success=" + ok + " Source=" + src.getAbsolutePath());
     }
 
+    private String currentServerIp = null;
+
+    public synchronized void notifyIpAddressChanged(String newIp) {
+        if (newIp == null || newIp.trim().isEmpty() || "127.0.0.1".equals(newIp.trim())) {
+            return;
+        }
+        if (currentServerIp != null && currentServerIp.equals(newIp.trim())) {
+            return;
+        }
+        Log.i(TAG, "IP LAN TV mutato (" + currentServerIp + " -> " + newIp + "). Rinnovo SAN e ricaricamento listener HTTPS...");
+        currentServerIp = newIp.trim();
+
+        // 1. Aggiorna certificato server SAN
+        TlsCertificateManager.getInstance().getOrGenerateTlsInfo(this, newIp);
+
+        // 2. Ricarica atomica listener HTTPS
+        reloadHttpsListener();
+
+        // 3. Notifica listener UI
+        for (ServiceStateListener l : sStateListeners) {
+            try {
+                l.onServerReady(newIp, HTTP_PORT, HTTPS_PORT);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public synchronized boolean reloadHttpsListener() {
+        if (!isRunning) return false;
+        try {
+            SSLContext sslContext = createSSLContext();
+            if (sslContext == null) {
+                Log.e(TAG, "reloadHttpsListener: createSSLContext fallito");
+                return false;
+            }
+            SSLServerSocketFactory factory = sslContext.getServerSocketFactory();
+            SSLServerSocket newSslServer = (SSLServerSocket) factory.createServerSocket();
+            newSslServer.setReuseAddress(true);
+            newSslServer.bind(new InetSocketAddress(HTTPS_PORT));
+
+            SSLServerSocket oldSocket = httpsServerSocket;
+            httpsServerSocket = newSslServer;
+            if (oldSocket != null && !oldSocket.isClosed()) {
+                try { oldSocket.close(); } catch (Exception ignored) {}
+            }
+
+            if (httpsAcceptorThread == null || !httpsAcceptorThread.isAlive()) {
+                httpsAcceptorThread = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        while (isRunning && httpsServerSocket != null && !httpsServerSocket.isClosed() && httpsServerSocket.isBound()) {
+                            try {
+                                final Socket client = httpsServerSocket.accept();
+                                threadPool.execute(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        handleClient(client, true);
+                                    }
+                                });
+                            } catch (IOException e) {
+                                if (!isRunning || (httpsServerSocket != null && httpsServerSocket.isClosed())) break;
+                                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                            }
+                        }
+                    }
+                }, "AkaiHttpsAcceptor");
+                httpsAcceptorThread.start();
+            }
+            Log.i(TAG, "Listener HTTPS ricaricato con successo con certificato SAN aggiornato su porta " + HTTPS_PORT);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Errore durante il reload dell'HTTPS listener: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
     public synchronized void ensureServerRunning() {
         if (isStarting) return;
         boolean httpDead = (httpServerSocket == null || httpServerSocket.isClosed() || !httpServerSocket.isBound());
