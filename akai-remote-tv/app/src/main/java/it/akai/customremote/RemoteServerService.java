@@ -192,6 +192,10 @@ public class RemoteServerService extends Service {
                     } catch (Exception ignored) {}
                     return out;
                 }
+                @Override public JSONObject cancelCurrentTask() {
+                    it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).stop();
+                    return AkaiAiController.getInstance(RemoteServerService.this, tvController).cancelActiveTask();
+                }
             },
             getLocalIpAddress(),
             HTTP_PORT
@@ -719,6 +723,19 @@ public class RemoteServerService extends Service {
             JSONObject aiRes = ai.processQuery(query, speak);
 
             sendJsonResponse(os, 200, aiRes);
+            return;
+        }
+
+        // AI Active Task Cancel (/api/ai/cancel & /api/ai/stop)
+        if (("/api/ai/cancel".equals(path) || "/api/ai/stop".equals(path)) && "POST".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return;
+            }
+            it.akai.customremote.ai.AkaiSpeechEngine.getInstance(this).stop();
+            JSONObject cancelRes = AkaiAiController.getInstance(this, tvController).cancelActiveTask();
+            sendJsonResponse(os, 200, cancelRes);
             return;
         }
 

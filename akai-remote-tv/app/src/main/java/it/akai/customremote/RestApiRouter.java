@@ -59,6 +59,15 @@ public class RestApiRouter {
             } catch (Exception ignored) {}
             return s;
         }
+        default JSONObject cancelCurrentTask() {
+            JSONObject res = new JSONObject();
+            try {
+                res.put("success", false);
+                res.put("status", "NOT_IMPLEMENTED");
+                res.put("error", "Cancel non implementato su questo handler");
+            } catch (Exception ignored) {}
+            return res;
+        }
     }
 
     private final SecurityManager securityManager;
@@ -488,6 +497,26 @@ public class RestApiRouter {
             JSONObject res = aiHandler.processQuery(query, speak);
             int status = res.optBoolean("success", false) ? 200 : 400;
             sendJsonResponse(os, status, res);
+            return true;
+        }
+
+        // AI Active Task Cancel / Stop (/api/ai/cancel, /api/ai/stop & /api/control/ai/cancel)
+        if (("/api/ai/cancel".equals(path) || "/api/ai/stop".equals(path) || "/api/control/ai/cancel".equals(path)) && "POST".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return true;
+            }
+            if (aiHandler == null) {
+                JSONObject err = new JSONObject();
+                err.put("success", false);
+                err.put("error", "Servizio AI/Intent non disponibile o in fase di avvio");
+                err.put("status", "SERVICE_UNAVAILABLE");
+                sendJsonResponse(os, 503, err);
+                return true;
+            }
+            JSONObject res = aiHandler.cancelCurrentTask();
+            sendJsonResponse(os, 200, res != null ? res : new JSONObject().put("success", true));
             return true;
         }
 

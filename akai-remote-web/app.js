@@ -71,6 +71,7 @@
         btnAiSend: document.getElementById('btn-ai-send'),
         aiActiveState: document.getElementById('ai-active-state'),
         aiActiveLabel: document.getElementById('ai-active-label'),
+        btnAiStop: document.getElementById('btn-ai-stop'),
         aiResponseBox: document.getElementById('ai-response-box'),
         aiBadgeSource: document.getElementById('ai-badge-source'),
         aiBadgeStatus: document.getElementById('ai-badge-status'),
@@ -462,14 +463,48 @@
         }
     }
 
+    async function cancelBackendAiTask() {
+        const hadInFlight = Boolean(convoSession.aiAbortController);
+        if (convoSession.aiAbortController) {
+            convoSession.userCancelRequested = true;
+            try { convoSession.aiAbortController.abort(); } catch (e) {}
+            convoSession.aiAbortController = null;
+        }
+        if (elements.aiActiveState) {
+            elements.aiActiveState.classList.add('hidden');
+        }
+        if (!state.token) return false;
+        try {
+            const res = await fetch(getApiUrl('/api/ai/cancel'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${state.token}`
+                },
+                body: JSON.stringify({ reason: 'user_stop' })
+            });
+            if (res.ok && hadInFlight) {
+                showToast('Task AI interrotto sulla TV');
+            }
+            return res.ok;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function stopConversation() {
+        const shouldCancelTv = Boolean(convoSession.aiAbortController) ||
+            convoSession.state === JarvisConvoState.THINKING ||
+            convoSession.state === JarvisConvoState.SPEAKING;
         convoSession.active = false;
         convoSession.turnLocked = false;
         clearTimeout(convoSession.vadTimer);
         clearTimeout(convoSession.inactivityTimer);
 
-        // P1-04: Abort pending ask request on explicit stop
-        if (convoSession.aiAbortController) {
+        // P1-2: Abort pending ask request AND signal TV backend cancel (/api/ai/cancel)
+        if (shouldCancelTv) {
+            cancelBackendAiTask();
+        } else if (convoSession.aiAbortController) {
             try { convoSession.aiAbortController.abort(); } catch (e) {}
             convoSession.aiAbortController = null;
         }
@@ -638,6 +673,7 @@
         }
 
         // P1-04: AbortController with 25-second timeout
+        convoSession.userCancelRequested = false;
         convoSession.aiAbortController = new AbortController();
         const timeoutId = setTimeout(() => {
             if (convoSession.aiAbortController) convoSession.aiAbortController.abort();
@@ -672,6 +708,14 @@
             } else if (res.status === 401) {
                 handleSessionExpired();
                 return false;
+            } else if (data.status === 'CANCELLED') {
+                displayAiResponse({
+                    success: false,
+                    status: 'CANCELLED',
+                    reply: data.reply || 'Operazione annullata su richiesta.',
+                    verified: false
+                }, query);
+                return false;
             } else {
                 displayAiResponse({
                     success: false,
@@ -683,6 +727,16 @@
             }
         } catch (e) {
             clearTimeout(timeoutId);
+            if (e.name === 'AbortError' && convoSession.userCancelRequested) {
+                convoSession.userCancelRequested = false;
+                displayAiResponse({
+                    success: false,
+                    status: 'CANCELLED',
+                    reply: 'Task AI annullato sulla TV.',
+                    verified: false
+                }, query);
+                return false;
+            }
             if (e.name === 'AbortError') {
                 showToast('Richiesta annullata o timeout.', true);
             } else {
@@ -744,6 +798,11 @@
                 elements.aiBadgeStatus.className = 'ai-badge-status blocked';
                 elements.aiBadgeStatus.textContent = '🛑 Budget Bloccato';
                 showToast('Budget massimo raggiunto (5,00 €)', true);
+                if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
+            } else if (data.status === 'CANCELLED') {
+                elements.aiBadgeStatus.className = 'ai-badge-status blocked';
+                elements.aiBadgeStatus.textContent = '⏹ Annullato';
+                showToast('Task AI interrotto');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
             } else {
                 elements.aiBadgeStatus.className = 'ai-badge-status error';
@@ -1632,6 +1691,13 @@
                 if (convoSession.lastQuery) {
                     askAi(convoSession.lastQuery);
                 }
+            });
+        }
+
+        // AI Active Task Stop button
+        if (elements.btnAiStop) {
+            elements.btnAiStop.addEventListener('click', () => {
+                cancelBackendAiTask();
             });
         }
 

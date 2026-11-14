@@ -1988,6 +1988,33 @@ public class UnitTests {
                                    .put("actions", new JSONArray().put(new JSONObject().put("type", "press_key").put("key", "dpad_down")))
                                    .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "SchermataInesistente"));
                         }
+                    } else if ("P1_INTERSTEP_LAUNCH_CLICK".equals(sc)) {
+                        payload.put("reply", "Apro YouTube e poi Cerca")
+                               .put("intent_key", "p1_interstep_fail")
+                               .put("actions", new JSONArray()
+                                   .put(new JSONObject().put("type", "launch_app").put("pkg", "com.google.android.youtube.tv"))
+                                   .put(new JSONObject().put("type", "click_text").put("text", "Cerca")))
+                               .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Cerca"));
+                    } else if ("P1_INTERSTEP_WAIT_CLICK_OK".equals(sc)) {
+                        payload.put("reply", "Apro Audio Impostazioni TV")
+                               .put("intent_key", "p1_interstep_ok")
+                               .put("actions", new JSONArray()
+                                   .put(new JSONObject().put("type", "launch_app").put("pkg", "com.android.tv.settings"))
+                                   .put(new JSONObject().put("type", "wait").put("ms", 2000))
+                                   .put(new JSONObject().put("type", "click_text").put("text", "Audio")))
+                               .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Audio"));
+                    } else if ("CANCEL_REPLAN_STOP".equals(sc)) {
+                        if (reqBody.contains("RETRY_DIFFERENT_PLAN")) {
+                            payload.put("reply", "Replan annullato prima dell'esecuzione")
+                                   .put("intent_key", "cancel_replan_key")
+                                   .put("actions", new JSONArray().put(new JSONObject().put("type", "click_text").put("text", "Audio")))
+                                   .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Audio"));
+                        } else {
+                            payload.put("reply", "Tentativo 1 fallito prima di cancel")
+                                   .put("intent_key", "cancel_replan_key")
+                                   .put("actions", new JSONArray().put(new JSONObject().put("type", "press_key").put("key", "dpad_down")))
+                                   .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Audio"));
+                        }
                     } else {
                         payload.put("reply", "Multi-step cancellabile")
                                .put("intent_key", "cancel_multi")
@@ -2023,6 +2050,7 @@ public class UnitTests {
 
             final List<ScreenPerceptionEngine.PerceptionSnapshot> snapQueue = new ArrayList<>();
             final AtomicInteger executedStepsCount = new AtomicInteger(0);
+            final AtomicBoolean clickTextInvoked37 = new AtomicBoolean(false);
             final AkaiAiController[] ctrlHolder = new AkaiAiController[1];
             final AtomicBoolean cancelOnFirstStep = new AtomicBoolean(false);
 
@@ -2040,6 +2068,9 @@ public class UnitTests {
                 @Override
                 public TvController.CommandResult executeActions(JSONArray actions) {
                     executedStepsCount.addAndGet(actions != null ? actions.length() : 0);
+                    if (actions != null && actions.toString().contains("\"click_text\"")) {
+                        clickTextInvoked37.set(true);
+                    }
                     if (cancelOnFirstStep.get() && ctrlHolder[0] != null) {
                         ctrlHolder[0].cancelCurrentTask();
                     }
@@ -2156,6 +2187,147 @@ public class UnitTests {
                     "FAILED".equals(r4.optString("execution_outcome")) && executedStepsCount.get() == 1;
             cancelOnFirstStep.set(false);
 
+            // Scenario 4b (P1-1 Negative): launch_app non pronto -> click_text NON invocato, snapshot & wait tracciati
+            ctrlScenario[0] = "P1_INTERSTEP_LAUNCH_CLICK";
+            executedStepsCount.set(0);
+            clickTextInvoked37.set(false);
+            snapQueue.clear();
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false));
+            JSONObject r4b = ctrl37.processQuery("sequenza p1 launch click fail", false);
+            boolean sc4bOk = !r4b.optBoolean("success") && "FAILED".equals(r4b.optString("execution_outcome")) &&
+                    !clickTextInvoked37.get() && r4b.optInt("executed_steps", -1) == 1 &&
+                    r4b.optInt("snapshot_count", 0) >= 2 && r4b.optLong("wait_elapsed_ms", 0L) > 0L;
+
+            // Scenario 4c (P1-1 Positive): launch_app -> UI pronta -> click_text invocato & wait 2000ms chiuso presto
+            ctrlScenario[0] = "P1_INTERSTEP_WAIT_CLICK_OK";
+            executedStepsCount.set(0);
+            clickTextInvoked37.set(false);
+            snapQueue.clear();
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false));
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.singletonList("Loading"), Collections.emptyList(), null, false, false, false));
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("com.android.tv.settings", Arrays.asList("Preferenze", "Audio"), Collections.emptyList(), "Audio", false, false, false));
+            JSONObject r4c = ctrl37.processQuery("sequenza p1 launch wait click ok", false);
+            boolean sc4cOk = r4c.optBoolean("success") && "STATE_VERIFIED".equals(r4c.optString("execution_outcome")) &&
+                    clickTextInvoked37.get() && r4c.optInt("snapshot_count", 0) >= 3 &&
+                    r4c.optLong("wait_elapsed_ms", 9999L) < 500L;
+
+            // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
+            ctrlScenario[0] = "CANCEL_MULTI";
+            final List<String> actionOrder = Collections.synchronizedList(new ArrayList<>());
+            final CountDownLatch t1InStep1 = new CountDownLatch(1);
+            final CountDownLatch allowT1Continue = new CountDownLatch(1);
+            final AtomicBoolean t2SawYoutubeReady = new AtomicBoolean(false);
+            AkaiAiController.PerceptionAndExecutionBridge concBridge = new AkaiAiController.PerceptionAndExecutionBridge() {
+                @Override
+                public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
+                    if (t2SawYoutubeReady.get()) {
+                        return new ScreenPerceptionEngine.PerceptionSnapshot("com.google.android.youtube.tv", Collections.singletonList("YouTube"), Collections.emptyList(), null, false, false, false);
+                    }
+                    return new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false);
+                }
+
+                @Override
+                public TvController.CommandResult executeActions(JSONArray actions) {
+                    JSONObject first = actions != null ? actions.optJSONObject(0) : null;
+                    String t = first != null ? first.optString("type", "") : "";
+                    String k = first != null ? first.optString("key", "") : "";
+                    String act = first != null ? first.optString("action", "") : "";
+                    String pkg = first != null ? first.optString("package", first.optString("pkg", "")) : "";
+                    if (("command".equals(t) && "launch_youtube".equals(act)) || "launch_app".equals(t) || "open_app".equals(t)) {
+                        actionOrder.add("T2:" + (!pkg.isEmpty() ? pkg : act));
+                        t2SawYoutubeReady.set(true);
+                    } else if ("dpad_up".equals(k)) {
+                        actionOrder.add("T1:dpad_up");
+                        t1InStep1.countDown();
+                        try { allowT1Continue.await(1500, TimeUnit.MILLISECONDS); } catch (InterruptedException ignored) {}
+                    } else if ("dpad_down".equals(k)) {
+                        actionOrder.add("T1:dpad_down");
+                    } else {
+                        actionOrder.add("OTHER:" + t + ":" + k + ":" + act);
+                    }
+                    return new TvController.CommandResult(true, "OK concorrente");
+                }
+
+                @Override
+                public void sleepMs(long ms) {
+                    try { Thread.sleep(Math.min(ms, 10L)); } catch (InterruptedException ignored) {}
+                }
+            };
+            final AkaiAiController ctrlConc = AkaiAiController.createForTest(ctx37, new TvController(), mem37, adapter37, concBridge);
+            RestApiRouter.AiHandler aiCancelHandler = new RestApiRouter.AiHandler() {
+                @Override public JSONObject processQuery(String q, boolean sp) { return ctrlConc.processQuery(q, sp); }
+                @Override public boolean isStrictLocalOnly() { return AkaiAiController.isStrictLocalOnly(); }
+                @Override public JSONArray getSupportedCatalog() { return new JSONArray(); }
+                @Override public JSONObject cancelCurrentTask() { return ctrlConc.cancelActiveTask(); }
+            };
+            RestApiRouter routerP12 = new RestApiRouter(routerSec, cmdHandler, memHandler, pinHandler, aiCancelHandler, "192.168.1.8", 8088);
+
+            // Verifica router /api/ai/cancel (426 HTTP, 401 no token, 200 authenticated anche idle)
+            MockHttpResponse rCancelHttp = dispatch(routerP12, "POST", "/api/ai/cancel", authHeaders, "{}", "192.168.1.10", false);
+            MockHttpResponse rCancelNoAuth = dispatch(routerP12, "POST", "/api/ai/cancel", new HashMap<>(), "{}", "192.168.1.10", true);
+
+            final JSONObject[] t1ResHolder = new JSONObject[1];
+            final JSONObject[] t2ResHolder = new JSONObject[1];
+            Thread t1 = new Thread(() -> t1ResHolder[0] = ctrlConc.processQuery("sequenza lunga concorrente uno", false));
+            t1.start();
+            boolean enteredStep1 = t1InStep1.await(2, TimeUnit.SECONDS);
+
+            Thread t2 = new Thread(() -> t2ResHolder[0] = ctrlConc.processQuery("apri YouTube", false));
+            t2.start();
+            Thread.sleep(40L);
+
+            // Telecomando base non bloccato mentre l'agente e' in esecuzione
+            MockHttpResponse rRemoteDuringAi = dispatch(routerP12, "POST", "/api/command", authHeaders, "{\"action\":\"volume_up\"}", "192.168.1.10", true);
+            // Stop autenticato via HTTPS su /api/ai/cancel annulla il task TV attivo
+            MockHttpResponse rCancelAuth = dispatch(routerP12, "POST", "/api/ai/cancel", authHeaders, "{\"reason\":\"user_stop\"}", "192.168.1.10", true);
+            allowT1Continue.countDown();
+            t1.join(3000L);
+            t2.join(3000L);
+
+            boolean concIsolationOk = enteredStep1 &&
+                    rCancelHttp.statusCode == 426 && rCancelNoAuth.statusCode == 401 &&
+                    rCancelAuth.statusCode == 200 && rCancelAuth.json != null && rCancelAuth.json.optBoolean("active_task_cancelled") &&
+                    rRemoteDuringAi.statusCode == 200 &&
+                    t1ResHolder[0] != null && "CANCELLED".equals(t1ResHolder[0].optString("status")) &&
+                    t2ResHolder[0] != null && t2ResHolder[0].optBoolean("success") &&
+                    actionOrder.size() == 2 && "T1:dpad_up".equals(actionOrder.get(0)) &&
+                    "T2:launch_youtube".equals(actionOrder.get(1)) &&
+                    !actionOrder.contains("T1:dpad_down");
+
+            // Stop durante replan (attempt 1 fallisce -> durante planning retry viene chiamato cancelActiveTask() -> zero azioni replan)
+            ctrlScenario[0] = "CANCEL_REPLAN_STOP";
+            final AtomicInteger replanStopExecCalls = new AtomicInteger(0);
+            final AkaiAiController[] replanStopCtrlHolder = new AkaiAiController[1];
+            AiProviderAdapter replanStopAdapter = new AiProviderAdapter(ctx37) {
+                @Override
+                public AiResponse planActionSequence(String userQuery, String screenContext, JSONObject preferences, JSONArray recentConversations) {
+                    if (userQuery != null && userQuery.contains("RETRY_DIFFERENT_PLAN") && replanStopCtrlHolder[0] != null) {
+                        replanStopCtrlHolder[0].cancelActiveTask();
+                    }
+                    return super.planActionSequence(userQuery, screenContext, preferences, recentConversations);
+                }
+            };
+            replanStopAdapter.setTestEndpointOverride(ctrlMockUrl);
+            replanStopAdapter.setActiveProvider(AiProviderAdapter.PROVIDER_DEEPSEEK);
+            replanStopAdapter.setApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK, "sk-ctrl-mock");
+            replanStopAdapter.setCloudContextConsent(true);
+            AkaiAiController.PerceptionAndExecutionBridge replanStopBridge = new AkaiAiController.PerceptionAndExecutionBridge() {
+                @Override public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
+                    return new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false);
+                }
+                @Override public TvController.CommandResult executeActions(JSONArray actions) {
+                    replanStopExecCalls.incrementAndGet();
+                    return new TvController.CommandResult(false, "Tentativo 1 fallito", true);
+                }
+                @Override public void sleepMs(long ms) {}
+            };
+            AkaiAiController ctrlReplanStop = AkaiAiController.createForTest(ctx37, new TvController(), mem37, replanStopAdapter, replanStopBridge);
+            replanStopCtrlHolder[0] = ctrlReplanStop;
+            JSONObject rReplanStop = ctrlReplanStop.processQuery("test stop durante replan", false);
+            boolean replanStopOk = !rReplanStop.optBoolean("success") && "CANCELLED".equals(rReplanStop.optString("status")) &&
+                    replanStopExecCalls.get() == 1;
+            boolean sc4dOk = concIsolationOk && replanStopOk;
+
             // Scenario 5: Privacy Gate (hasSensitiveFields=true -> 0 HTTP) + toRedactedMinimalContextPrompt()
             int callsBeforePrivacy = ctrlHttpCalls.get();
             snapQueue.clear();
@@ -2179,10 +2351,13 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && privacyZeroHttpOk && redactionOk;
+            test37Passed = sc1aOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
                 System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
-                    " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok + " priv=" + privacyZeroHttpOk + " red=" + redactionOk);
+                    " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
+                    " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
+                    " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
+                    " priv=" + privacyZeroHttpOk + " red=" + redactionOk);
             }
         } catch (Throwable t37) {
             System.err.println("[FAIL] Test 37 eccezione: " + t37.getMessage());
