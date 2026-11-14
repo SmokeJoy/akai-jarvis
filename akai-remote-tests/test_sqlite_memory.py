@@ -331,6 +331,93 @@ def run_tests():
 
         conn.close()
 
+        # ---------------------------------------------------------------------
+        # TEST 8: Durabilita Reale su Disco con Chiusura e Riapertura Connessione (Close/Reopen)
+        # ---------------------------------------------------------------------
+        # Dimostra che una procedura complessa appresa (es. Test 38: skill 'open_audio_advanced')
+        # inserita nel database SQLite reale su disco mantenga integri e deserializzabili
+        # sia 'action_sequence' JSON che 'success_condition' JSON dopo la chiusura completa
+        # della connessione (conn.close) e la successiva riapertura da file (sqlite3.connect).
+        conn_durable = sqlite3.connect(temp_db_path)
+        cur_durable = conn_durable.cursor()
+
+        skill_intent_key = "open_audio_advanced"
+        skill_goal = "apri impostazioni audio avanzate"
+        skill_desc = "Apre le impostazioni audio avanzate del dispositivo TV"
+        skill_pkg = "com.android.tv.settings"
+        skill_init_state = json.dumps({"current_package": "it.akai.customhome.v8"})
+        skill_actions_obj = [
+            {"action": "launch_app", "package": "com.android.tv.settings"},
+            {"action": "wait", "duration_ms": 200},
+            {"action": "click", "target": "Impostazioni dispositivo"},
+            {"action": "click", "target": "Suono"},
+            {"action": "click", "target": "Impostazioni avanzate"}
+        ]
+        skill_actions_json = json.dumps(skill_actions_obj)
+        skill_success_obj = {
+            "contains_text": "Uscita digitale",
+            "expected_package": "com.android.tv.settings"
+        }
+        skill_success_json = json.dumps(skill_success_obj)
+        skill_fallback = json.dumps({"action": "press_home"})
+
+        cur_durable.execute("""
+            INSERT INTO procedural_memory 
+            (intent_key, goal_intent, description, app_package, initial_state, action_sequence, success_condition, app_version, is_personal, created_at, fallback_strategy)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (skill_intent_key, skill_goal, skill_desc, skill_pkg, skill_init_state, skill_actions_json, skill_success_json, "v6.0", 1, now + 500000, skill_fallback))
+        conn_durable.commit()
+
+        # Chiusura esplicita per garantire flush su disco e isolamento connessione
+        conn_durable.close()
+
+        # Riapertura da file persistente su disco con una nuova connessione
+        conn_reopened = sqlite3.connect(temp_db_path)
+        cur_reopened = conn_reopened.cursor()
+
+        # Query simulando findProcedureByGoal(query="apri impostazioni audio avanzate")
+        cur_reopened.execute("""
+            SELECT intent_key, goal_intent, description, app_package, action_sequence, success_condition, is_personal, fallback_strategy
+            FROM procedural_memory
+            WHERE goal_intent = ? OR intent_key = ?;
+        """, (skill_goal, skill_intent_key))
+        recovered_row = cur_reopened.fetchone()
+        conn_reopened.close()
+
+        durability_ok = False
+        if recovered_row is not None:
+            rec_intent_key, rec_goal, rec_desc, rec_pkg, rec_actions_raw, rec_success_raw, rec_personal, rec_fallback_raw = recovered_row
+            try:
+                rec_actions = json.loads(rec_actions_raw)
+                rec_success = json.loads(rec_success_raw)
+                rec_fallback = json.loads(rec_fallback_raw)
+
+                durability_ok = (
+                    rec_intent_key == skill_intent_key and
+                    rec_goal == skill_goal and
+                    rec_pkg == skill_pkg and
+                    rec_personal == 1 and
+                    isinstance(rec_actions, list) and len(rec_actions) == 5 and
+                    rec_actions[0].get("action") == "launch_app" and rec_actions[0].get("package") == "com.android.tv.settings" and
+                    rec_actions[1].get("action") == "wait" and rec_actions[1].get("duration_ms") == 200 and
+                    rec_actions[2].get("action") == "click" and rec_actions[2].get("target") == "Impostazioni dispositivo" and
+                    rec_actions[3].get("action") == "click" and rec_actions[3].get("target") == "Suono" and
+                    rec_actions[4].get("action") == "click" and rec_actions[4].get("target") == "Impostazioni avanzate" and
+                    rec_success.get("contains_text") == "Uscita digitale" and
+                    rec_success.get("expected_package") == "com.android.tv.settings" and
+                    rec_fallback.get("action") == "press_home"
+                )
+            except Exception as e:
+                print(f"[FAIL] SQLite Test 8: Errore parsing JSON recuperato da disco: {e}")
+                durability_ok = False
+
+        if durability_ok:
+            print("[PASS] SQLite Test 8: Durabilita reale su disco con chiusura e riapertura (close/reopen) verificata: procedura complessa (action_sequence 5 step e success_condition JSON) recuperata intatta al 100%")
+            passed += 1
+        else:
+            print(f"[FAIL] SQLite Test 8: Durabilita fallita su chiusura/riapertura DB reale! recovered_row={recovered_row}")
+            failed += 1
+
     finally:
         if os.path.exists(temp_db_path):
             os.remove(temp_db_path)

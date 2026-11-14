@@ -2462,11 +2462,12 @@ public class UnitTests {
         }
 
         // =========================================================================
-        // Test 38: Collaudo E2E Closed-Loop JARVIS da Web Remote REST a Controller Android API28
-        //          (1) Telecomando classico HTTP LAN dopo pairing D-pad/OK/BACK/volume, static assets e HTTP 401/403/426
+        // Test 38: Collaudo E2E Closed-Loop Host Simulato (Router REST In-Process -> Mock Cloud DeepSeek -> Bridge Percettivo Simulato -> Cache RAM Procedurale)
+        //          NOTA METODOLOGICA: Test host in-process con mock perception bridge e memoria RAM LinkedHashMap (non SQLite su device reale né browser Safari su TV).
+        //          (1) Telecomando classico HTTP LAN con router in-process dopo pairing D-pad/OK/BACK/volume, static assets e HTTP 401/403/426
         //          (2) AI via HTTPS/testo: comando noto -> 0 token, 0 chiamate cloud
-        //          (3) Comando non noto -> risposta JSON mock DeepSeek/Kimi -> stepwise plan -> verifica stato
-        //          (4) saveVerifiedProcedure SQLite -> stessa intenzione successiva: 0 chiamate cloud, 0 token, verifica stato
+        //          (3) Comando non noto -> risposta JSON mock DeepSeek -> stepwise plan -> verifica stato tramite bridge percettivo simulato
+        //          (4) saveVerifiedProcedure in cache RAM procedurale -> stessa intenzione successiva: 0 chiamate cloud, 0 token, verifica stato
         //          (5) Stop e fallimento provider/offline non bloccano i tasti telecomando legacy
         // =========================================================================
         boolean test38Passed = false;
@@ -2780,7 +2781,7 @@ public class UnitTests {
             KeystoreSecurityHelper.setTestFallbackSecretKey(null);
         }
         if (test38Passed) {
-            System.out.println("[PASS] Test 38 (Collaudo E2E Closed-Loop JARVIS Web Remote REST -> Mock Cloud -> State Verified -> SQLite Memory -> 0-Token Reuse): (1) telecomando HTTP LAN 8088 100% operativo con D-pad/OK/BACK/volume/typing e asset statici; (2) AI noto 0 token; (3) discovery mock DeepSeek -> stepwise -> STATE_VERIFIED; (4) persistenza SQLite e riuso zero-token confermato; (5) stop e fallimenti cloud non degradano il telecomando legacy");
+            System.out.println("[PASS] Test 38 (Collaudo E2E Closed-Loop Host Simulato: In-Process Router REST -> Mock Cloud DeepSeek -> State Verified -> In-Memory RAM Procedural Cache -> 0-Token Reuse): (1) router in-process HTTP LAN 8088 operativo con D-pad/OK/BACK/volume/typing e asset statici; (2) AI noto 0 token; (3) discovery mock DeepSeek -> stepwise -> STATE_VERIFIED via bridge percettivo simulato; (4) memorizzazione in cache procedurale RAM (LinkedHashMap host) e riuso zero-token confermato; (5) stop e fallimenti cloud non degradano il telecomando legacy");
             passed++;
         } else {
             System.err.println("[FAIL] Test 38: Fallimento collaudo E2E closed-loop JARVIS");
