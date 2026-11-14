@@ -14,9 +14,12 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import it.akai.customremote.qr.QrBitmapUtil;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final String TAG = "AKAI_MainActivity";
+    private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
     private TextView tvServiceStatus;
     private TextView tvServerUrl;
@@ -77,12 +80,12 @@ public class MainActivity extends Activity {
                     String pin = s.getSecurityManager().generateNewPin();
                     int remaining = s.getSecurityManager().getPinRemainingSeconds();
                     PinOverlayDialog.show(MainActivity.this, pin, remaining, httpsUrl, caFp);
-                    Toast.makeText(MainActivity.this, "PIN generato: " + pin + " (120s)", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, "Schermata PIN aperta a schermo (valida 120s)", Toast.LENGTH_SHORT).show();
                 } else {
                     SecurityManager sec = new SecurityManager(MainActivity.this);
                     String pin = sec.generateNewPin();
                     PinOverlayDialog.show(MainActivity.this, pin, 120, httpsUrl, caFp);
-                    Toast.makeText(MainActivity.this, "PIN temporaneo generato: " + pin, Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, "Schermata PIN aperta a schermo (valida 120s)", Toast.LENGTH_SHORT).show();
                 }
             }
         });
@@ -114,6 +117,14 @@ public class MainActivity extends Activity {
         updateUI();
     }
 
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        try {
+            bgExecutor.shutdownNow();
+        } catch (Exception ignored) {}
+    }
+
     private void updateUI() {
         RemoteServerService s = RemoteServerService.getInstance();
         boolean running = (s != null);
@@ -121,45 +132,6 @@ public class MainActivity extends Activity {
         if (tvServiceStatus != null) {
             tvServiceStatus.setText(running ? "Stato Server: IN ASCOLTO (Porte " + RemoteServerService.HTTP_PORT + " HTTP / " + RemoteServerService.HTTPS_PORT + " HTTPS)" : "Stato Server: In avvio...");
             tvServiceStatus.setTextColor(running ? 0xFF10B981 : 0xFFF59E0B);
-        }
-
-        String ip = (s != null) ? s.getLocalIpAddress() : getLocalIpAddress();
-        String caDownloadUrl = "http://" + ip + ":" + RemoteServerService.HTTP_PORT + "/api/auth/ca.crt";
-        String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
-
-        if (tvServerUrl != null) {
-            tvServerUrl.setText(httpsUrl);
-        }
-
-        if (tvCaUrl != null) {
-            tvCaUrl.setText(caDownloadUrl);
-        }
-        if (tvHttpsUrl != null) {
-            tvHttpsUrl.setText(httpsUrl);
-        }
-
-        TlsCertificateManager tlsMgr = TlsCertificateManager.getInstance();
-        TlsCertificateManager.TlsInfo tlsInfo = tlsMgr.getOrGenerateTlsInfo(this, ip);
-        String caFp = (tlsInfo != null) ? tlsInfo.caFingerprintSha256 : "NON_CONFIGURATA";
-
-        if (tvCaFingerprint != null) {
-            tvCaFingerprint.setText(caFp);
-        }
-
-        // Render QR Code 1: Bootstrap Root CA Download (HTTP 8088)
-        if (ivQrCa != null) {
-            Bitmap caBmp = QrBitmapUtil.createQrBitmap(caDownloadUrl, 4, 1);
-            if (caBmp != null) {
-                ivQrCa.setImageBitmap(caBmp);
-            }
-        }
-
-        // Render QR Code 2: JARVIS Web Remote (HTTPS 8443)
-        if (ivQrHttps != null) {
-            Bitmap httpsBmp = QrBitmapUtil.createQrBitmap(httpsUrl, 4, 1);
-            if (httpsBmp != null) {
-                ivQrHttps.setImageBitmap(httpsBmp);
-            }
         }
 
         boolean uinputOk = (s != null && s.getTvController() != null && s.getTvController().isUInputReady());
@@ -172,6 +144,74 @@ public class MainActivity extends Activity {
         if (tvPairedCount != null) {
             tvPairedCount.setText("Sessioni attive: " + activeSessions);
         }
+
+        final String ip = (s != null) ? s.getLocalIpAddress() : getLocalIpAddress();
+        boolean isLocalLoopback = (ip == null || ip.trim().isEmpty() || "127.0.0.1".equals(ip.trim()));
+
+        if (isLocalLoopback) {
+            if (tvCaFingerprint != null) {
+                tvCaFingerprint.setText("ATTENZIONE: Wi-Fi TV non connesso. Connetti la TV alla rete LAN per abilitare l'onboarding smartphone.");
+            }
+            if (tvCaUrl != null) tvCaUrl.setText("In attesa di connessione LAN...");
+            if (tvHttpsUrl != null) tvHttpsUrl.setText("In attesa di connessione LAN...");
+            if (ivQrCa != null) ivQrCa.setImageBitmap(null);
+            if (ivQrHttps != null) ivQrHttps.setImageBitmap(null);
+            return;
+        }
+
+        final String caDownloadUrl = "http://" + ip + ":" + RemoteServerService.HTTP_PORT + "/api/auth/ca.crt";
+        final String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
+
+        if (tvServerUrl != null) tvServerUrl.setText(httpsUrl);
+        if (tvCaUrl != null) tvCaUrl.setText(caDownloadUrl);
+        if (tvHttpsUrl != null) tvHttpsUrl.setText(httpsUrl);
+
+        if (tvCaFingerprint != null) {
+            tvCaFingerprint.setText("Generazione / verifica certificati TLS e QR code in corso...");
+        }
+
+        // Calcolo asincrono su thread dedicato per non bloccare il rendering UI su architettura TV ARMv7
+        bgExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    TlsCertificateManager tlsMgr = TlsCertificateManager.getInstance();
+                    TlsCertificateManager.TlsInfo tlsInfo = tlsMgr.getOrGenerateTlsInfo(MainActivity.this, ip);
+                    final String caFp = (tlsInfo != null && tlsInfo.caFingerprintSha256 != null) ? tlsInfo.caFingerprintSha256 : "NON_CONFIGURATA";
+
+                    final Bitmap caBmp = QrBitmapUtil.createQrBitmap(caDownloadUrl, 4, 1);
+                    final Bitmap httpsBmp = QrBitmapUtil.createQrBitmap(httpsUrl, 4, 1);
+
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (isFinishing() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed())) {
+                                return;
+                            }
+                            if (tvCaFingerprint != null) {
+                                tvCaFingerprint.setText(caFp);
+                            }
+                            if (ivQrCa != null && caBmp != null) {
+                                ivQrCa.setImageBitmap(caBmp);
+                            }
+                            if (ivQrHttps != null && httpsBmp != null) {
+                                ivQrHttps.setImageBitmap(httpsBmp);
+                            }
+                        }
+                    });
+                } catch (final Exception e) {
+                    Log.e(TAG, "Errore elaborazione asincrona TLS / QR", e);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (tvCaFingerprint != null) {
+                                tvCaFingerprint.setText("ERRORE_INIZIALIZZAZIONE_TLS: " + e.getMessage());
+                            }
+                        }
+                    });
+                }
+            }
+        });
     }
 
     private String getLocalIpAddress() {

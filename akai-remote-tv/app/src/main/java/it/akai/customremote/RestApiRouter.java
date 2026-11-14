@@ -146,22 +146,34 @@ public class RestApiRouter {
                 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">" +
                 "<title>AKAI JARVIS TV - Bootstrap Sicurezza</title>" +
                 "<style>body{font-family:sans-serif;background:#0a0d14;color:#e2e8f0;padding:20px;text-align:center;}" +
-                ".card{background:#141824;border:1px solid #334155;border-radius:12px;max-width:520px;margin:16px auto;padding:20px;text-align:left;}" +
+                ".card{background:#141824;border:1px solid #334155;border-radius:12px;max-width:540px;margin:16px auto;padding:20px;text-align:left;}" +
+                ".card-warn{border-color:#ef4444;background:#1a0f14;}" +
                 ".btn{display:block;background:#38bdf8;color:#0a0d14;text-decoration:none;font-weight:bold;padding:12px;border-radius:8px;text-align:center;margin:10px 0;}" +
                 ".btn-sec{background:#1e293b;color:#38bdf8;border:1px solid #38bdf8;}" +
-                "code{background:#040711;color:#34d399;padding:6px;border-radius:4px;word-break:break-all;font-size:11.5px;display:block;margin:8px 0;font-family:monospace;}" +
+                "code{background:#040711;color:#34d399;padding:8px;border-radius:4px;word-break:break-all;font-size:12px;display:block;margin:8px 0;font-family:monospace;border:1px solid #1e293b;}" +
+                "ul{padding-left:20px;font-size:12.5px;color:#cbd5e1;line-height:1.5;}" +
                 "</style></head><body>" +
                 "<h2>AKAI JARVIS · Onboarding Fuori Banda</h2>" +
-                "<div class=\"card\">" +
-                "<h3>1. Scarica e Installa Certificato Root CA</h3>" +
-                "<p>Scarica il certificato pubblico della TV ed installalo nel tuo dispositivo mobile:</p>" +
-                "<a class=\"btn\" href=\"/api/auth/ca.crt\" download=\"akai_root_ca.crt\">📥 Scarica Certificato CA (ca.crt)</a>" +
-                "<p><strong>Confronta l'impronta SHA-256 con quella mostrata sullo schermo TV:</strong></p>" +
+                "<div class=\"card card-warn\">" +
+                "<h3 style=\"color:#f87171;margin-top:0;\">&#9888;&#65039; Verifica Obbligatoria Fuori Banda (Anti-MITM)</h3>" +
+                "<p style=\"font-size:13px;line-height:1.4;\">Il download iniziale della Root CA avviene via HTTP in chiaro locale non autenticato. " +
+                "Prima di installare o considerare attendibile il certificato sullo smartphone, <strong>è tassativo confrontare l'impronta calcolata dal telefono con quella mostrata sullo schermo TV fisico</strong>. Se differiscono, non installare il certificato.</p>" +
+                "<p style=\"font-size:12px;color:#94a3b8;\">Impronta SHA-256 ufficiale della TV:</p>" +
                 "<code>" + caFp + "</code>" +
                 "</div>" +
                 "<div class=\"card\">" +
+                "<h3>1. Scarica e Installa Certificato Root CA</h3>" +
+                "<p>Scarica il file pubblico per abilitare HTTPS e Secure Context (necessario per microfono e Web Speech API):</p>" +
+                "<a class=\"btn\" href=\"/api/auth/ca.crt\" download=\"akai_root_ca.crt\">📥 Scarica Certificato CA (ca.crt)</a>" +
+                "<ul>" +
+                "<li><strong>iOS:</strong> Scarica in Safari &gt; Impostazioni &gt; Profilo scaricato &gt; Installa. Poi vai in <em>Generali &gt; Info &gt; Attendibilità certificati</em> e abilita attendibilità totale.</li>" +
+                "<li><strong>Android:</strong> Impostazioni &gt; Sicurezza &gt; Crittografia e credenziali &gt; Installa certificato &gt; Certificato CA &gt; Seleziona <code>ca.crt</code>.</li>" +
+                "<li><strong>Revoca / Rotazione:</strong> Per dismettere la CA, rimuovi il certificato 'AKAI TV Local Root CA' dalle impostazioni di sistema del telefono.</li>" +
+                "</ul>" +
+                "</div>" +
+                "<div class=\"card\">" +
                 "<h3>2. Accedi al Telecomando Cifrato HTTPS</h3>" +
-                "<p>Dopo aver completato l'installazione della Root CA sul telefono, apri l'interfaccia protetta:</p>" +
+                "<p>Dopo aver verificato l'impronta e attivato l'attendibilità, apri il Web Remote sicuro:</p>" +
                 "<a class=\"btn btn-sec\" href=\"https://" + localIpAddress + ":8443/\">🚀 Apri JARVIS Web Remote (HTTPS:8443)</a>" +
                 "</div></body></html>";
             sendRawResponse(os, 200, "OK", "text/html; charset=UTF-8", html.getBytes(StandardCharsets.UTF_8));

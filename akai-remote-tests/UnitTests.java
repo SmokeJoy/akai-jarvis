@@ -1114,7 +1114,9 @@ public class UnitTests {
 
         MockHttpResponse rSetup = dispatch(router, "GET", "/setup", new HashMap<>(), "", "192.168.1.10", false);
         boolean okSetupAllowed = (rSetup.statusCode == 200) && rSetup.rawBody.contains("AKAI JARVIS") &&
-                                 rSetup.rawBody.contains("/api/auth/ca.crt");
+                                 rSetup.rawBody.contains("/api/auth/ca.crt") &&
+                                 rSetup.rawBody.contains("Anti-MITM") &&
+                                 rSetup.rawBody.contains("Verifica Obbligatoria Fuori Banda");
 
         // 4. Risoluzione Circolo Vizioso: pair request su HTTPS restituisce server_url con scheme https:// e porta 8443
         MockHttpResponse rPairReqHttps = dispatch(router, "POST", "/api/auth/pair/request", new HashMap<>(), "{\"client\":\"web_remote\"}", "192.168.1.10", true);

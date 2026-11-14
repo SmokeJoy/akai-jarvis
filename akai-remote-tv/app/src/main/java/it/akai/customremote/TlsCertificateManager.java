@@ -271,13 +271,28 @@ public class TlsCertificateManager {
             try (FileOutputStream fos = new FileOutputStream(ksFile)) {
                 ks.store(fos, password);
             }
+            ksFile.setReadable(false, false);
+            ksFile.setReadable(true, true);
+            ksFile.setWritable(false, false);
+            ksFile.setWritable(true, true);
+
             writeStringToFile(passFile, new String(password));
+            passFile.setReadable(false, false);
+            passFile.setReadable(true, true);
+            passFile.setWritable(false, false);
+            passFile.setWritable(true, true);
+
             writeStringToFile(caPemFile, caPem);
 
             File caKeyFile = new File(filesDir, CA_KEY_FILE_NAME);
             try (FileOutputStream fosKey = new FileOutputStream(caKeyFile)) {
                 fosKey.write(caPair.getPrivate().getEncoded());
             }
+            // Protezione stringente Root CA Private Key: accessibile solo dall'UID dell'app
+            caKeyFile.setReadable(false, false);
+            caKeyFile.setReadable(true, true);
+            caKeyFile.setWritable(false, false);
+            caKeyFile.setWritable(true, true);
 
             File caCrtFile = new File(filesDir, CA_CERT_FILE_NAME);
             writeStringToFile(caCrtFile, caPem);

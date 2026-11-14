@@ -162,6 +162,14 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:text="⚠️ Il download HTTP non è autenticato: verifica che l'impronta calcolata dal telefono coincida con quella sopra prima di considerare attendibile la CA."
+                    android:textColor="#FBBF24"
+                    android:textSize="9.5sp"
+                    android:layout_marginTop="6dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
                     android:text="• iOS: Scarica profilo &gt; Installa in Impostazioni &gt; Generali &gt; Info &gt; Attendibilità certificati.\n• Android: Impostazioni &gt; Sicurezza &gt; Installa certificato CA."
                     android:textColor="#64748B"
                     android:textSize="10sp"
