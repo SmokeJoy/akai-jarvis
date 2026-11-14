@@ -74,6 +74,7 @@ jobs:
             akai-remote-tests/host_mock/it/akai/customremote/ai/*.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/qr/*.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ServiceStateListener.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/HttpsRebindController.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/SecurityManager.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/UInputDriver.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/CommandResult.java \

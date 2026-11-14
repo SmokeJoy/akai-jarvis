@@ -6,4 +6,5 @@ package it.akai.customremote;
  */
 public interface ServiceStateListener {
     void onServerReady(String localIpAddress, int httpPort, int httpsPort);
+    default void onServerDegraded(String reason) {}
 }

@@ -63,6 +63,7 @@ public class RemoteServerService extends Service {
     private Thread httpAcceptorThread;
     private Thread httpsAcceptorThread;
     private ExecutorService threadPool;
+    private HttpsRebindController httpsRebindController;
     private volatile boolean isRunning = false;
     private volatile boolean isStarting = false;
     private BroadcastReceiver screenWakeReceiver = null;
@@ -93,7 +94,7 @@ public class RemoteServerService extends Service {
 
     public boolean isReady() {
         boolean httpOk = (httpServerSocket != null && !httpServerSocket.isClosed() && httpServerSocket.isBound());
-        boolean httpsOk = (httpsServerSocket != null && !httpsServerSocket.isClosed() && httpsServerSocket.isBound());
+        boolean httpsOk = (httpsRebindController != null && httpsRebindController.isReady());
         return isRunning && httpOk && httpsOk && securityManager != null;
     }
 
@@ -181,6 +182,52 @@ public class RemoteServerService extends Service {
         restApiRouter.setTlsCertificateManager(tlsMgr);
         threadPool = Executors.newFixedThreadPool(12);
 
+        httpsRebindController = new HttpsRebindController(
+            HTTPS_PORT,
+            new HttpsRebindController.SslContextProvider() {
+                @Override
+                public SSLContext getSslContext(String ip) throws Exception {
+                    TlsCertificateManager.getInstance().getOrGenerateTlsInfo(RemoteServerService.this, ip);
+                    return createSSLContext();
+                }
+            },
+            new HttpsRebindController.ListenerCallback() {
+                @Override
+                public void onServerReady(String ip, int port) {
+                    if (httpsRebindController != null) {
+                        httpsServerSocket = (SSLServerSocket) httpsRebindController.getActiveSocket();
+                    }
+                    for (ServiceStateListener l : sStateListeners) {
+                        try {
+                            l.onServerReady(ip, HTTP_PORT, HTTPS_PORT);
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                @Override
+                public void onServerDegraded(String reason) {
+                    httpsServerSocket = null;
+                    for (ServiceStateListener l : sStateListeners) {
+                        try {
+                            l.onServerDegraded(reason);
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                @Override
+                public void onClientConnected(final Socket client) {
+                    threadPool.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            handleClient(client, true);
+                        }
+                    });
+                }
+            },
+            threadPool,
+            false
+        );
+
         createNotificationChannel();
         startForeground(NOTIF_ID, buildForegroundNotification());
 
@@ -263,142 +310,27 @@ public class RemoteServerService extends Service {
         Log.i(TAG, "Consistent DB restore intent completed. Success=" + ok + " Source=" + src.getAbsolutePath());
     }
 
-    private String currentServerIp = null;
-    private final Object ipSyncLock = new Object();
-    private boolean isReloadingIp = false;
+    public String getCurrentServerIp() {
+        return (httpsRebindController != null) ? httpsRebindController.getCurrentServerIp() : null;
+    }
 
     public void notifyIpAddressChanged(final String newIp) {
-        if (newIp == null || newIp.trim().isEmpty() || "127.0.0.1".equals(newIp.trim())) {
-            return;
+        if (httpsRebindController != null) {
+            httpsRebindController.notifyIpAddressChanged(newIp);
         }
-        final String targetIp = newIp.trim();
-        synchronized (ipSyncLock) {
-            if (targetIp.equals(currentServerIp) || isReloadingIp) {
-                return;
-            }
-            isReloadingIp = true;
-        }
-
-        // Spostiamo tutte le operazioni crittografiche (RSA SAN) e di rete su thread pool dedicato
-        // per non bloccare mai il main thread della TV o provocare frame drop
-        threadPool.execute(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    Log.i(TAG, "IP LAN TV mutato (" + currentServerIp + " -> " + targetIp + "). Rinnovo SAN e ricaricamento listener HTTPS...");
-
-                    // 1. Aggiorna certificato server SAN
-                    TlsCertificateManager.getInstance().getOrGenerateTlsInfo(RemoteServerService.this, targetIp);
-
-                    // 2. Ricarica atomica listener HTTPS
-                    boolean reloaded = reloadHttpsListener();
-
-                    if (reloaded) {
-                        // Aggiorna currentServerIp SOLO ed ESCLUSIVAMENTE in caso di bind riuscito
-                        synchronized (ipSyncLock) {
-                            currentServerIp = targetIp;
-                        }
-                        Log.i(TAG, "Listener HTTPS ricaricato con successo per IP " + targetIp);
-
-                        // 3. Notifica listener UI registrati
-                        for (ServiceStateListener l : sStateListeners) {
-                            try {
-                                l.onServerReady(targetIp, HTTP_PORT, HTTPS_PORT);
-                            } catch (Exception ignored) {}
-                        }
-                    } else {
-                        Log.w(TAG, "reloadHttpsListener fallito per IP " + targetIp + ". currentServerIp NON aggiornato per consentire retry futuri.");
-                    }
-                } catch (Exception ex) {
-                    Log.e(TAG, "Errore durante notifyIpAddressChanged per " + targetIp, ex);
-                } finally {
-                    synchronized (ipSyncLock) {
-                        isReloadingIp = false;
-                    }
-                }
-            }
-        });
     }
 
     public synchronized boolean reloadHttpsListener() {
-        if (!isRunning) return false;
-        final SSLServerSocket oldSocket = httpsServerSocket;
-        try {
-            SSLContext sslContext = createSSLContext();
-            if (sslContext == null) {
-                Log.e(TAG, "reloadHttpsListener: createSSLContext fallito");
-                return false;
+        if (httpsRebindController != null) {
+            boolean ok = httpsRebindController.reloadListener();
+            if (ok) {
+                httpsServerSocket = (SSLServerSocket) httpsRebindController.getActiveSocket();
+            } else {
+                httpsServerSocket = null;
             }
-
-            // 1. Chiusura preventiva del socket precedente per liberare la porta HTTPS_PORT (8443)
-            // In ambiente Linux/Android setReuseAddress(true) non consente due socket TCP LISTEN simultanei sullo stesso endpoint
-            if (oldSocket != null && !oldSocket.isClosed()) {
-                try {
-                    oldSocket.close();
-                } catch (Exception ignored) {}
-            }
-
-            // 2. Creazione e bind del nuovo socket con retries e backoff breve
-            SSLServerSocketFactory factory = sslContext.getServerSocketFactory();
-            SSLServerSocket newSslServer = null;
-            int retries = 5;
-            IOException lastBindEx = null;
-            while (retries > 0) {
-                try {
-                    newSslServer = (SSLServerSocket) factory.createServerSocket();
-                    newSslServer.setReuseAddress(true);
-                    newSslServer.bind(new InetSocketAddress(HTTPS_PORT));
-                    lastBindEx = null;
-                    break;
-                } catch (IOException e) {
-                    lastBindEx = e;
-                    retries--;
-                    if (newSslServer != null) {
-                        try { newSslServer.close(); } catch (Exception ignored) {}
-                        newSslServer = null;
-                    }
-                    if (retries > 0) {
-                        try { Thread.sleep(60); } catch (InterruptedException ignored) {}
-                    }
-                }
-            }
-
-            if (newSslServer == null || !newSslServer.isBound()) {
-                throw (lastBindEx != null) ? lastBindEx : new IOException("Impossibile effettuare il bind su porta " + HTTPS_PORT);
-            }
-
-            httpsServerSocket = newSslServer;
-
-            // 3. Riavvio o riallineamento thread acceptor
-            if (httpsAcceptorThread == null || !httpsAcceptorThread.isAlive()) {
-                httpsAcceptorThread = new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        while (isRunning && httpsServerSocket != null && !httpsServerSocket.isClosed() && httpsServerSocket.isBound()) {
-                            try {
-                                final Socket client = httpsServerSocket.accept();
-                                threadPool.execute(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        handleClient(client, true);
-                                    }
-                                });
-                            } catch (IOException e) {
-                                if (!isRunning || (httpsServerSocket != null && httpsServerSocket.isClosed())) break;
-                                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
-                            }
-                        }
-                    }
-                }, "AkaiHttpsAcceptor");
-                httpsAcceptorThread.start();
-            }
-            Log.i(TAG, "Listener HTTPS ricaricato con successo con certificato SAN aggiornato su porta " + HTTPS_PORT);
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Errore durante il reload dell'HTTPS listener: " + e.getMessage(), e);
-            httpsServerSocket = null; // Fail-closed: segnala stato non-ready coerente in isReady()
-            return false;
+            return ok;
         }
+        return false;
     }
 
     public synchronized void ensureServerRunning() {
@@ -563,44 +495,14 @@ public class RemoteServerService extends Service {
                 httpAcceptorThread.start();
             }
 
-            // 2. HTTPS Server (Port 8443)
-            if (httpsServerSocket == null || httpsServerSocket.isClosed() || !httpsServerSocket.isBound()) {
-                SSLContext sslContext = createSSLContext();
-                if (sslContext != null) {
-                    if (httpsServerSocket != null && !httpsServerSocket.isClosed()) {
-                        try { httpsServerSocket.close(); } catch (Exception ignored) {}
-                    }
-                    SSLServerSocketFactory factory = sslContext.getServerSocketFactory();
-                    SSLServerSocket sslServer = (SSLServerSocket) factory.createServerSocket();
-                    sslServer.setReuseAddress(true);
-                    sslServer.bind(new InetSocketAddress(HTTPS_PORT));
-                    httpsServerSocket = sslServer;
+            // 2. HTTPS Server (Port 8443) gestito centralmente da HttpsRebindController
+            if (httpsRebindController != null && !httpsRebindController.isReady()) {
+                boolean ok = httpsRebindController.reloadListenerForIp(getLocalIpAddress());
+                if (ok) {
+                    httpsServerSocket = (SSLServerSocket) httpsRebindController.getActiveSocket();
                     Log.i(TAG, "AKAI Remote HTTPS Server listening on port " + HTTPS_PORT + " (Secure Context for Voice)");
-
-                    httpsAcceptorThread = new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            final ServerSocket s = httpsServerSocket;
-                            while (isRunning && s != null && !s.isClosed() && s.isBound()) {
-                                try {
-                                    final Socket client = s.accept();
-                                    threadPool.execute(new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            handleClient(client, true);
-                                        }
-                                    });
-                                } catch (IOException e) {
-                                    if (!isRunning || s.isClosed()) break;
-                                    Log.e(TAG, "HTTPS Accept error: " + e.getMessage());
-                                    try { Thread.sleep(200); } catch (InterruptedException ignored) {}
-                                }
-                            }
-                        }
-                    }, "AkaiHttpsAcceptor");
-                    httpsAcceptorThread.start();
                 } else {
-                    Log.w(TAG, "SSLContext not available; HTTPS server skipped.");
+                    Log.w(TAG, "HTTPS server initialization failed or skipped; check logs.");
                 }
             }
 
@@ -1325,6 +1227,10 @@ public class RemoteServerService extends Service {
                 httpsServerSocket = null;
             }
         } catch (Exception ignored) {}
+        if (httpsRebindController != null) {
+            try { httpsRebindController.close(); } catch (Exception ignored) {}
+            httpsRebindController = null;
+        }
         if (threadPool != null) threadPool.shutdownNow();
         if (tvController != null) tvController.cleanup();
         sInstance = null;

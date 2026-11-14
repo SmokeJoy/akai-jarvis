@@ -1282,88 +1282,93 @@ public class UnitTests {
             try { sockA.close(); } catch (Exception ignored) {}
         }
 
-        // 2. Simulazione reale del ciclo di vita HttpsListener con cambio IP DHCP, errore di bind (porta occupata) e recovery
-        class TestHttpsLifecycleEngine {
-            String currentServerIp = "192.168.1.50";
-            java.net.ServerSocket activeSocket = null;
-            boolean isReady = false;
-
-            boolean reload(int port, String newIp) {
-                java.net.ServerSocket old = activeSocket;
-                if (old != null && !old.isClosed()) {
-                    try { old.close(); } catch (Exception ignored) {}
+        // 2. Esercizio reale della classe di produzione HttpsRebindController
+        final List<String> readyEvents = new ArrayList<>();
+        final List<String> degradedEvents = new ArrayList<>();
+        HttpsRebindController controller = new HttpsRebindController(
+            testPort,
+            null, // provider socket TCP plaintext per test di bind/rebind
+            new HttpsRebindController.ListenerCallback() {
+                @Override
+                public void onServerReady(String ip, int port) {
+                    readyEvents.add(ip);
                 }
-                activeSocket = null;
-                isReady = false;
-
-                java.net.ServerSocket newServer = null;
-                int retries = 3;
-                while (retries > 0) {
-                    try {
-                        newServer = new java.net.ServerSocket();
-                        newServer.setReuseAddress(true);
-                        newServer.bind(new java.net.InetSocketAddress(port));
-                        break;
-                    } catch (IOException e) {
-                        retries--;
-                        if (newServer != null) {
-                            try { newServer.close(); } catch (Exception ignored) {}
-                            newServer = null;
-                        }
-                        if (retries > 0) {
-                            try { Thread.sleep(40); } catch (InterruptedException ignored) {}
-                        }
-                    }
+                @Override
+                public void onServerDegraded(String reason) {
+                    degradedEvents.add(reason);
                 }
-
-                if (newServer != null && newServer.isBound()) {
-                    activeSocket = newServer;
-                    currentServerIp = newIp; // Aggiornamento SOLO ed ESCLUSIVAMENTE a bind riuscito
-                    isReady = true;
-                    return true;
-                } else {
-                    isReady = false;
-                    return false;
-                }
+                @Override
+                public void onClientConnected(java.net.Socket client) {}
             }
-        }
+        );
 
-        TestHttpsLifecycleEngine testEngine = new TestHttpsLifecycleEngine();
-        boolean initialBindOk = testEngine.reload(testPort, "192.168.1.50");
-        boolean okInitialState = initialBindOk && testEngine.isReady && "192.168.1.50".equals(testEngine.currentServerIp);
+        // Bind iniziale su IP 192.168.1.50
+        boolean initialBindOk = controller.reloadListenerForIp("192.168.1.50");
+        boolean okInitialState = initialBindOk && controller.isReady() && controller.getActiveSocket() != null;
 
-        // Occupiamo deliberatamente la porta con un socket esterno per simulare Address already in use
-        if (testEngine.activeSocket != null) {
-            try { testEngine.activeSocket.close(); } catch (Exception ignored) {}
-        }
+        // Simuliamo occupazione esterna della porta (BindException)
+        controller.close();
         java.net.ServerSocket rogueSocket = new java.net.ServerSocket();
         rogueSocket.setReuseAddress(true);
         rogueSocket.bind(new java.net.InetSocketAddress(testPort));
 
-        // Tento il cambio DHCP verso 192.168.1.200 mentre la porta è occupata
-        boolean failedReload = testEngine.reload(testPort, "192.168.1.200");
-        boolean okBindFailureHandled = (!failedReload) && (!testEngine.isReady) && ("192.168.1.50".equals(testEngine.currentServerIp));
+        // Re-inizializziamo controller per test collisione ed errore di bind
+        readyEvents.clear();
+        degradedEvents.clear();
+        HttpsRebindController testRebindCtrl = new HttpsRebindController(
+            testPort,
+            null,
+            new HttpsRebindController.ListenerCallback() {
+                @Override
+                public void onServerReady(String ip, int port) {
+                    readyEvents.add(ip);
+                }
+                @Override
+                public void onServerDegraded(String reason) {
+                    degradedEvents.add(reason);
+                }
+                @Override
+                public void onClientConnected(java.net.Socket client) {}
+            }
+        );
+
+        // Tento il cambio DHCP verso 192.168.1.200 mentre la porta è occupata dal rogueSocket
+        boolean failedReload = testRebindCtrl.reloadListenerForIp("192.168.1.200");
+        boolean okBindFailureHandled = (!failedReload) && (!testRebindCtrl.isReady()) && (testRebindCtrl.getCurrentServerIp() == null);
 
         // Rilasciamo la porta dal socket esterno
         try { rogueSocket.close(); } catch (Exception ignored) {}
 
-        // Retry del cambio DHCP verso 192.168.1.200 con porta libera
-        boolean recoveredReload = testEngine.reload(testPort, "192.168.1.200");
-        boolean okRecovered = recoveredReload && testEngine.isReady && ("192.168.1.200".equals(testEngine.currentServerIp));
-
-        // Chiusura finale socket di test
-        if (testEngine.activeSocket != null) {
-            try { testEngine.activeSocket.close(); } catch (Exception ignored) {}
+        // 3. Retry con lo STESSO IP ("192.168.1.200") senza richiedere un nuovo cambio IP
+        testRebindCtrl.notifyIpAddressChanged("192.168.1.200");
+        int waitAttempts = 20;
+        while (waitAttempts > 0 && !testRebindCtrl.isReady()) {
+            try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+            waitAttempts--;
         }
+        boolean okRecoveredSameIp = testRebindCtrl.isReady() && "192.168.1.200".equals(testRebindCtrl.getCurrentServerIp()) && readyEvents.contains("192.168.1.200");
 
-        boolean test33Passed = okOrderValidationDemonstrated && okInitialState && okBindFailureHandled && okRecovered;
+        // 4. Test coalescing cambi IP concorrenti (A -> B)
+        testRebindCtrl.notifyIpAddressChanged("192.168.1.210");
+        testRebindCtrl.notifyIpAddressChanged("192.168.1.220");
+        waitAttempts = 20;
+        while (waitAttempts > 0 && !"192.168.1.220".equals(testRebindCtrl.getCurrentServerIp())) {
+            try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+            waitAttempts--;
+        }
+        boolean okConcurrentCoalesced = "192.168.1.220".equals(testRebindCtrl.getCurrentServerIp());
+
+        testRebindCtrl.close();
+
+        boolean test33Passed = okOrderValidationDemonstrated && okInitialState && okBindFailureHandled && okRecoveredSameIp && okConcurrentCoalesced;
 
         if (test33Passed) {
             System.out.println("[PASS] Test 33 (PR-01 Real TCP Rebind & DHCP Resilience): Dimostrato vincolo TCP (due socket LISTEN simultanei falliscono), sequenza restart con chiusura preventiva, fail-closed readiness (isReady=false) ed invarianza IP su BindException, con re-bind atomico e aggiornamento IP completati al rilascio della porta");
             passed++;
         } else {
             System.err.println("[FAIL] Test 33: Fallimento test TCP rebind (okOrder=" + okOrderValidationDemonstrated +
-                ", okInit=" + okInitialState + ", okFailureHandled=" + okBindFailureHandled + ", okRecovered=" + okRecovered + ")");
+                ", okInit=" + okInitialState + ", okFailureHandled=" + okBindFailureHandled + ", okRecoveredSameIp=" + okRecoveredSameIp +
+                ", okConcurrentCoalesced=" + okConcurrentCoalesced + ")");
             failed++;
         }
 

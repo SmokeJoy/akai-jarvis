@@ -29,7 +29,6 @@ public class MainActivity extends Activity {
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
     private final Handler retryHandler = new Handler(Looper.getMainLooper());
     private final java.util.concurrent.atomic.AtomicLong uiGenToken = new java.util.concurrent.atomic.AtomicLong(0);
-    private String lastNotifiedIp = null;
     private int retryCount = 0;
     private static final int MAX_RETRIES = 15;
     private ServiceStateListener stateListener = null;
@@ -109,6 +108,22 @@ public class MainActivity extends Activity {
                     public void run() {
                         retryHandler.removeCallbacks(retryRunnable);
                         updateUI();
+                    }
+                });
+            }
+
+            @Override
+            public void onServerDegraded(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (tvCaFingerprint != null) {
+                            tvCaFingerprint.setText("ATTENZIONE: Servizio HTTPS non pronto (" + reason + "). Nuovo tentativo in corso...");
+                        }
+                        if (ivQrCa != null) ivQrCa.setImageBitmap(null);
+                        if (ivQrHttps != null) ivQrHttps.setImageBitmap(null);
+                        retryHandler.removeCallbacks(retryRunnable);
+                        retryHandler.postDelayed(retryRunnable, 1500);
                     }
                 });
             }
@@ -322,9 +337,9 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // Notifica asincrona al server per verificare/sincronizzare SAN del certificato server solo se mutato
-        if (lastNotifiedIp == null || !lastNotifiedIp.equals(ip)) {
-            lastNotifiedIp = ip;
+        // Verifica allineamento IP del server: se l'IP non corrisponde o il server non è ready, notifica/accoda retry
+        String srvIp = s.getCurrentServerIp();
+        if (srvIp == null || !srvIp.equals(ip) || !s.isReady()) {
             s.notifyIpAddressChanged(ip);
         }
 
