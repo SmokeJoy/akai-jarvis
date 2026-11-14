@@ -1549,15 +1549,101 @@ public class UnitTests {
 
         liveTlsController.close();
 
-        boolean test34Passed = okLostWakeupFixed && okSslContextCreated && liveTlsReady && okWireCnVerified && okWireSanVerified;
+        // 3. Test P0/P1 Reliability & Fail-Closed: Rebind generation-bound acceptor e chiusura vecchio listener su provider guasto
+        final CountDownLatch rebindConnectedLatch = new CountDownLatch(1);
+        final AtomicBoolean providerWorking = new AtomicBoolean(true);
+
+        int rebindTestPort = 18446;
+        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
+            rebindTestPort = probe.getLocalPort();
+        } catch (Exception ignored) {}
+
+        HttpsRebindController genRebindCtrl = new HttpsRebindController(
+            rebindTestPort,
+            new HttpsRebindController.SslContextProvider() {
+                @Override
+                public SSLContext getSslContext(String ip) throws Exception {
+                    if (!providerWorking.get()) return null;
+                    return serverSslContext;
+                }
+            },
+            new HttpsRebindController.ListenerCallback() {
+                @Override public void onServerReady(String ip, int port) {}
+                @Override public void onServerDegraded(String reason) {}
+                @Override
+                public void onClientConnected(final java.net.Socket client) {
+                    new Thread(new Runnable() {
+                        public void run() {
+                            try {
+                                if (client instanceof SSLSocket) {
+                                    ((SSLSocket) client).startHandshake();
+                                }
+                                client.getOutputStream().write("HTTP/1.1 200 OK\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+                                client.getOutputStream().flush();
+                            } catch (Exception ignored) {}
+                            finally {
+                                rebindConnectedLatch.countDown();
+                            }
+                        }
+                    }).start();
+                }
+            }
+        );
+
+        // Bind iniziale e successivo rebind a nuova generazione
+        boolean genBind1 = genRebindCtrl.reloadListenerForIp("127.0.0.1");
+        boolean genBind2 = genRebindCtrl.reloadListenerForIp("127.0.0.1");
+
+        boolean okRebindClientHandshake = false;
+        TrustManager[] trustAll = new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() { return null; }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+            }
+        };
+        SSLContext clientCtx2 = SSLContext.getInstance("TLS");
+        clientCtx2.init(null, trustAll, new java.security.SecureRandom());
+        SSLSocketFactory clientFactory2 = clientCtx2.getSocketFactory();
+
+        if (genBind2 && genRebindCtrl.isReady()) {
+            try (SSLSocket s2 = (SSLSocket) clientFactory2.createSocket("127.0.0.1", rebindTestPort)) {
+                s2.setSoTimeout(5000);
+                s2.startHandshake();
+                okRebindClientHandshake = rebindConnectedLatch.await(3, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                okRebindClientHandshake = false;
+            }
+        }
+
+        // Test Fail-Closed su provider guasto: old socket DEVE essere chiuso e non accettare più connessioni
+        providerWorking.set(false);
+        boolean reloadFailedAsExpected = !genRebindCtrl.reloadListenerForIp("127.0.0.1");
+        boolean okFailClosedState = reloadFailedAsExpected && !genRebindCtrl.isReady() && (genRebindCtrl.getActiveSocket() == null);
+
+        // Verifichiamo che il vecchio listener sia REALMENTE chiuso e rifiuti le connessioni (zero socket zombie)
+        boolean okOldSocketClosedAndUnreachable = false;
+        try (java.net.Socket probe = new java.net.Socket()) {
+            probe.connect(new java.net.InetSocketAddress("127.0.0.1", rebindTestPort), 500);
+            okOldSocketClosedAndUnreachable = false; // connessione riuscita inattesa
+        } catch (Exception expectedEx) {
+            okOldSocketClosedAndUnreachable = true; // rifiuto connessione: socket chiuso
+        }
+
+        genRebindCtrl.close();
+
+        boolean test34Passed = okLostWakeupFixed && okSslContextCreated && liveTlsReady && okWireCnVerified &&
+                               okWireSanVerified && okRebindClientHandshake && okFailClosedState && okOldSocketClosedAndUnreachable;
 
         if (test34Passed) {
-            System.out.println("[PASS] Test 34 (PR-01 Concurrency Lost-Wakeup Fixed & Real Wire TLS Handshake SAN): Barriera atomica contro lost-wakeup verificata deterministicamente, handshake TLS live su porta TCP completato e certificato servito a runtime con SAN 127.0.0.1 e CN " + TlsCertificateManager.SERVER_COMMON_NAME + " confermati");
+            System.out.println("[PASS] Test 34 (PR-01 Concurrency Lost-Wakeup Fixed, Wire TLS Handshake SAN, Generation Acceptor & Fail-Closed Teardown): Barriera atomica lost-wakeup verificata, certificato SAN 127.0.0.1 e CN " + TlsCertificateManager.SERVER_COMMON_NAME + " su handshake live confermati, thread acceptor dedicato per generazione operativo su rebind A->B e teardown completo del vecchio listener su guasto TLS");
             passed++;
         } else {
             System.err.println("[FAIL] Test 34: Fallimento concorrenza o wire TLS SAN (okLostWakeup=" + okLostWakeupFixed +
                 ", okSslContextCreated=" + okSslContextCreated + ", liveTlsReady=" + liveTlsReady +
-                ", okWireCn=" + okWireCnVerified + ", okWireSan=" + okWireSanVerified + ")");
+                ", okWireCn=" + okWireCnVerified + ", okWireSan=" + okWireSanVerified +
+                ", okRebindClient=" + okRebindClientHandshake + ", okFailClosedState=" + okFailClosedState +
+                ", okOldSocketClosed=" + okOldSocketClosedAndUnreachable + ")");
             failed++;
         }
 

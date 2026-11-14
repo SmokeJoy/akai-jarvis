@@ -42,7 +42,8 @@ public class HttpsRebindController {
 
     private final SslContextProvider sslProvider;
     private final ListenerCallback callback;
-    private Thread acceptorThread = null;
+    private volatile Thread currentAcceptorThread = null;
+    private final java.util.concurrent.atomic.AtomicLong generationCounter = new java.util.concurrent.atomic.AtomicLong(0);
     private volatile boolean isRunning = true;
 
     // Costruttore di produzione: impone rigidamente TLS (ZERO bind in chiaro sulla porta HTTPS)
@@ -94,37 +95,62 @@ public class HttpsRebindController {
         return reloadListenerForIp(ip);
     }
 
+    private synchronized void stopActiveListener(String reason) {
+        final ServerSocket oldSock = activeSocket;
+        activeSocket = null;
+        final Thread oldThread = currentAcceptorThread;
+        currentAcceptorThread = null;
+
+        if (oldSock != null && !oldSock.isClosed()) {
+            try {
+                oldSock.close();
+            } catch (Exception ignored) {}
+        }
+        if (oldThread != null && oldThread.isAlive()) {
+            try {
+                oldThread.interrupt();
+            } catch (Exception ignored) {}
+        }
+        if (reason != null && callback != null) {
+            callback.onServerDegraded(reason);
+        }
+    }
+
     public synchronized boolean reloadListenerForIp(String ip) {
         if (!isRunning) return false;
-        final ServerSocket oldSocket = activeSocket;
-        ServerSocket newServer = null;
         try {
             SSLContext sslContext = (sslProvider != null) ? sslProvider.getSslContext(ip) : null;
             if (sslContext == null && !allowPlaintextForTesting) {
-                // FAIL-CLOSED: In produzione è severamente vietato aprire socket plaintext sulla porta HTTPS (8443)
-                activeSocket = null;
-                if (callback != null) {
-                    callback.onServerDegraded("SSLContext non disponibile per IP " + ip + ". Rifiuto bind plaintext.");
-                }
+                // FAIL-CLOSED: Chiude immediatamente il vecchio socket e rifiuta bind plaintext
+                stopActiveListener("SSLContext non disponibile per IP " + ip + ". Rifiuto bind plaintext.");
                 return false;
             }
             SSLServerSocketFactory factory = (sslContext != null) ? sslContext.getServerSocketFactory() : null;
             if (factory == null && !allowPlaintextForTesting) {
-                activeSocket = null;
-                if (callback != null) {
-                    callback.onServerDegraded("SSLServerSocketFactory non disponibile. Rifiuto bind plaintext.");
-                }
+                // FAIL-CLOSED: Chiude immediatamente il vecchio socket
+                stopActiveListener("SSLServerSocketFactory non disponibile. Rifiuto bind plaintext.");
                 return false;
             }
 
-            // 1. Chiusura preventiva del socket precedente per liberare l'endpoint TCP
+            // 1. Chiusura preventiva del socket precedente e stop del vecchio acceptor per liberare l'endpoint TCP
+            final ServerSocket oldSocket = activeSocket;
+            final Thread oldThread = currentAcceptorThread;
+            activeSocket = null;
+            currentAcceptorThread = null;
+
             if (oldSocket != null && !oldSocket.isClosed()) {
                 try {
                     oldSocket.close();
                 } catch (Exception ignored) {}
             }
+            if (oldThread != null && oldThread.isAlive()) {
+                try {
+                    oldThread.interrupt();
+                } catch (Exception ignored) {}
+            }
 
             // 2. Creazione e bind del nuovo socket con retries e backoff
+            ServerSocket newServer = null;
             int retries = 5;
             IOException lastBindEx = null;
             while (retries > 0) {
@@ -154,39 +180,40 @@ public class HttpsRebindController {
             }
 
             if (newServer == null || !newServer.isBound()) {
-                throw (lastBindEx != null) ? lastBindEx : new IOException("Impossibile effettuare il bind su porta " + port);
+                stopActiveListener((lastBindEx != null) ? lastBindEx.getMessage() : "Impossibile effettuare il bind su porta " + port);
+                return false;
             }
 
-            activeSocket = newServer;
+            // 3. Associazione del nuovo socket e avvio del thread acceptor dedicato alla specifica istanza (P0 Reliability fix)
+            final long generation = generationCounter.incrementAndGet();
+            final ServerSocket boundSocket = newServer;
+            activeSocket = boundSocket;
 
-            // 3. Riavvio o aggiornamento thread acceptor
-            ensureAcceptorThreadRunning();
-            return true;
-        } catch (Exception e) {
-            activeSocket = null; // Fail-closed coerente
-            return false;
-        }
-    }
-
-    private synchronized void ensureAcceptorThreadRunning() {
-        if (acceptorThread == null || !acceptorThread.isAlive()) {
-            acceptorThread = new Thread(new Runnable() {
+            Thread newAcceptor = new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    while (isRunning && activeSocket != null && !activeSocket.isClosed() && activeSocket.isBound()) {
+                    while (isRunning && !boundSocket.isClosed() && boundSocket.isBound()) {
                         try {
-                            final Socket client = activeSocket.accept();
+                            final Socket client = boundSocket.accept();
                             if (callback != null) {
                                 callback.onClientConnected(client);
                             }
                         } catch (IOException e) {
-                            if (!isRunning || (activeSocket != null && activeSocket.isClosed())) break;
-                            try { Thread.sleep(150); } catch (InterruptedException ignored) {}
+                            if (!isRunning || boundSocket.isClosed()) {
+                                break;
+                            }
+                            try { Thread.sleep(100); } catch (InterruptedException ignored) { break; }
                         }
                     }
                 }
-            }, "AkaiHttpsAcceptorThread");
-            acceptorThread.start();
+            }, "AkaiHttpsAcceptor-Gen" + generation);
+
+            currentAcceptorThread = newAcceptor;
+            newAcceptor.start();
+            return true;
+        } catch (Exception e) {
+            stopActiveListener("Eccezione durante reloadListenerForIp: " + e.getMessage());
+            return false;
         }
     }
 
@@ -261,11 +288,7 @@ public class HttpsRebindController {
 
     public synchronized void close() {
         isRunning = false;
-        ServerSocket s = activeSocket;
-        activeSocket = null;
-        if (s != null && !s.isClosed()) {
-            try { s.close(); } catch (Exception ignored) {}
-        }
+        stopActiveListener(null);
         if (ownsExecutor && workerExecutor != null) {
             try { workerExecutor.shutdownNow(); } catch (Exception ignored) {}
         }
