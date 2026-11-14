@@ -529,6 +529,21 @@ function Ensure-ApplicationQuiescence {
     return $true
 }
 
+function Test-AdbRootIdOutput([string]$IdText) {
+    if ([string]::IsNullOrWhiteSpace($IdText)) { return $false }
+    if ($IdText -match "[\r\n]") { return $false }
+    if (([regex]::Matches($IdText, "\buid=")).Count -ne 1) { return $false }
+    return ($IdText -match "^uid=0\(root\)(?:\s+gid=0\(root\))?(?:\s+.*)?$")
+}
+
+function Test-AdbNonRootShellIdOutput([string]$IdText) {
+    if ([string]::IsNullOrWhiteSpace($IdText)) { return $false }
+    if ($IdText -match "[\r\n]") { return $false }
+    if (([regex]::Matches($IdText, "\buid=")).Count -ne 1) { return $false }
+    if ($IdText -match "\b(?:uid|gid)=0\b") { return $false }
+    return ($IdText -match "^uid=2000\(shell\)\s+gid=2000\(shell\)(?:\s+.*)?$")
+}
+
 function Invoke-WithAdbElevation {
     param(
         [string]$AdbExe,
@@ -538,12 +553,16 @@ function Invoke-WithAdbElevation {
     $preExistingRoot = $false
     $escalationAttempted = $false
     $isRootActive = $false
+    $rootExit = -1
+    $rootOut = ""
+    $idCheckExit = -1
+    $idCheck = ""
     $prevEap = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
         $idOut = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
         $idInitExit = $LASTEXITCODE
-        if ($idInitExit -eq 0 -and $idOut -match "\buid=0\(root\)|\buid=0\b") {
+        if ($idInitExit -eq 0 -and (Test-AdbRootIdOutput $idOut)) {
             $preExistingRoot = $true
             $isRootActive = $true
         } else {
@@ -556,15 +575,16 @@ function Invoke-WithAdbElevation {
                 & $AdbExe -s $TargetAdb wait-for-device 2>$null | Out-Null
                 $idCheck = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
                 $idCheckExit = $LASTEXITCODE
-                if ($idCheckExit -eq 0 -and $idCheck -match "\buid=0\(root\)|\buid=0\b") {
+                if ($idCheckExit -eq 0 -and (Test-AdbRootIdOutput $idCheck)) {
                     $isRootActive = $true
                 }
             }
         }
         $ErrorActionPreference = $prevEap
-        if ($isRootActive) {
-            & $ActionBlock
+        if (-not $isRootActive) {
+            throw "ERRORE FAIL-CLOSED [ELEVAZIONE ADB ROOT FALLITA]: Impossibile confermare positivamente l'elevazione del demone adbd a uid=0(root) (rootExit=$rootExit, rootOut='$rootOut', idCheckExit=$idCheckExit, idCheckOut='$idCheck'). Esecuzione ActionBlock privilegiato bloccata categoricamente."
         }
+        & $ActionBlock
     } finally {
         $ErrorActionPreference = "Continue"
         if ($escalationAttempted -and -not $preExistingRoot) {
@@ -578,13 +598,11 @@ function Invoke-WithAdbElevation {
             $verifiedNonRootShell = (
                 $unrootExit -eq 0 -and
                 $idAfterExit -eq 0 -and
-                -not [string]::IsNullOrWhiteSpace($idAfter) -and
-                ($idAfter -match "\buid=2000\(shell\)|\buid=[1-9]\d*\b") -and
-                ($idAfter -notmatch "\buid=0\(root\)|\buid=0\b")
+                (Test-AdbNonRootShellIdOutput $idAfter)
             )
             if (-not $verifiedNonRootShell) {
                 $ErrorActionPreference = $prevEap
-                throw "ERRORE FAIL-CLOSED [STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO]: Impossibile confermare positivamente il ritorno del demone adbd a privilegi non-root (uid=2000 shell) dopo adb unroot (unrootExit=$unrootExit, unrootOut='$unrootOut', idExit=$idAfterExit, idOut='$idAfter'). Eseguire manualmente: adb -s $TargetAdb unroot && adb -s $TargetAdb shell id"
+                throw "ERRORE FAIL-CLOSED [STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO]: Impossibile confermare positivamente il ritorno del demone adbd alla policy uid=2000(shell) dopo adb unroot (unrootExit=$unrootExit, unrootOut='$unrootOut', idExit=$idAfterExit, idOut='$idAfter'). Eseguire manualmente: adb -s $TargetAdb unroot && adb -s $TargetAdb shell id"
             }
             Write-Host "      Privilegi temporanei adbd revocati con successo (adb unroot -> $idAfter)." -ForegroundColor Gray
         }
@@ -666,10 +684,14 @@ function Remove-OrphanedWalAndShmFiles {
         $origErr = $_
         $script:elevWalState = $null
         $script:elevShmState = $null
-        Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
-            & $AdbExe -s $TargetAdb shell "rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm" 2>$null | Out-Null
-            $script:elevWalState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
-            $script:elevShmState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-shm" -Channel "root"
+        try {
+            Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                & $AdbExe -s $TargetAdb shell "rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm" 2>$null | Out-Null
+                $script:elevWalState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
+                $script:elevShmState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-shm" -Channel "root"
+            }
+        } catch {
+            if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { throw }
         }
         if ($null -eq $script:elevWalState -or $null -eq $script:elevShmState) {
             throw $origErr
@@ -1155,23 +1177,29 @@ switch ($Action) {
         # Tentativo E: database primario + WAL via root adbd (firmware userdebug con probing attivo WAL)
         if (-not $extracted) {
             $script:rootExtracted = $false
-            Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
-                $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $backupDb
-                if ($rx.Success) {
-                    $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
-                    if ($walProbe -eq "EXISTS") {
-                        Write-Host "      File WAL presente su device (root): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
-                        $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db-wal" -LocalFilePath $backupDbWal -MinBytes 32
-                        if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
-                            throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via root."
+            $rootElevErr = ""
+            try {
+                Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
+                    $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $backupDb
+                    if ($rx.Success) {
+                        $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
+                        if ($walProbe -eq "EXISTS") {
+                            Write-Host "      File WAL presente su device (root): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                            $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db-wal" -LocalFilePath $backupDbWal -MinBytes 32
+                            if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                                throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via root."
+                            }
+                            Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                        } elseif ($walProbe -eq "NOT_FOUND") {
+                            Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                            if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
                         }
-                        Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                    } elseif ($walProbe -eq "NOT_FOUND") {
-                        Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
-                        if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+                        $script:rootExtracted = $true
                     }
-                    $script:rootExtracted = $true
                 }
+            } catch {
+                if ($_.Exception.Message -match "STATO ADBD UNKNOWN" -or $_.Exception.Message -match "File WAL") { throw }
+                $rootElevErr = " [$($_.Exception.Message)]"
             }
             if ($script:rootExtracted) {
                 $extracted = $true
@@ -1180,7 +1208,7 @@ switch ($Action) {
         }
 
         if (-not $extracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
-            throw "ERRORE FAIL-CLOSED: Estrazione del database fallita (permessi negati o file non accessibile)."
+            throw "ERRORE FAIL-CLOSED: Estrazione del database fallita (permessi negati o file non accessibile)$rootElevErr."
         }
 
         # Pulizia WAL vuoto
@@ -1304,23 +1332,29 @@ switch ($Action) {
             # Tentativo E: database primario + WAL via root adbd (firmware userdebug con probing attivo WAL)
             if (-not $dbExtracted) {
                 $script:rootDbExtracted = $false
-                Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
-                    $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $backupDb
-                    if ($rx.Success) {
-                        $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
-                        if ($walProbe -eq "EXISTS") {
-                            Write-Host "      File WAL presente su device (root): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
-                            $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db-wal" -LocalFilePath $backupDbWal -MinBytes 32
-                            if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
-                                throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via root."
+                $rootElevErr = ""
+                try {
+                    Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
+                        $rx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $backupDb
+                        if ($rx.Success) {
+                            $walProbe = Probe-DeviceFileState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
+                            if ($walProbe -eq "EXISTS") {
+                                Write-Host "      File WAL presente su device (root): estrazione obbligatoria (fail-closed)..." -ForegroundColor Cyan
+                                $rxWal = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db-wal" -LocalFilePath $backupDbWal -MinBytes 32
+                                if (-not $rxWal.Success -or -not (Test-Path $backupDbWal) -or (Get-Item $backupDbWal).Length -lt 32) {
+                                    throw "ERRORE FAIL-CLOSED: File WAL (akai_memory.db-wal) presente su storage device ma estrazione fallita o non leggibile via root."
+                                }
+                                Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
+                            } elseif ($walProbe -eq "NOT_FOUND") {
+                                Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
+                                if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
                             }
-                            Write-Host "      File WAL estratto con successo: $backupDbWal ($((Get-Item $backupDbWal).Length) bytes)" -ForegroundColor Green
-                        } elseif ($walProbe -eq "NOT_FOUND") {
-                            Write-Host "      Verifica presenza WAL su storage device: ASSENTE (stato consistente single-file)." -ForegroundColor Green
-                            if (Test-Path $backupDbWal) { Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue }
+                            $script:rootDbExtracted = $true
                         }
-                        $script:rootDbExtracted = $true
                     }
+                } catch {
+                    if ($_.Exception.Message -match "STATO ADBD UNKNOWN" -or $_.Exception.Message -match "File WAL") { throw }
+                    $rootElevErr = " [$($_.Exception.Message)]"
                 }
                 if ($script:rootDbExtracted) {
                     $dbExtracted = $true
@@ -1330,7 +1364,7 @@ switch ($Action) {
 
             # VERIFICA FAIL-CLOSED CATEGORICA SUL DATABASE
             if (-not $dbExtracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
-                throw "ERRORE FAIL-CLOSED: Rilevata installazione precedente di $PackageName (v5) ma estrazione del database SQLite fallita (permessi negati run-as/su o DB inaccessibile). L'installazione e' categoricamente BLOCCATA.`nIl parametro -GreenfieldStart e' consentito esclusivamente per nuove installazioni (clean-start con package assente) per evitare che un aggiornamento in-place migri irreversibilmente lo schema SQLite da v5 a v6 senza possibilita' di rollback garantito."
+                throw "ERRORE FAIL-CLOSED: Rilevata installazione precedente di $PackageName (v5) ma estrazione del database SQLite fallita (permessi negati run-as/su o DB inaccessibile)$rootElevErr. L'installazione e' categoricamente BLOCCATA.`nIl parametro -GreenfieldStart e' consentito esclusivamente per nuove installazioni (clean-start con package assente) per evitare che un aggiornamento in-place migri irreversibilmente lo schema SQLite da v5 a v6 senza possibilita' di rollback garantito."
             } else {
                 # Pulizia WAL vuoto se presente
                 if (Test-Path $backupDbWal) {
@@ -1515,9 +1549,13 @@ $chownTarget = "${appUid}:${appUid}"
                 }
                 if (-not $restored) {
                     $script:rootRestored = $false
-                    Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
-                        $sRoot = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "sh -c 'mkdir -p /data/data/$PackageName/databases; cat > /data/data/$PackageName/databases/akai_memory.db; chown -R $chownTarget /data/data/$PackageName/databases; chmod 660 /data/data/$PackageName/databases/akai_memory.db'"
-                        if ($sRoot.Success) { $script:rootRestored = $true }
+                    try {
+                        Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
+                            $sRoot = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "sh -c 'mkdir -p /data/data/$PackageName/databases; cat > /data/data/$PackageName/databases/akai_memory.db; chown -R $chownTarget /data/data/$PackageName/databases; chmod 660 /data/data/$PackageName/databases/akai_memory.db'"
+                            if ($sRoot.Success) { $script:rootRestored = $true }
+                        }
+                    } catch {
+                        if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { throw }
                     }
                     if ($script:rootRestored) {
                         $restored = $true
@@ -1537,8 +1575,12 @@ $chownTarget = "${appUid}:${appUid}"
                 }
                 if (-not $rx.Success) {
                     $script:rootRx = $null
-                    Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
-                        $script:rootRx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $verifyRestoreDb
+                    try {
+                        Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
+                            $script:rootRx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $verifyRestoreDb
+                        }
+                    } catch {
+                        if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { throw }
                     }
                     if ($script:rootRx -and $script:rootRx.Success) {
                         $rx = $script:rootRx
@@ -1653,9 +1695,13 @@ $chownTarget = "${appUid}:${appUid}"
         }
         if (-not $restored) {
             $script:rootRestored = $false
-            Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
-                $sRoot = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "sh -c 'mkdir -p /data/data/$PackageName/databases; cat > /data/data/$PackageName/databases/akai_memory.db; chown -R $chownTarget /data/data/$PackageName/databases; chmod 660 /data/data/$PackageName/databases/akai_memory.db'"
-                if ($sRoot.Success) { $script:rootRestored = $true }
+            try {
+                Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
+                    $sRoot = Send-FileViaAdbExecIn -AdbExe $adb -TargetAdb $TargetAdb -LocalFilePath $backupDb -RemoteCommand "sh -c 'mkdir -p /data/data/$PackageName/databases; cat > /data/data/$PackageName/databases/akai_memory.db; chown -R $chownTarget /data/data/$PackageName/databases; chmod 660 /data/data/$PackageName/databases/akai_memory.db'"
+                    if ($sRoot.Success) { $script:rootRestored = $true }
+                }
+            } catch {
+                if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { throw }
             }
             if ($script:rootRestored) {
                 $restored = $true
@@ -1675,8 +1721,12 @@ $chownTarget = "${appUid}:${appUid}"
         }
         if (-not $rx.Success) {
             $script:rootRx = $null
-            Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
-                $script:rootRx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $verifyRestoreDb
+            try {
+                Invoke-WithAdbElevation -AdbExe $adb -TargetAdb $TargetAdb -ActionBlock {
+                    $script:rootRx = Receive-FileViaAdbExecOut -AdbExe $adb -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/databases/akai_memory.db" -LocalFilePath $verifyRestoreDb
+                }
+            } catch {
+                if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { throw }
             }
             if ($script:rootRx -and $script:rootRx.Success) {
                 $rx = $script:rootRx

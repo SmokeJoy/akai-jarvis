@@ -682,10 +682,14 @@ if ($isWin) {
 # Mock ADB: Permette backup iniziale, ma blocca ogni exec-out/cat dopo il rollback (simulando permessi revocati)
 @"
 const fs = require('fs');
-const args = process.argv.slice(2).join(' ');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
 const logFile = process.env.MOCK_LOG_FILE;
 
-if (args.includes('connect')) process.exit(0);
+if (argv.includes('connect') || argv.includes('wait-for-device')) process.exit(0);
+if (argv.includes('unroot')) { console.log('adbd is already running as non root'); process.exit(0); }
+if (argv.includes('root')) { console.log('adbd cannot run as root in production builds'); process.exit(1); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') { console.log('uid=2000(shell) gid=2000(shell)'); process.exit(0); }
 if (args.includes('pm list')) { console.log('package:it.akai.customremote'); process.exit(0); }
 if (args.includes('pm path')) { console.log('package:/data/app/it.akai.customremote-1/base.apk'); process.exit(0); }
 if (args.includes('pull')) {
@@ -2505,14 +2509,16 @@ Remove-Item $testDirTls -Recurse -Force -ErrorAction SilentlyContinue
 
 # ==============================================================================
 # TEST 29: [ADB ROOT/UNROOT + WAL BACKUP & EACCES GUARD]
-# Verifica positiva/negativa completa del canale root adbd (Step 2 + P1 Fail-Closed Gates):
+# Verifica positiva/negativa completa del canale root adbd (Step 2 + P1/P2 Fail-Closed Gates):
 #   29a) Happy Path: shell(uid=2000) -> adb root -> uid=0 -> backup DB+WAL + checkpoint -> adb unroot -> uid=2000
 #   29b) Error/Interruption Path: fail streaming WAL sotto root -> ERRORE FAIL-CLOSED + adb unroot garantito in finally
 #   29c) Denied & EACCES Guard: adb root rifiutato (uid=2000) + Probe-DeviceFileState -Channel "root" su EACCES -> Fail-Closed
-#   29d) P1 Gate: adb root eleva a root ma id check post-root fallisce -> ActionBlock NON eseguito + adb unroot eseguito in finally
+#   29d) P1 Gate: adb root eleva a root ma id check post-root fallisce -> ActionBlock NON eseguito + ERRORE FAIL-CLOSED esplicito + adb unroot in finally + blocco E2E install
 #   29e) P1 Gate: adb unroot fallisce/connessione interrotta -> ERRORE FAIL-CLOSED [STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO]
 #   29f) P1 Gate: id check finale post-unroot restituisce stringa vuota -> ERRORE FAIL-CLOSED (mai falso successo)
 #   29g) P1 Gate: root pre-esistente su adbd -> preserva stato root senza invocare adb root ne' adb unroot
+#   29h) P2 Gate: id check finale post-unroot restituisce uid=1000(system) -> rifiutato in Fail-Closed (policy ancorata uid=2000(shell))
+#   29i) P2 Gate: id check finale post-unroot restituisce output ambiguo -> rifiutato in Fail-Closed (nessun falso successo)
 # ==============================================================================
 Write-Host "`n--- Esecuzione Test 29: ADB Root/Unroot Escalation, WAL Checkpoint & EACCES Guard ---" -ForegroundColor Yellow
 $testDir29 = Join-Path $tempDir "akai_test_adb_root_$([Guid]::NewGuid().ToString('N'))"
@@ -2598,10 +2604,26 @@ if (args.includes('unroot')) {
         console.log('restarting adbd as non root');
         process.exit(0);
     }
+    if (rootMode === 'post_unroot_uid_1000') {
+        fs.writeFileSync(stateFile, 'unroot_uid_1000', 'utf8');
+        if (logFile) fs.appendFileSync(logFile, 'unroot\n', 'utf8');
+        console.log('restarting adbd as non root');
+        process.exit(0);
+    }
+    if (rootMode === 'post_unroot_id_ambiguous') {
+        fs.writeFileSync(stateFile, 'unroot_ambiguous', 'utf8');
+        if (logFile) fs.appendFileSync(logFile, 'unroot\n', 'utf8');
+        console.log('restarting adbd as non root');
+        process.exit(0);
+    }
     fs.writeFileSync(stateFile, 'shell', 'utf8');
     if (logFile) fs.appendFileSync(logFile, 'unroot\n', 'utf8');
     console.log('restarting adbd as non root');
     process.exit(0);
+}
+if (args.includes('install')) {
+    console.log('VIOLATION_INSTALL_CALLED_ON_FAIL_CLOSED');
+    process.exit(1);
 }
 if (argStr.includes('pm path')) {
     console.log('package:/data/app/it.akai.customremote-1/base.apk');
@@ -2628,6 +2650,14 @@ if (args.includes('shell')) {
             process.exit(1);
         }
         if (st === 'unroot_empty') {
+            process.exit(0);
+        }
+        if (st === 'unroot_uid_1000') {
+            console.log('uid=1000(system) gid=1000(system) groups=1000(system)');
+            process.exit(0);
+        }
+        if (st === 'unroot_ambiguous') {
+            console.log('uid=2000(shell) gid=2000(shell) trailing_anomaly uid=0(root)');
             process.exit(0);
         }
         if (st === 'root') {
@@ -2816,7 +2846,7 @@ try {
         Write-Host "   [FAIL] Sotto-test 29c fallito: backup=$out29cBackup | probe=$out29cProbe" -ForegroundColor Red
     }
 
-    # --- Sotto-test 29d: P1 Gate - adb root eleva a root ma check id post-root fallisce -> ActionBlock NON eseguito + adb unroot in finally ---
+    # --- Sotto-test 29d: P1 Gate - adb root eleva a root ma check id post-root fallisce -> ActionBlock NON eseguito + throw esplicito + adb unroot in finally + blocco E2E install ---
     [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
     if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
     $cmd29d = @"
@@ -2828,7 +2858,7 @@ try {
 `$actionRan = `$false
 try {
     Invoke-WithAdbElevation -AdbExe '$mockAdbEsc29' -TargetAdb '127.0.0.1:5555' -ActionBlock { `$actionRan = `$true }
-    Write-Output ('ACTION_RAN=' + `$actionRan)
+    Write-Output ('ACTION_RAN=' + `$actionRan + ' FAIL_SILENT_29D')
 } catch {
     Write-Output ('ACTION_RAN=' + `$actionRan + ' CAUGHT_29D:' + `$_.Exception.Message)
 }
@@ -2837,11 +2867,31 @@ try {
     $finalState29d = (Get-Content $adbdStateFile29 -Raw).Trim()
     $logLines29d = if (Test-Path $adbdLogFile29) { (Get-Content $adbdLogFile29 -Raw).Trim() } else { "" }
 
-    if ($out29d -match "ACTION_RAN=False" -and $out29d -notmatch "CAUGHT_29D:" -and $out29d -match "Privilegi temporanei adbd revocati con successo \(adb unroot -> uid=2000" -and $finalState29d -eq "shell" -and $logLines29d -match "root" -and $logLines29d -match "unroot") {
+    $backupDir29d = Join-Path $testDir29 "backup_29d"
+    $backupEsc29d = $backupDir29d.Replace('\', '/')
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    $cmd29dInstall = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:DEVICE_DB_FILE = '$devDbEsc29'
+`$env:DEVICE_WAL_FILE = '$walEsc29'
+`$env:MOCK_ROOT_MODE = 'post_root_id_fail'
+& '$scriptEscaped' -Action install -ApkPath '$devDbEsc29' -TargetTv '127.0.0.1' -HttpPort 18099 -BackupDir '$backupEsc29d' -AllowHardwareExecution
+"@
+    $prevEap29d = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $out29dInstall = & $psExe -ExecutionPolicy Bypass -Command $cmd29dInstall 2>&1 | Out-String
+    $ec29dInstall = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap29d
+    $finalState29dInstall = (Get-Content $adbdStateFile29 -Raw).Trim()
+
+    if ($out29d -match "ACTION_RAN=False" -and $out29d -notmatch "FAIL_SILENT_29D" -and $out29d -match "CAUGHT_29D:ERRORE FAIL-CLOSED \[ELEVAZIONE ADB ROOT FALLITA\]" -and $out29d -match "Privilegi temporanei adbd revocati con successo \(adb unroot -> uid=2000\(shell\)" -and $finalState29d -eq "shell" -and $logLines29d -match "root" -and $logLines29d -match "unroot" -and $ec29dInstall -ne 0 -and $out29dInstall -match "ERRORE FAIL-CLOSED" -and $out29dInstall -match "ELEVAZIONE ADB ROOT FALLITA" -and $out29dInstall -notmatch "VIOLATION_INSTALL_CALLED_ON_FAIL_CLOSED" -and $finalState29dInstall -eq "shell") {
         $subPassed29++
-        Write-Host "   [PASS] Sotto-test 29d: adb root eleva a root ma id check post-root fallisce -> ActionBlock bloccato e adb unroot garantito in finally (-> uid=2000 shell)" -ForegroundColor Green
+        Write-Host "   [PASS] Sotto-test 29d: id check post-root fallito solleva [ELEVAZIONE ADB ROOT FALLITA] (zero fallimenti silenziosi), esegue unroot in finally e blocca E2E install (exit=$ec29dInstall)" -ForegroundColor Green
     } else {
-        Write-Host "   [FAIL] Sotto-test 29d fallito (state=$finalState29d, log=$logLines29d): $out29d" -ForegroundColor Red
+        Write-Host "   [FAIL] Sotto-test 29d fallito (state=$finalState29d, installState=$finalState29dInstall, ec=$ec29dInstall, log=$logLines29d): unit=$out29d | install=$out29dInstall" -ForegroundColor Red
     }
 
     # --- Sotto-test 29e: P1 Gate - adb unroot fallisce / connessione interrotta -> throw FAIL-CLOSED [STATO ADBD UNKNOWN] ---
@@ -2920,15 +2970,65 @@ try {
     } else {
         Write-Host "   [FAIL] Sotto-test 29g fallito (state=$finalState29g, log='$logLines29g'): $out29g" -ForegroundColor Red
     }
+
+    # --- Sotto-test 29h: P2 Gate - id check finale post-unroot restituisce uid=1000(system) -> rifiutato dalla policy uid=2000(shell) ---
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29h = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:MOCK_ROOT_MODE = 'post_unroot_uid_1000'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Invoke-WithAdbElevation -AdbExe '$mockAdbEsc29' -TargetAdb '127.0.0.1:5555' -ActionBlock { Write-Output 'ACTION_EXECUTED_29H' }
+    Write-Output 'FAIL_NO_THROW_29H'
+} catch {
+    Write-Output ('CAUGHT_29H:' + `$_.Exception.Message)
+}
+"@
+    $out29h = & $psExe -ExecutionPolicy Bypass -Command $cmd29h 2>&1 | Out-String
+
+    if ($out29h -match "CAUGHT_29H:ERRORE FAIL-CLOSED \[STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO\]" -and $out29h -notmatch "Privilegi temporanei adbd revocati con successo" -and $out29h -notmatch "FAIL_NO_THROW_29H") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29h: Output non-shell uid=1000(system) post-unroot rifiutato in Fail-Closed dalla policy ancorata uid=2000(shell)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29h fallito: $out29h" -ForegroundColor Red
+    }
+
+    # --- Sotto-test 29i: P2 Gate - id check finale post-unroot con output ambiguo/multi-uid -> rifiutato in Fail-Closed ---
+    [System.IO.File]::WriteAllText($adbdStateFile29, "shell")
+    if (Test-Path $adbdLogFile29) { Remove-Item $adbdLogFile29 -Force }
+    $cmd29i = @"
+`$env:NODE_EXE = '$nodeEscaped29'
+`$env:ADBD_STATE_FILE = '$stateEsc29'
+`$env:ADBD_LOG_FILE = '$logEsc29'
+`$env:MOCK_ROOT_MODE = 'post_unroot_id_ambiguous'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Invoke-WithAdbElevation -AdbExe '$mockAdbEsc29' -TargetAdb '127.0.0.1:5555' -ActionBlock { Write-Output 'ACTION_EXECUTED_29I' }
+    Write-Output 'FAIL_NO_THROW_29I'
+} catch {
+    Write-Output ('CAUGHT_29I:' + `$_.Exception.Message)
+}
+"@
+    $out29i = & $psExe -ExecutionPolicy Bypass -Command $cmd29i 2>&1 | Out-String
+
+    if ($out29i -match "CAUGHT_29I:ERRORE FAIL-CLOSED \[STATO ADBD UNKNOWN / RECUPERO MANUALE RICHIESTO\]" -and $out29i -notmatch "Privilegi temporanei adbd revocati con successo" -and $out29i -notmatch "FAIL_NO_THROW_29I") {
+        $subPassed29++
+        Write-Host "   [PASS] Sotto-test 29i: Output ambiguo/anomalo su adb shell id post-unroot rifiutato in Fail-Closed" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 29i fallito: $out29i" -ForegroundColor Red
+    }
 } finally {
     Remove-Item $testDir29 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($subPassed29 -eq 7) {
-    Write-Host "[PASS] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Elevation root/unroot, WAL checkpoint, EACCES e P1 Fail-Closed gates verificati al 100% (7/7)" -ForegroundColor Green
+if ($subPassed29 -eq 9) {
+    Write-Host "[PASS] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Elevation root/unroot, WAL checkpoint, EACCES e P1/P2 Fail-Closed gates verificati al 100% (9/9)" -ForegroundColor Green
     $passed++
 } else {
-    Write-Host "[FAIL] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Sotto-test superati: $subPassed29 / 7" -ForegroundColor Red
+    Write-Host "[FAIL] [TEST POSITIVO & NEGATIVO / ADB ROOT-UNROOT & WAL] Test 29: Sotto-test superati: $subPassed29 / 9" -ForegroundColor Red
     $failed++
 }
 
