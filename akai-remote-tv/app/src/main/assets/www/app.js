@@ -71,6 +71,7 @@
         btnAiSend: document.getElementById('btn-ai-send'),
         aiActiveState: document.getElementById('ai-active-state'),
         aiActiveLabel: document.getElementById('ai-active-label'),
+        btnAiStop: document.getElementById('btn-ai-stop'),
         aiResponseBox: document.getElementById('ai-response-box'),
         aiBadgeSource: document.getElementById('ai-badge-source'),
         aiBadgeStatus: document.getElementById('ai-badge-status'),
@@ -126,7 +127,9 @@
 
         // Provider & API
         aiModelSelect: document.getElementById('ai-model-select'),
+        aiKimiRegionSelect: document.getElementById('ai-kimi-region-select'),
         aiApiKeyInput: document.getElementById('ai-api-key-input'),
+        chkCloudContextConsent: document.getElementById('chk-cloud-context-consent'),
         btnToggleKeyVisibility: document.getElementById('btn-toggle-key-visibility'),
         btnTestAiConnection: document.getElementById('btn-test-ai-connection'),
         testConnectionResult: document.getElementById('test-connection-result'),
@@ -460,14 +463,49 @@
         }
     }
 
+    async function cancelBackendAiTask() {
+        const hadInFlight = Boolean(convoSession.aiAbortController);
+        if (convoSession.aiAbortController) {
+            convoSession.userCancelRequested = true;
+            try { convoSession.aiAbortController.abort(); } catch (e) {}
+            convoSession.aiAbortController = null;
+        }
+        if (elements.aiActiveState) {
+            elements.aiActiveState.classList.add('hidden');
+        }
+        if (!state.token) return false;
+        try {
+            const res = await fetch(getApiUrl('/api/ai/cancel'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${state.token}`
+                },
+                body: JSON.stringify({ reason: 'user_stop' })
+            });
+            const cancelData = await res.json().catch(() => ({}));
+            if (res.ok && (cancelData.active_task_cancelled || (cancelData.queued_tasks_invalidated > 0) || hadInFlight)) {
+                showToast('Annullamento richiesto alla TV...');
+            }
+            return res.ok;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function stopConversation() {
+        const shouldCancelTv = Boolean(convoSession.aiAbortController) ||
+            convoSession.state === JarvisConvoState.THINKING ||
+            convoSession.state === JarvisConvoState.SPEAKING;
         convoSession.active = false;
         convoSession.turnLocked = false;
         clearTimeout(convoSession.vadTimer);
         clearTimeout(convoSession.inactivityTimer);
 
-        // P1-04: Abort pending ask request on explicit stop
-        if (convoSession.aiAbortController) {
+        // P1-2: Abort pending ask request AND signal TV backend cancel (/api/ai/cancel)
+        if (shouldCancelTv) {
+            cancelBackendAiTask();
+        } else if (convoSession.aiAbortController) {
             try { convoSession.aiAbortController.abort(); } catch (e) {}
             convoSession.aiAbortController = null;
         }
@@ -636,6 +674,7 @@
         }
 
         // P1-04: AbortController with 25-second timeout
+        convoSession.userCancelRequested = false;
         convoSession.aiAbortController = new AbortController();
         const timeoutId = setTimeout(() => {
             if (convoSession.aiAbortController) convoSession.aiAbortController.abort();
@@ -670,6 +709,14 @@
             } else if (res.status === 401) {
                 handleSessionExpired();
                 return false;
+            } else if (data.status === 'CANCELLED') {
+                displayAiResponse({
+                    success: false,
+                    status: 'CANCELLED',
+                    reply: data.reply || 'Operazione annullata su richiesta.',
+                    verified: false
+                }, query);
+                return false;
             } else {
                 displayAiResponse({
                     success: false,
@@ -681,6 +728,17 @@
             }
         } catch (e) {
             clearTimeout(timeoutId);
+            if (e.name === 'AbortError' && convoSession.userCancelRequested) {
+                convoSession.userCancelRequested = false;
+                displayAiResponse({
+                    success: false,
+                    status: 'CANCELLED',
+                    client_aborted: true,
+                    reply: 'Annullamento richiesto alla TV (stop cooperativo in corso).',
+                    verified: false
+                }, query);
+                return false;
+            }
             if (e.name === 'AbortError') {
                 showToast('Richiesta annullata o timeout.', true);
             } else {
@@ -742,6 +800,11 @@
                 elements.aiBadgeStatus.className = 'ai-badge-status blocked';
                 elements.aiBadgeStatus.textContent = '🛑 Budget Bloccato';
                 showToast('Budget massimo raggiunto (5,00 €)', true);
+                if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
+            } else if (data.status === 'CANCELLED') {
+                elements.aiBadgeStatus.className = 'ai-badge-status blocked';
+                elements.aiBadgeStatus.textContent = data.client_aborted ? '⏹ Annullamento richiesto' : '⏹ Annullato';
+                showToast(data.client_aborted ? 'Annullamento richiesto' : 'Task AI annullato');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
             } else {
                 elements.aiBadgeStatus.className = 'ai-badge-status error';
@@ -956,15 +1019,24 @@
             if (res.ok) {
                 const cfg = await res.json();
 
-                // Provider
+                // Provider & Execution Mode
+                const effectiveProvider = (cfg.execution_mode === 'LOCAL_ONLY' || cfg.strict_local_only)
+                    ? 'local'
+                    : (cfg.active_provider || 'deepseek');
                 const radios = document.getElementsByName('ai-provider');
                 for (const r of radios) {
-                    r.checked = (r.value === cfg.active_provider);
+                    r.checked = (r.value === effectiveProvider);
                 }
 
-                // Model
+                // Model & Kimi Region
                 if (cfg.active_model && elements.aiModelSelect) {
                     elements.aiModelSelect.value = (cfg.active_model === 'deepseek-chat') ? 'deepseek-flash' : cfg.active_model;
+                }
+                if (elements.aiKimiRegionSelect) {
+                    elements.aiKimiRegionSelect.value = cfg.kimi_region || 'intl';
+                }
+                if (elements.chkCloudContextConsent) {
+                    elements.chkCloudContextConsent.checked = (cfg.cloud_context_consent !== false);
                 }
 
                 // Masked API Keys
@@ -1068,14 +1140,23 @@
 
         const selectedRadio = document.querySelector('input[name="ai-provider"]:checked');
         const provider = selectedRadio ? selectedRadio.value : 'deepseek';
-        const model = elements.aiModelSelect.value;
-        const key = elements.aiApiKeyInput.value.trim();
+        const executionMode = (provider === 'local') ? 'LOCAL_ONLY' : 'CLOUD_OPTIONAL';
+        const model = elements.aiModelSelect ? elements.aiModelSelect.value : 'deepseek-flash';
+        const kimiRegion = elements.aiKimiRegionSelect ? elements.aiKimiRegionSelect.value : 'intl';
+        const cloudContextConsent = elements.chkCloudContextConsent ? Boolean(elements.chkCloudContextConsent.checked) : true;
+        const key = elements.aiApiKeyInput ? elements.aiApiKeyInput.value.trim() : '';
 
-        const payload = { provider, model };
+        const payload = {
+            execution_mode: executionMode,
+            provider,
+            model,
+            kimi_region: kimiRegion,
+            cloud_context_consent: cloudContextConsent
+        };
         if (key && !key.includes('••••')) {
             if (provider === 'kimi') {
                 payload.kimi_key = key;
-            } else {
+            } else if (provider === 'deepseek') {
                 payload.deepseek_key = key;
             }
         }
@@ -1089,11 +1170,13 @@
                 },
                 body: JSON.stringify(payload)
             });
-            if (res.ok) {
+            let respData = null;
+            try { respData = await res.json(); } catch (_) {}
+            if (res.ok && (!respData || respData.success !== false)) {
                 showToast('Configurazione AI salvata con successo!');
                 loadAiConfig();
             } else {
-                showToast('Errore salvataggio AI', true);
+                showToast((respData && respData.error) ? respData.error : 'Errore salvataggio AI', true);
             }
         } catch (e) {
             showToast('Errore di comunicazione', true);
@@ -1414,8 +1497,10 @@
             return;
         }
 
-        if (elements.chkConfirmCaTv && !elements.chkConfirmCaTv.checked) {
-            elements.pairingError.textContent = "Conferma obbligatoria: confronta l'impronta mostrata sullo schermo della TV con quella qui sopra e spunta la casella prima di associare.";
+        // HTTPS must verify CA fingerprint. Classic HTTP LAN remote retains v5 PIN
+        // compatibility; never use this path for AI credentials or voice capture.
+        if (state.proto === 'https' && elements.chkConfirmCaTv && !elements.chkConfirmCaTv.checked) {
+            elements.pairingError.textContent = "Conferma obbligatoria su HTTPS: confronta l'impronta mostrata sulla TV e spunta la casella prima di associare.";
             elements.pairingError.classList.remove('hidden');
             return;
         }
@@ -1610,6 +1695,13 @@
                 if (convoSession.lastQuery) {
                     askAi(convoSession.lastQuery);
                 }
+            });
+        }
+
+        // AI Active Task Stop button
+        if (elements.btnAiStop) {
+            elements.btnAiStop.addEventListener('click', () => {
+                cancelBackendAiTask();
             });
         }
 
