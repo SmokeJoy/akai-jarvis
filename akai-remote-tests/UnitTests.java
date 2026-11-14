@@ -2217,6 +2217,7 @@ public class UnitTests {
             final CountDownLatch t1InStep1 = new CountDownLatch(1);
             final CountDownLatch allowT1Continue = new CountDownLatch(1);
             final AtomicBoolean t2SawYoutubeReady = new AtomicBoolean(false);
+            final AtomicInteger ytExecCount = new AtomicInteger(0);
             AkaiAiController.PerceptionAndExecutionBridge concBridge = new AkaiAiController.PerceptionAndExecutionBridge() {
                 @Override
                 public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
@@ -2234,7 +2235,8 @@ public class UnitTests {
                     String act = first != null ? first.optString("action", "") : "";
                     String pkg = first != null ? first.optString("package", first.optString("pkg", "")) : "";
                     if (("command".equals(t) && "launch_youtube".equals(act)) || "launch_app".equals(t) || "open_app".equals(t)) {
-                        actionOrder.add("T2:" + (!pkg.isEmpty() ? pkg : act));
+                        int execId = ytExecCount.incrementAndGet();
+                        actionOrder.add("YT_EXEC_" + execId + ":" + (!pkg.isEmpty() ? pkg : act));
                         t2SawYoutubeReady.set(true);
                     } else if ("dpad_up".equals(k)) {
                         actionOrder.add("T1:dpad_up");
@@ -2297,6 +2299,26 @@ public class UnitTests {
             ctrlConc.unlockSessionForTest();
             tQueuedOnly.join(3000L);
 
+            // Test deterministico race window pre-pubblicazione e post-pubblicazione activeTask
+            final AtomicBoolean preHookFired = new AtomicBoolean(false);
+            AkaiAiController.setPrePublishHookForTest(() -> {
+                preHookFired.set(true);
+                ctrlConc.cancelActiveTask();
+            });
+            JSONObject rPreHookCancel = ctrlConc.processQuery("apri YouTube", false);
+            AkaiAiController.setPrePublishHookForTest(null);
+
+            final AtomicBoolean postHookFired = new AtomicBoolean(false);
+            AkaiAiController.setPostPublishHookForTest(() -> {
+                postHookFired.set(true);
+                ctrlConc.cancelActiveTask();
+            });
+            JSONObject rPostHookCancel = ctrlConc.processQuery("apri YouTube", false);
+            AkaiAiController.setPostPublishHookForTest(null);
+
+            // T3 finale DOPO tutti gli stop di test deve riuscire normalmente
+            JSONObject rT3Final = ctrlConc.processQuery("apri YouTube", false);
+
             boolean concIsolationOk = enteredStep1 &&
                     rCancelHttp.statusCode == 426 && rCancelNoAuth.statusCode == 401 &&
                     rCancelAuth.statusCode == 200 && rCancelAuth.json != null &&
@@ -2314,8 +2336,19 @@ public class UnitTests {
                     rCancelQueuedOnly.json.optInt("queued_tasks_invalidated", 0) >= 1 &&
                     tQueuedOnlyHolder[0] != null && "CANCELLED".equals(tQueuedOnlyHolder[0].optString("status")) &&
                     tQueuedOnlyHolder[0].optBoolean("cancelled_while_queued") &&
-                    actionOrder.size() == 2 && "T1:dpad_up".equals(actionOrder.get(0)) &&
-                    "T2:launch_youtube".equals(actionOrder.get(1)) &&
+                    preHookFired.get() && !rPreHookCancel.optBoolean("success") &&
+                    "CANCELLED".equals(rPreHookCancel.optString("status")) &&
+                    rPreHookCancel.optBoolean("cancelled_while_queued") &&
+                    rPreHookCancel.optInt("executed_steps", -1) == 0 &&
+                    postHookFired.get() && !rPostHookCancel.optBoolean("success") &&
+                    "CANCELLED".equals(rPostHookCancel.optString("status")) &&
+                    rPostHookCancel.optBoolean("cancelled_while_queued") &&
+                    rPostHookCancel.optInt("executed_steps", -1) == 0 &&
+                    rT3Final != null && rT3Final.optBoolean("success") &&
+                    "STATE_VERIFIED".equals(rT3Final.optString("execution_outcome")) &&
+                    actionOrder.size() == 3 && "T1:dpad_up".equals(actionOrder.get(0)) &&
+                    "YT_EXEC_1:launch_youtube".equals(actionOrder.get(1)) &&
+                    "YT_EXEC_2:launch_youtube".equals(actionOrder.get(2)) &&
                     !actionOrder.contains("T1:dpad_down");
 
             // Stop durante replan (attempt 1 fallisce -> durante planning retry viene chiamato cancelActiveTask() -> zero azioni replan)

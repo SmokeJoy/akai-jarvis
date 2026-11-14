@@ -121,6 +121,18 @@ public class AkaiAiController {
     private final AtomicReference<TaskToken> activeTask = new AtomicReference<>(null);
     private final ReentrantLock sessionLock = new ReentrantLock(true);
 
+    // Test hooks package-private per verificare race window prima e dopo pubblicazione activeTask
+    static volatile Runnable sPrePublishHookForTest = null;
+    static volatile Runnable sPostPublishHookForTest = null;
+
+    public static void setPrePublishHookForTest(Runnable hook) {
+        sPrePublishHookForTest = hook;
+    }
+
+    public static void setPostPublishHookForTest(Runnable hook) {
+        sPostPublishHookForTest = hook;
+    }
+
     public static synchronized AkaiAiController getInstance(Context context, TvController tvController) {
         if (sInstance == null) {
             sInstance = new AkaiAiController(context.getApplicationContext(), tvController);
@@ -588,7 +600,17 @@ public class AkaiAiController {
         sessionLock.lock();
         try {
             queuedTasks.decrementAndGet();
-            if (generationAtEnqueue != cancelGeneration.get() || myToken.isCancelled()) {
+            if (sPrePublishHookForTest != null) {
+                try { sPrePublishHookForTest.run(); } catch (Throwable ignored) {}
+            }
+            cancelRequested.set(false);
+            activeTask.set(myToken);
+            if (sPostPublishHookForTest != null) {
+                try { sPostPublishHookForTest.run(); } catch (Throwable ignored) {}
+            }
+            if (generationAtEnqueue != cancelGeneration.get() || myToken.isCancelled() || cancelRequested.get()) {
+                myToken.cancel();
+                activeTask.compareAndSet(myToken, null);
                 long elapsed = System.currentTimeMillis() - startTime;
                 JSONObject cancelledRes = new JSONObject();
                 try {
@@ -610,8 +632,6 @@ public class AkaiAiController {
                 } catch (Exception ignored) {}
                 return cancelledRes;
             }
-            cancelRequested.set(false);
-            activeTask.set(myToken);
             return processQueryLocked(userQuery, speak, startTime, myToken);
         } finally {
             activeTask.compareAndSet(myToken, null);
