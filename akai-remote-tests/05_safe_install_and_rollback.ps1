@@ -1619,8 +1619,16 @@ switch ($Action) {
         try {
             Write-Host "[2/3] Arresto writer app (wasRunning=$wasRunning) e tentativo snapshot..."
             $stopIssued = $true
-            & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
-            & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" 2>$null | Out-Null
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>&1 | Out-Null
+                & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" 2>&1 | Out-Null
+            } catch {
+                # In v5 il servizio non e' esportato e ACTION_BACKUP_DB non esiste; snapshot gestito da fallback binario
+            } finally {
+                $ErrorActionPreference = $prevEap
+            }
             Start-Sleep -Seconds 1
 
             Write-Host "[3/3] Estrazione database SQLite e gestione file WAL..."
@@ -1796,8 +1804,16 @@ switch ($Action) {
             # 1.3 Backup OBBLIGATORIO del database SQLite (FAIL-CLOSED) con WAL
             Write-Host "[2/6] Backup preventivo OBBLIGATORIO del database SQLite e gestione WAL..."
             $backupDbWal = Join-Path $sessionDir "akai_memory.db-wal"
-            & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>$null | Out-Null
-            & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" 2>$null | Out-Null
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & $adb -s $TargetAdb shell "am force-stop $PackageName" 2>&1 | Out-Null
+                & $adb -s $TargetAdb shell "am startservice -a it.akai.customremote.ACTION_BACKUP_DB $PackageName/.RemoteServerService" 2>&1 | Out-Null
+            } catch {
+                # In v5 il servizio non e' esportato e ACTION_BACKUP_DB non esiste; snapshot gestito da fallback binario
+            } finally {
+                $ErrorActionPreference = $prevEap
+            }
             Start-Sleep -Seconds 1
 
             $dbExtracted = $false

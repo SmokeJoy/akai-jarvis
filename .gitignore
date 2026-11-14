@@ -57,6 +57,10 @@ AKAI_AUDIT_COMPLETO/
 *.log
 diagnostics/
 backups/
+backup_tv/
+*.db
+*.db-wal
+*.db-shm
 downloads/
 scratch/
 
