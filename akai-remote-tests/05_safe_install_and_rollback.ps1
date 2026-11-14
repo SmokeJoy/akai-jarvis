@@ -852,14 +852,33 @@ switch ($Action) {
             Start-Sleep -Seconds $sleepSec
             try {
                 $statusResp = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 4 -ErrorAction Stop
-                $webResp = Invoke-WebRequest -Uri $WebUrl -Method Get -TimeoutSec 4 -UseBasicParsing -ErrorAction Stop
+                
+                # Sulla baseline v5 /index.html restituisce 200 OK.
+                # Sul nuovo server M2/M3 HTTPS l'accesso HTTP in chiaro restituisce 426 Upgrade Required (fail-closed).
+                # Entrambi gli esiti validano che il server HTTP è attivo e operante sulla porta.
+                $webOk = $false
+                $webStatusMsg = ""
+                try {
+                    $webResp = Invoke-WebRequest -Uri $WebUrl -Method Get -TimeoutSec 4 -UseBasicParsing -ErrorAction Stop
+                    if ($webResp.StatusCode -eq 200) {
+                        $webOk = $true
+                        $webStatusMsg = "HTTP 200 ($($webResp.RawContentLength) bytes)"
+                    }
+                } catch {
+                    if ($_.Exception.Message -match "426" -or ($_.Exception.Response -and $_.Exception.Response.StatusCode -eq 426)) {
+                        $webOk = $true
+                        $webStatusMsg = "HTTP 426 Upgrade Required (Fail-Closed HTTPS M2/M3 Attivo)"
+                    } else {
+                        throw $_
+                    }
+                }
                 $pidVal = (& $adb -s $TargetAdb shell "pidof $PackageName").Trim()
 
-                if ($statusResp.status -eq "ok" -and $statusResp.uinput_ready -eq $true -and $webResp.StatusCode -eq 200 -and $pidVal) {
+                if ($statusResp.status -eq "ok" -and $statusResp.uinput_ready -eq $true -and $webOk -and $pidVal) {
                     $healthy = $true
                     Write-Host "      Tentativo $i/$($attempts) SUPERATO:" -ForegroundColor Green
                     Write-Host "      - API Status    : OK (uinput_ready=true, active_sessions=$($statusResp.active_sessions))" -ForegroundColor Green
-                    Write-Host "      - Web Remote UI : OK (HTTP 200, $($webResp.RawContentLength) bytes)" -ForegroundColor Green
+                    Write-Host "      - Web Transport : OK ($webStatusMsg)" -ForegroundColor Green
                     Write-Host "      - Processo TV   : ATTIVO (PID $pidVal)" -ForegroundColor Green
                     break
                 }
