@@ -29,6 +29,9 @@ public class RestApiRouter {
 
     public interface PinHandler {
         void showPin(String pin, int remainingSeconds, String serverUrl);
+        default void showPin(String pin, int remainingSeconds, String serverUrl, String caFingerprint) {
+            showPin(pin, remainingSeconds, serverUrl);
+        }
         void dismissPin();
     }
 
@@ -47,6 +50,15 @@ public class RestApiRouter {
     private final AiHandler aiHandler;
     private final String localIpAddress;
     private final int httpPort;
+    private TlsCertificateManager tlsCertificateManager = null;
+
+    public void setTlsCertificateManager(TlsCertificateManager tlsCertificateManager) {
+        this.tlsCertificateManager = tlsCertificateManager;
+    }
+
+    public TlsCertificateManager getTlsCertificateManager() {
+        return tlsCertificateManager;
+    }
 
     public RestApiRouter(SecurityManager securityManager,
                          CommandHandler commandHandler,
@@ -105,6 +117,43 @@ public class RestApiRouter {
             return true;
         }
 
+        // TLS Info & CA Download (Milestone M2: Secure Context for Mobile Voice)
+        if (("/api/auth/ca.crt".equals(path) || "/ca.pem".equals(path) || "/ca.crt".equals(path)) && "GET".equals(method)) {
+            String caPem = null;
+            if (tlsCertificateManager != null) {
+                TlsCertificateManager.TlsInfo info = tlsCertificateManager.getOrGenerateTlsInfo(null, localIpAddress);
+                if (info != null) caPem = info.caPem;
+            }
+            if (caPem != null && !caPem.isEmpty()) {
+                byte[] raw = caPem.getBytes(StandardCharsets.UTF_8);
+                sendRawResponse(os, 200, "OK", "application/x-x509-ca-cert", raw);
+            } else {
+                sendJsonResponse(os, 404, new JSONObject().put("error", "Certificato Root CA non ancora inizializzato"));
+            }
+            return true;
+        }
+
+        if ("/api/auth/tls_info".equals(path) && "GET".equals(method)) {
+            TlsCertificateManager.TlsInfo info = (tlsCertificateManager != null) ?
+                tlsCertificateManager.getOrGenerateTlsInfo(null, localIpAddress) : null;
+            JSONObject out = new JSONObject();
+            out.put("https_enabled", info != null);
+            out.put("https_port", TlsCertificateManager.HTTPS_PORT);
+            out.put("ca_fingerprint_sha256", info != null ? info.caFingerprintSha256 : "NON_CONFIGURATO");
+            out.put("ca_download_url", "/api/auth/ca.crt");
+            JSONArray sans = new JSONArray();
+            if (info != null && info.serverSanList != null) {
+                for (String san : info.serverSanList) sans.put(san);
+            }
+            out.put("san_list", sans);
+            JSONObject guide = new JSONObject();
+            guide.put("ios", "Scarica /api/auth/ca.crt in Safari, installa profilo in Impostazioni, abilita attendibilita totale in Generali > Info > Attendibilita certificati verificando l'impronta a schermo.");
+            guide.put("android", "Installa /api/auth/ca.crt da Impostazioni > Sicurezza > Crittografia e credenziali > Installa certificato CA verificando l'impronta a schermo.");
+            out.put("onboarding_guide", guide);
+            sendJsonResponse(os, 200, out);
+            return true;
+        }
+
         // Pair Request
         if ("/api/auth/pair/request".equals(path) && "POST".equals(method)) {
             if (securityManager.isClientLockedOut(clientIp)) {
@@ -119,8 +168,13 @@ public class RestApiRouter {
             String pin = securityManager.generateNewPin();
             int remaining = securityManager.getPinRemainingSeconds();
             String serverUrl = "http://" + localIpAddress + ":" + httpPort;
+            String caFp = null;
+            if (tlsCertificateManager != null) {
+                TlsCertificateManager.TlsInfo info = tlsCertificateManager.getOrGenerateTlsInfo(null, localIpAddress);
+                if (info != null) caFp = info.caFingerprintSha256;
+            }
             if (pinHandler != null) {
-                pinHandler.showPin(pin, remaining, serverUrl);
+                pinHandler.showPin(pin, remaining, serverUrl, caFp);
             }
 
             JSONObject res = new JSONObject();
@@ -317,48 +371,19 @@ public class RestApiRouter {
             }
             boolean speak = req.optBoolean("speak", false);
 
-            if (aiHandler != null) {
-                JSONObject res = aiHandler.processQuery(query, speak);
-                int status = res.optBoolean("success", false) ? 200 : 400;
-                sendJsonResponse(os, status, res);
+            if (aiHandler == null) {
+                // Fail-closed rigoroso: nessun fallback unmonitored se il controller AI non è registrato/pronto
+                JSONObject err = new JSONObject();
+                err.put("success", false);
+                err.put("error", "Servizio AI/Intent non disponibile o in fase di avvio");
+                err.put("status", "SERVICE_UNAVAILABLE");
+                sendJsonResponse(os, 503, err);
                 return true;
             }
 
-            // Fallback autonomo su LocalIntentParser se aiHandler non registrato
-            it.akai.customremote.ai.LocalIntentParser.ParsedIntent parsed = it.akai.customremote.ai.LocalIntentParser.parse(null, query);
-            JSONObject out = new JSONObject();
-            if (parsed.matched) {
-                if (parsed.actions != null && commandHandler != null) {
-                    for (int i = 0; i < parsed.actions.length(); i++) {
-                        JSONObject act = parsed.actions.optJSONObject(i);
-                        if (act != null) {
-                            String a = act.optString("action", "");
-                            if (!a.isEmpty()) {
-                                commandHandler.executeCommand(a);
-                            }
-                        }
-                    }
-                }
-                out.put("success", true);
-                out.put("matched", true);
-                out.put("intent_key", parsed.intentKey);
-                out.put("reply", parsed.responseMessage);
-                out.put("source", parsed.source);
-                out.put("tokens", 0);
-                out.put("cost_eur", 0.0);
-                out.put("strict_local_only", true);
-                sendJsonResponse(os, 200, out);
-            } else {
-                out.put("success", false);
-                out.put("matched", false);
-                out.put("status", "FAIL_CLOSED_UNSUPPORTED");
-                out.put("reply", "Comando vocale/testuale non riconosciuto nel profilo locale TV.");
-                out.put("source", "strict_local_guard");
-                out.put("tokens", 0);
-                out.put("cost_eur", 0.0);
-                out.put("strict_local_only", true);
-                sendJsonResponse(os, 400, out);
-            }
+            JSONObject res = aiHandler.processQuery(query, speak);
+            int status = res.optBoolean("success", false) ? 200 : 400;
+            sendJsonResponse(os, status, res);
             return true;
         }
 

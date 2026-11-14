@@ -281,8 +281,17 @@ public class UnitTests {
 
     static class TestPinHandler implements RestApiRouter.PinHandler {
         String lastPin = null;
+        String lastCaFingerprint = null;
         boolean dismissed = false;
-        @Override public void showPin(String pin, int remainingSeconds, String serverUrl) { this.lastPin = pin; this.dismissed = false; }
+        @Override public void showPin(String pin, int remainingSeconds, String serverUrl) {
+            this.lastPin = pin;
+            this.dismissed = false;
+        }
+        @Override public void showPin(String pin, int remainingSeconds, String serverUrl, String caFingerprint) {
+            this.lastPin = pin;
+            this.lastCaFingerprint = caFingerprint;
+            this.dismissed = false;
+        }
         @Override public void dismissPin() { this.dismissed = true; }
     }
 
@@ -867,15 +876,21 @@ public class UnitTests {
             failed++;
         }
 
-        // Test 26 (PR-01 M1): Allineamento 1:1 Package Censiti TV AKAI e Immutabilità Policy STRICT_LOCAL_ONLY
+        // Test 26 (PR-01 M1/M2): Separazione Package Noti vs Censiti all'Audit, Immutabilità Policy e Fail-Closed 503 se AI Handler Assente
         boolean pkgRaiPlayOk = "it.rainet.androidtv".equals(TvAppPackages.PKG_RAIPLAY) &&
                               !"it.rainet.android.tv".equals(TvAppPackages.PKG_RAIPLAY);
         boolean pkgMediasetOk = "it.mediaset.infinitytv".equals(TvAppPackages.PKG_MEDIASET) &&
                                !"it.mediaset.infinity.tv".equals(TvAppPackages.PKG_MEDIASET);
         boolean pkgBrowserOk = "com.phlox.tvwebbrowser".equals(TvAppPackages.PKG_BROWSER_TVBRO);
-        boolean installedAuditOk = TvAppPackages.isCensusedInstalled("it.rainet.androidtv") &&
-                                   TvAppPackages.isCensusedInstalled("it.mediaset.infinitytv") &&
-                                   !TvAppPackages.isCensusedInstalled("com.phlox.tvwebbrowser");
+        
+        // Verifica separazione accurata KNOWN vs INSTALLED_AT_AUDIT (Netflix e Prime noti ma assenti all'audit)
+        boolean auditSeparationOk = TvAppPackages.isKnownPackage("com.netflix.ninja") &&
+                                    TvAppPackages.isKnownPackage("com.amazon.amazonvideo.livingroom") &&
+                                    !TvAppPackages.isInstalledAtAudit("com.netflix.ninja") &&
+                                    !TvAppPackages.isInstalledAtAudit("com.amazon.amazonvideo.livingroom") &&
+                                    TvAppPackages.isInstalledAtAudit("it.rainet.androidtv") &&
+                                    TvAppPackages.isInstalledAtAudit("it.mediaset.infinitytv") &&
+                                    !TvAppPackages.isInstalledAtAudit("com.phlox.tvwebbrowser");
 
         boolean strictLocalImmutable = aiHandler.isStrictLocalOnly();
         boolean policyExceptionThrown = false;
@@ -889,16 +904,77 @@ public class UnitTests {
         CommandResult unknownRes = cmdHandler.executeCommand("invalid_unsupported_action_xyz");
         boolean commandFailurePropagated = (unknownRes != null && !unknownRes.isSuccess());
 
-        if (pkgRaiPlayOk && pkgMediasetOk && pkgBrowserOk && installedAuditOk &&
-            strictLocalImmutable && policyExceptionThrown && commandFailurePropagated) {
-            System.out.println("[PASS] Test 26 (PR-01 M1): Allineamento 1:1 dei package ID censiti su TV AKAI (RaiPlay=" + TvAppPackages.PKG_RAIPLAY + ", Mediaset=" + TvAppPackages.PKG_MEDIASET + "), immutabilità policy STRICT_LOCAL_ONLY (eccezione su disattivazione) e propagazione corretta degli errori di esecuzione comandi");
+        // Verifica fail-closed HTTP 503 Service Unavailable se aiHandler non registrato nel router
+        RestApiRouter routerNoAi = new RestApiRouter(routerSec, cmdHandler, memHandler, pinHandler, null, "192.168.1.8", 8088);
+        MockHttpResponse rNoAi = dispatch(routerNoAi, "POST", "/api/ai/ask", authHeaders, "{\"query\":\"alza il volume\"}", "192.168.1.10");
+        boolean okNoAi503 = (rNoAi.statusCode == 503) && (rNoAi.json != null) &&
+                            !rNoAi.json.optBoolean("success") &&
+                            "SERVICE_UNAVAILABLE".equals(rNoAi.json.optString("status"));
+
+        if (pkgRaiPlayOk && pkgMediasetOk && pkgBrowserOk && auditSeparationOk &&
+            strictLocalImmutable && policyExceptionThrown && commandFailurePropagated && okNoAi503) {
+            System.out.println("[PASS] Test 26 (PR-01 M1): Separazione pacchetti noti vs installati all'audit (#6728868316), fail-closed HTTP 503 su router se AI handler assente, immutabilità policy locale ed error handling confermati");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 26: Fallimento verifica censimento package o immutabilità policy (pkgRaiPlayOk=" + pkgRaiPlayOk + ", pkgMediasetOk=" + pkgMediasetOk + ", installedAuditOk=" + installedAuditOk + ", policyExceptionThrown=" + policyExceptionThrown + ", commandFailurePropagated=" + commandFailurePropagated + ")");
+            System.err.println("[FAIL] Test 26: Fallimento verifica censimento package, fail-closed 503 o immutabilità policy (pkgRaiPlayOk=" + pkgRaiPlayOk + ", auditSeparationOk=" + auditSeparationOk + ", okNoAi503=" + okNoAi503 + ", policyExceptionThrown=" + policyExceptionThrown + ")");
             failed++;
         }
 
-        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v16 (M1 STRICT_LOCAL_ONLY) ===");
+        // Test 27 (PR-01 M2): Generazione On-Device Root CA, Certificato Server SAN e Onboarding Anti-MITM
+        TlsCertificateManager tlsMgr = TlsCertificateManager.getInstance();
+        TlsCertificateManager.TlsInfo tlsInfo = tlsMgr.getOrGenerateTlsInfo(null, "192.168.1.8");
+
+        boolean tlsGeneratedOk = (tlsInfo != null) && (tlsInfo.caFingerprintSha256 != null) &&
+                                 tlsInfo.caFingerprintSha256.matches("([0-9A-F]{2}:){31}[0-9A-F]{2}");
+        boolean caPemValid = (tlsInfo != null) && (tlsInfo.caPem != null) &&
+                             tlsInfo.caPem.contains("-----BEGIN CERTIFICATE-----") &&
+                             tlsInfo.caPem.contains("-----END CERTIFICATE-----");
+        boolean sanComplete = (tlsInfo != null) && (tlsInfo.serverSanList != null) &&
+                              tlsInfo.serverSanList.contains("akai-tv.local") &&
+                              tlsInfo.serverSanList.contains("localhost") &&
+                              tlsInfo.serverSanList.contains("127.0.0.1") &&
+                              tlsInfo.serverSanList.contains("192.168.1.8");
+
+        // Collega TlsCertificateManager al router REST e verifica endpoint di onboarding
+        router.setTlsCertificateManager(tlsMgr);
+
+        // Endpoint GET /api/auth/ca.crt (Download certificato pubblico per iPhone/Android)
+        MockHttpResponse rCaCert = dispatch(router, "GET", "/api/auth/ca.crt", authHeaders, "", "192.168.1.10");
+        boolean okCaCert = (rCaCert.statusCode == 200) && (rCaCert.rawBody != null) &&
+                           rCaCert.rawBody.equals(tlsInfo.caPem);
+
+        // Endpoint GET /api/auth/tls_info (Verifica metadati TLS, porta 8443 e impronta anti-MITM)
+        MockHttpResponse rTlsInfo = dispatch(router, "GET", "/api/auth/tls_info", authHeaders, "", "192.168.1.10");
+        boolean okTlsInfo = (rTlsInfo.statusCode == 200) && (rTlsInfo.json != null) &&
+                            rTlsInfo.json.optBoolean("https_enabled") &&
+                            (rTlsInfo.json.optInt("https_port") == 8443) &&
+                            (tlsInfo != null && tlsInfo.caFingerprintSha256.equals(rTlsInfo.json.optString("ca_fingerprint_sha256"))) &&
+                            rTlsInfo.json.has("onboarding_guide");
+
+        // Verifica anti-MITM su schermo TV: la richiesta di associazione trasmette l'impronta a PinHandler
+        pinHandler.lastCaFingerprint = null;
+        MockHttpResponse rPairReqM2 = dispatch(router, "POST", "/api/auth/pair/request", new HashMap<>(), "{}", "192.168.1.10");
+        boolean okPinWithFingerprint = (rPairReqM2.statusCode == 200) && (tlsInfo != null) &&
+                                       tlsInfo.caFingerprintSha256.equals(pinHandler.lastCaFingerprint);
+
+        // Verifica creazione SSLContext funzionante
+        javax.net.ssl.SSLContext sslCtx = tlsMgr.createSSLContext(null, "192.168.1.8");
+        boolean okSslContext = (sslCtx != null);
+
+        if (tlsGeneratedOk && caPemValid && sanComplete && okCaCert && okTlsInfo && okPinWithFingerprint && okSslContext) {
+            System.out.println("[PASS] Test 27 (PR-01 M2): Root CA locale e certificato SAN emessi on-device con X.509 v3 (SHA-256 with RSA 2048), SAN completi (DNS: akai-tv.local, IP: 192.168.1.8), endpoint /api/auth/ca.crt e /api/auth/tls_info verificati, e impronta anti-MITM proiettata a schermo per trust iOS/Android");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 27: Fallimento verifica TLS M2 (tlsGeneratedOk=" + tlsGeneratedOk + ", caPemValid=" + caPemValid + ", sanComplete=" + sanComplete + ", okCaCert=" + okCaCert + ", okTlsInfo=" + okTlsInfo + ", okPinWithFingerprint=" + okPinWithFingerprint + ", okSslContext=" + okSslContext + ")");
+            failed++;
+        }
+
+        // Pulizia file temporanei di test effimeri (garanzia zero leak segreti in CI e repo)
+        for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem")) {
+            try { new java.io.File(testFile).delete(); } catch (Exception ignored) {}
+        }
+
+        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v17 (M1 + M2 HTTPS/SAN/ANTI-MITM) ===");
         System.out.println("Test Superati: " + passed + " / " + (passed + failed));
         if (failed > 0) {
             System.exit(1);

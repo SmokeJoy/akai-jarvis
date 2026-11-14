@@ -8,8 +8,13 @@
 *.keystore
 *.key
 *.pem
+*.crt
+*.pass
 *.pkcs12
 *.csr
+server_keystore.*
+ca.crt
+ca.pem
 tools/server_keystore.p12
 tools/akai_ca.p12
 tools/debug.keystore

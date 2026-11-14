@@ -16,11 +16,12 @@ $securityMgr = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\cu
 $uinputSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\UInputDriver.java"
 $commandResultSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\CommandResult.java"
 $tvAppPackagesSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\TvAppPackages.java"
+$tlsCertSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\TlsCertificateManager.java"
 $routerSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\RestApiRouter.java"
 $localIntentSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\LocalIntentParser.java"
 $unitTestSrc = Join-Path $workspace "akai-remote-tests\UnitTests.java"
 
-$allSources = @() + $mockSources + $qrSources + @($securityMgr, $uinputSrc, $commandResultSrc, $tvAppPackagesSrc, $routerSrc, $localIntentSrc, $unitTestSrc)
+$allSources = @() + $mockSources + $qrSources + @($securityMgr, $uinputSrc, $commandResultSrc, $tvAppPackagesSrc, $tlsCertSrc, $routerSrc, $localIntentSrc, $unitTestSrc)
 
 Write-Host "Compilazione test unitari per SecurityManager e QR Code..."
 & $javac -encoding UTF-8 -d $testBuildDir $allSources

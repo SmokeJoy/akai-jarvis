@@ -89,6 +89,10 @@ public class RemoteServerService extends Service {
         sInstance = this;
         securityManager = new SecurityManager(this);
         tvController = new TvController(this);
+        final TlsCertificateManager tlsMgr = TlsCertificateManager.getInstance();
+        final TlsCertificateManager.TlsInfo tlsInfo = tlsMgr.getOrGenerateTlsInfo(this, getLocalIpAddress());
+        final String caFp = (tlsInfo != null) ? tlsInfo.caFingerprintSha256 : null;
+
         restApiRouter = new RestApiRouter(
             securityManager,
             new RestApiRouter.CommandHandler() {
@@ -108,7 +112,12 @@ public class RemoteServerService extends Service {
                 @Override public void clearPersonalPreferencesOnly() { AkaiMemoryEngine.getInstance(RemoteServerService.this).clearPersonalPreferencesOnly(); }
             },
             new RestApiRouter.PinHandler() {
-                @Override public void showPin(String pin, int remaining, String serverUrl) { PinOverlayDialog.show(RemoteServerService.this, pin, remaining, serverUrl); }
+                @Override public void showPin(String pin, int remaining, String serverUrl) {
+                    PinOverlayDialog.show(RemoteServerService.this, pin, remaining, serverUrl, caFp);
+                }
+                @Override public void showPin(String pin, int remaining, String serverUrl, String caFingerprint) {
+                    PinOverlayDialog.show(RemoteServerService.this, pin, remaining, serverUrl, caFingerprint != null ? caFingerprint : caFp);
+                }
                 @Override public void dismissPin() { PinOverlayDialog.dismiss(); }
             },
             new RestApiRouter.AiHandler() {
@@ -131,6 +140,7 @@ public class RemoteServerService extends Service {
             getLocalIpAddress(),
             HTTP_PORT
         );
+        restApiRouter.setTlsCertificateManager(tlsMgr);
         threadPool = Executors.newFixedThreadPool(12);
 
         createNotificationChannel();
@@ -257,6 +267,16 @@ public class RemoteServerService extends Service {
     }
 
     private SSLContext createSSLContext() {
+        try {
+            SSLContext ctx = TlsCertificateManager.getInstance().createSSLContext(this, getLocalIpAddress());
+            if (ctx != null) {
+                Log.i(TAG, "SSLContext inizializzato con successo da TlsCertificateManager (M2 SAN & Local CA).");
+                return ctx;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "TlsCertificateManager SSLContext notice: " + e.getMessage() + ". Tentativo fallback manuale.");
+        }
+
         try {
             KeyStore keyStore = KeyStore.getInstance("PKCS12");
             InputStream is = null;

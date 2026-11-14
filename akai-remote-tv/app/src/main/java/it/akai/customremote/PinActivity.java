@@ -27,11 +27,16 @@ public class PinActivity extends Activity {
     private Button btnClose;
 
     public static synchronized void launch(Context context, String pin, int durationSeconds, String serverUrl) {
+        launch(context, pin, durationSeconds, serverUrl, null);
+    }
+
+    public static synchronized void launch(Context context, String pin, int durationSeconds, String serverUrl, String caFingerprint) {
         try {
             Intent intent = new Intent(context, PinActivity.class);
             intent.putExtra("pin", pin);
             intent.putExtra("duration", durationSeconds);
             intent.putExtra("serverUrl", serverUrl);
+            intent.putExtra("caFingerprint", caFingerprint);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             context.startActivity(intent);
         } catch (Exception e) {
@@ -90,6 +95,7 @@ public class PinActivity extends Activity {
         String pin = intent.getStringExtra("pin");
         int duration = intent.getIntExtra("duration", 120);
         String serverUrl = intent.getStringExtra("serverUrl");
+        String caFingerprint = intent.getStringExtra("caFingerprint");
         if (serverUrl == null || serverUrl.isEmpty()) {
             serverUrl = "http://192.168.1.8:8088";
         }
@@ -97,11 +103,21 @@ public class PinActivity extends Activity {
         TextView tvPin = findViewById(R.id.tv_pin_code);
         final TextView tvCountdown = findViewById(R.id.tv_countdown);
         TextView tvUrl = findViewById(R.id.tv_dialog_url);
+        TextView tvCaFp = findViewById(R.id.tv_ca_fingerprint);
         ImageView ivQr = findViewById(R.id.iv_qr_code);
         btnClose = findViewById(R.id.btn_close_dialog);
 
         if (pin != null && pin.length() >= 6 && tvPin != null) {
             tvPin.setText(pin.substring(0, 3) + " " + pin.substring(3));
+        }
+
+        if (tvCaFp != null) {
+            if (caFingerprint != null && !caFingerprint.isEmpty()) {
+                tvCaFp.setVisibility(View.VISIBLE);
+                tvCaFp.setText("Impronta Sicurezza CA (SHA-256):\n" + caFingerprint);
+            } else {
+                tvCaFp.setVisibility(View.GONE);
+            }
         }
 
         if (tvUrl != null) {

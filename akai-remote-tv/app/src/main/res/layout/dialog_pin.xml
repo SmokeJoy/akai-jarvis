@@ -148,7 +148,19 @@
                     android:textColor="#CBD5E1"
                     android:textSize="13sp"
                     android:gravity="center"
-                    android:layout_marginBottom="16dp" />
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:id="@+id/tv_ca_fingerprint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Impronta Sicurezza CA (SHA-256): --"
+                    android:textColor="#34D399"
+                    android:textSize="10sp"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:visibility="gone"
+                    android:layout_marginBottom="14dp" />
 
                 <!-- Close Button -->
                 <Button
