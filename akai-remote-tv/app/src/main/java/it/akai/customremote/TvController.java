@@ -17,6 +17,15 @@ public class TvController {
     private final AudioManager audioManager;
     private final UInputDriver uinputDriver;
 
+    // Censused TV App Package Identifiers (allineati 1:1 con inventario hardware ADB)
+    public static final String PKG_YOUTUBE = TvAppPackages.PKG_YOUTUBE;
+    public static final String PKG_NETFLIX = TvAppPackages.PKG_NETFLIX;
+    public static final String PKG_PRIME = TvAppPackages.PKG_PRIME;
+    public static final String PKG_PLAYSTORE = TvAppPackages.PKG_PLAYSTORE;
+    public static final String PKG_RAIPLAY = TvAppPackages.PKG_RAIPLAY;
+    public static final String PKG_MEDIASET = TvAppPackages.PKG_MEDIASET;
+    public static final String PKG_BROWSER_TVBRO = TvAppPackages.PKG_BROWSER_TVBRO;
+
     // Execution result data structure (subclasses top-level CommandResult for backward compatibility)
     public static class CommandResult extends it.akai.customremote.CommandResult {
         public CommandResult(boolean success, String message) {
@@ -159,34 +168,34 @@ public class TvController {
             case "input_source":
                 return sendMediaTekBroadcast("com.mediatek.select.source", "Selezione Ingressi");
 
-            // App Launch Shortcuts
+            // App Launch Shortcuts (allineati a censimento hardware TV)
             case "app_youtube":
             case "launch_youtube":
-                return launchAppPackage("com.google.android.youtube.tv", "YouTube TV");
+                return launchAppPackage(PKG_YOUTUBE, "YouTube TV");
 
             case "app_netflix":
             case "launch_netflix":
-                return launchAppPackage("com.netflix.ninja", "Netflix");
+                return launchAppPackage(PKG_NETFLIX, "Netflix");
 
             case "app_prime":
             case "launch_prime":
-                return launchAppPackage("com.amazon.amazonvideo.livingroom", "Prime Video");
+                return launchAppPackage(PKG_PRIME, "Prime Video");
 
             case "app_playstore":
             case "launch_playstore":
-                return launchAppPackage("com.android.vending", "Google Play Store");
+                return launchAppPackage(PKG_PLAYSTORE, "Google Play Store");
 
             case "app_raiplay":
             case "launch_raiplay":
-                return launchAppPackage("it.rainet.android.tv", "RaiPlay");
+                return launchAppPackage(PKG_RAIPLAY, "RaiPlay");
 
             case "app_mediaset":
             case "launch_mediaset":
-                return launchAppPackage("it.mediaset.infinity.tv", "Mediaset Infinity");
+                return launchAppPackage(PKG_MEDIASET, "Mediaset Infinity");
 
             case "app_browser":
             case "launch_browser":
-                return launchAppPackage("com.phlox.tvwebbrowser", "TV Bro");
+                return launchAppPackage(PKG_BROWSER_TVBRO, "TV Bro");
 
             case "diagnostics_sample":
                 LocalDiagnosticsManager.getInstance(context).triggerManualSample("user_command");
@@ -277,7 +286,7 @@ public class TvController {
                 context.startActivity(intent);
                 return new CommandResult(true, "Avvio " + appName);
             }
-            return new CommandResult(false, appName + " non risulta installato sulla TV", true);
+            return new CommandResult(false, appName + " non risulta installato sulla TV (" + pkg + ")", true);
         } catch (Exception e) {
             return new CommandResult(false, "Errore avvio " + appName + ": " + e.getMessage());
         }

@@ -14,4 +14,16 @@ public class CommandResult {
         this.message = message;
         this.unsupported = unsupported;
     }
+
+    public boolean isSuccess() {
+        return success;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public boolean isUnsupported() {
+        return unsupported;
+    }
 }

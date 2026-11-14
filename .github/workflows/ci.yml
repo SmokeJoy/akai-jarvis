@@ -62,7 +62,7 @@ jobs:
           python3 akai-remote-tests/test_rollback_offline_simulation.py
           echo "SQLite persistence, v5->v6 migration, offline rollback, and budget enforcement verified on real engine."
 
-      - name: 4. Compile and Run Host Java Unit Tests (25 Tests)
+      - name: 4. Compile and Run Host Java Unit Tests (26 Tests)
         run: |
           echo "=== Compiling and Running Java UnitTests ==="
           mkdir -p test_bin
@@ -76,12 +76,13 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/SecurityManager.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/UInputDriver.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/CommandResult.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/TvAppPackages.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/RestApiRouter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/LocalIntentParser.java \
             akai-remote-tests/UnitTests.java
 
           java -cp test_bin it.akai.customremote.UnitTests
-          echo "All 25 Java unit tests passed with 100% success."
+          echo "All 26 Java unit tests passed with 100% success."
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |

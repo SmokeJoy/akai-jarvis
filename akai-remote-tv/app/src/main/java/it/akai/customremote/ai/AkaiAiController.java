@@ -24,15 +24,18 @@ public class AkaiAiController {
     private static AkaiAiController sInstance = null;
 
     // Profilo vincolante STRICT_LOCAL_ONLY (PR #1 Milestone M1):
-    // Impedisce rigorosamente qualsiasi socket/chiamata verso provider cloud o TTS esterni
-    private static volatile boolean sStrictLocalOnly = true;
+    // Policy immutabile nel profilo di produzione TV: impedisce qualsiasi socket/chiamata verso cloud o TTS esterni
+    private static final boolean STRICT_LOCAL_ONLY_POLICY = true;
 
     public static boolean isStrictLocalOnly() {
-        return sStrictLocalOnly;
+        return STRICT_LOCAL_ONLY_POLICY;
     }
 
     public static void setStrictLocalOnly(boolean strictLocalOnly) {
-        sStrictLocalOnly = strictLocalOnly;
+        if (!strictLocalOnly) {
+            Log.e(TAG, "Violazione di sicurezza: disattivazione runtime di STRICT_LOCAL_ONLY inibita nel profilo TV.");
+            throw new UnsupportedOperationException("STRICT_LOCAL_ONLY policy is immutable in production local profile");
+        }
     }
 
     public static org.json.JSONArray getSupportedCatalog() {
@@ -194,9 +197,9 @@ public class AkaiAiController {
         String planWarning = null;
 
         // Profilo vincolante STRICT_LOCAL_ONLY (PR #1 Milestone M1):
-        // Se attivo (default), inibisci qualsiasi invocazione cloud/esterna e usa unicamente
+        // Inibisce qualsiasi invocazione cloud/esterna e usa unicamente
         // il Local UI Graph Planner deterministico. Se non trova nodi, fail-closed immediato.
-        if (sStrictLocalOnly) {
+        if (isStrictLocalOnly()) {
             long elapsed = System.currentTimeMillis() - startTime;
             DiscoveryPlan plan = planLocalDiscovery(query, initialSnap);
             if (plan != null) {
@@ -394,15 +397,13 @@ public class AkaiAiController {
             result.put("latency_ms", elapsed);
         } catch (Exception ignored) {}
 
-        // 1. Voce TV: Pronuncia attraverso altoparlanti se richiesto (inibito se STRICT_LOCAL_ONLY per evitare chiamate cloud esterne)
+        // 1. Voce TV: Pronuncia attraverso altoparlanti se richiesto (utilizza TTS locale offline)
         if (speakRequested && replyMsg != null && !replyMsg.trim().isEmpty()) {
-            if (!sStrictLocalOnly) {
-                try {
-                    AkaiSpeechEngine speech = AkaiSpeechEngine.getInstance(context);
-                    speech.speak(replyMsg, true);
-                } catch (Exception e) {
-                    Log.w(TAG, "Speech engine playback notice: " + e.getMessage());
-                }
+            try {
+                AkaiSpeechEngine speech = AkaiSpeechEngine.getInstance(context);
+                speech.speak(replyMsg, true);
+            } catch (Exception e) {
+                Log.w(TAG, "Speech engine playback notice: " + e.getMessage());
             }
         }
 

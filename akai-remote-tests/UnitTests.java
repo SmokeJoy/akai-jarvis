@@ -109,7 +109,7 @@ public class UnitTests {
                 case "input_hdmi3": return new CommandResult(true, "HDMI 3");
                 case "input_source": return new CommandResult(true, "Selezione Ingressi");
 
-                // App Launch Shortcuts
+                // App Launch Shortcuts (allineati a TvAppPackages e inventario TV AKAI)
                 case "app_youtube":
                 case "launch_youtube": return new CommandResult(true, "Avvio YouTube TV");
                 case "app_netflix":
@@ -123,7 +123,9 @@ public class UnitTests {
                 case "app_mediaset":
                 case "launch_mediaset": return new CommandResult(true, "Avvio Mediaset Infinity");
                 case "app_browser":
-                case "launch_browser": return new CommandResult(true, "Avvio TV Bro");
+                case "launch_browser":
+                    // Simulazione TV reale: TV Bro (com.phlox.tvwebbrowser) non è ancora installato sul dispositivo
+                    return new CommandResult(false, "TV Bro non risulta installato sulla TV (" + TvAppPackages.PKG_BROWSER_TVBRO + ")", true);
 
                 default:
                     if (action.startsWith("tune_channel_")) {
@@ -133,7 +135,12 @@ public class UnitTests {
                         return new CommandResult(true, "Volume impostato a " + action.substring(11));
                     }
                     if (action.startsWith("launch_")) {
-                        return new CommandResult(true, "Avvio app " + action.substring(7));
+                        String pkg = action.substring(7);
+                        if (TvAppPackages.isCensusedInstalled(pkg)) {
+                            return new CommandResult(true, "Avvio app " + pkg);
+                        } else {
+                            return new CommandResult(false, "Applicazione non installata sulla TV (" + pkg + ")", true);
+                        }
                     }
                     return new CommandResult(false, "Comando non riconosciuto: " + action, true);
             }
@@ -164,6 +171,9 @@ public class UnitTests {
         }
 
         public void setStrictLocalOnly(boolean localOnly) {
+            if (!localOnly) {
+                throw new UnsupportedOperationException("STRICT_LOCAL_ONLY policy is immutable in production local profile");
+            }
             this.strictLocalOnly = localOnly;
         }
 
@@ -173,36 +183,56 @@ public class UnitTests {
             JSONObject res = new JSONObject();
             try {
                 if (parsed.matched) {
+                    boolean allActionsSucceeded = true;
+                    String failureReason = null;
                     if (parsed.actions != null) {
                         for (int i = 0; i < parsed.actions.length(); i++) {
                             JSONObject act = parsed.actions.optJSONObject(i);
                             if (act != null) {
                                 String type = act.optString("type", "");
+                                CommandResult cmdRes = null;
                                 if ("command".equals(type) || "press_key".equals(type)) {
                                     String a = act.optString("action", act.optString("key", ""));
-                                    commandHandler.executeCommand(a);
+                                    cmdRes = commandHandler.executeCommand(a);
                                 } else if ("open_app".equals(type) || "launch_app".equals(type)) {
                                     String pkg = act.optString("pkg", act.optString("package", ""));
-                                    commandHandler.executeCommand("launch_" + pkg);
+                                    cmdRes = commandHandler.executeCommand("launch_" + pkg);
                                 } else if ("tune_channel".equals(type)) {
                                     int ch = act.optInt("number", 1);
-                                    commandHandler.executeCommand("tune_channel_" + ch);
+                                    cmdRes = commandHandler.executeCommand("tune_channel_" + ch);
                                 } else if ("volume_set".equals(type)) {
                                     int lvl = act.optInt("level", 15);
-                                    commandHandler.executeCommand("volume_set_" + lvl);
+                                    cmdRes = commandHandler.executeCommand("volume_set_" + lvl);
+                                }
+                                if (cmdRes != null && !cmdRes.isSuccess()) {
+                                    allActionsSucceeded = false;
+                                    failureReason = cmdRes.getMessage();
+                                    break;
                                 }
                             }
                         }
                     }
-                    res.put("success", true);
-                    res.put("matched", true);
-                    res.put("intent_key", parsed.intentKey);
-                    res.put("reply", parsed.responseMessage);
-                    res.put("source", parsed.source);
-                    res.put("tokens", 0);
-                    res.put("cost_eur", 0.0);
-                    res.put("strict_local_only", strictLocalOnly);
-                    res.put("verified", true);
+                    if (allActionsSucceeded) {
+                        res.put("success", true);
+                        res.put("matched", true);
+                        res.put("intent_key", parsed.intentKey);
+                        res.put("reply", parsed.responseMessage);
+                        res.put("source", parsed.source);
+                        res.put("tokens", 0);
+                        res.put("cost_eur", 0.0);
+                        res.put("strict_local_only", strictLocalOnly);
+                        res.put("verified", true);
+                    } else {
+                        res.put("success", false);
+                        res.put("matched", true);
+                        res.put("status", "ACTION_EXECUTION_FAILED");
+                        res.put("reply", "Errore durante l'esecuzione del comando: " + failureReason);
+                        res.put("source", parsed.source);
+                        res.put("tokens", 0);
+                        res.put("cost_eur", 0.0);
+                        res.put("strict_local_only", strictLocalOnly);
+                        res.put("verified", false);
+                    }
                 } else {
                     res.put("success", false);
                     res.put("matched", false);
@@ -705,7 +735,6 @@ public class UnitTests {
         catalogQueriesToExpectedActions.put("apri youtube", "launch_youtube");
         catalogQueriesToExpectedActions.put("avvia raiplay", "launch_raiplay");
         catalogQueriesToExpectedActions.put("apri mediaset", "launch_mediaset");
-        catalogQueriesToExpectedActions.put("apri browser", "launch_browser");
 
         boolean allCatalogActionsExecuted = true;
         for (Map.Entry<String, String> entry : catalogQueriesToExpectedActions.entrySet()) {
@@ -720,6 +749,16 @@ public class UnitTests {
                 break;
             }
         }
+
+        // Test esecuzione app NON ancora installata: 'apri browser' (TV Bro com.phlox.tvwebbrowser non presente a bordo)
+        // Deve ritornare HTTP 400 con success=false e ACTION_EXECUTION_FAILED, verificando che il fallimento non venga mascherato
+        cmdHandler.lastExecutedAction = null;
+        JSONObject reqBrowser = new JSONObject().put("query", "apri browser");
+        MockHttpResponse rBrowser = dispatch(router, "POST", "/api/ai/ask", authHeaders, reqBrowser.toString(), "192.168.1.10");
+        boolean okBrowserRejected = (rBrowser.statusCode == 400) && (rBrowser.json != null) &&
+                                    !rBrowser.json.optBoolean("success") &&
+                                    "ACTION_EXECUTION_FAILED".equals(rBrowser.json.optString("status")) &&
+                                    rBrowser.json.optString("reply").contains("TV Bro non risulta installato");
 
         // Richiesta sconosciuta via REST -> HTTP 400 con FAIL_CLOSED_UNSUPPORTED
         JSONObject reqUnknown = new JSONObject().put("query", "parlami della Divina Commedia");
@@ -738,11 +777,11 @@ public class UnitTests {
         MockHttpResponse rAiWan = dispatch(router, "POST", "/api/ai/ask", authHeaders, reqVolSample.toString(), "8.8.8.8");
         boolean okAiWan = (rAiWan.statusCode == 403);
 
-        if (allCatalogActionsExecuted && aiUnknownRejected && okAiNoAuth && okAiWan) {
-            System.out.println("[PASS] Test 20 (PR-01 M1): Router REST /api/ai/ask end-to-end verificato: esecuzione completa di 25 comandi TV (D-pad, HDMI 1/2/3, canali DTV, volume, app), fail-closed 400, auth 401 e LAN 403");
+        if (allCatalogActionsExecuted && okBrowserRejected && aiUnknownRejected && okAiNoAuth && okAiWan) {
+            System.out.println("[PASS] Test 20 (PR-01 M1): Router REST /api/ai/ask contratto mock/dispatch verificato per catalogo comandi TV (D-pad, HDMI 1/2/3, canali DTV, volume, app censite), gestione errore su app non installata (TV Bro -> HTTP 400), fail-closed 400 su query sconosciuta, auth 401 e LAN 403");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 20: Fallimento endpoint /api/ai/ask (allCatalogActionsExecuted=" + allCatalogActionsExecuted + ", aiUnknownRejected=" + aiUnknownRejected + ", okAiNoAuth=" + okAiNoAuth + ", okAiWan=" + okAiWan + ")");
+            System.err.println("[FAIL] Test 20: Fallimento endpoint /api/ai/ask (allCatalogActionsExecuted=" + allCatalogActionsExecuted + ", okBrowserRejected=" + okBrowserRejected + ", aiUnknownRejected=" + aiUnknownRejected + ", okAiNoAuth=" + okAiNoAuth + ", okAiWan=" + okAiWan + ")");
             failed++;
         }
 
@@ -750,12 +789,15 @@ public class UnitTests {
         MockHttpResponse rCatalog = dispatch(router, "GET", "/api/ai/catalog", authHeaders, "", "192.168.1.10");
         boolean okCatalog = (rCatalog.statusCode == 200) && (rCatalog.json != null);
         boolean catalogValid = okCatalog && rCatalog.json.optBoolean("strict_local_only") &&
-                               rCatalog.json.optBoolean("offline_guaranteed") &&
+                               rCatalog.json.optBoolean("local_only_profile") &&
+                               rCatalog.json.optBoolean("cloud_disabled") &&
+                               !rCatalog.json.optBoolean("offline_guaranteed") &&
+                               rCatalog.json.optBoolean("offline_validation_pending") &&
                                rCatalog.json.optJSONArray("supported_commands") != null &&
                                (rCatalog.json.optJSONArray("supported_commands").length() >= 20);
 
         if (catalogValid) {
-            System.out.println("[PASS] Test 21 (PR-01 M1): Endpoint /api/ai/catalog restituisce il catalogo comandi TV locali, confermando strict_local_only=true e offline_guaranteed=true");
+            System.out.println("[PASS] Test 21 (PR-01 M1): Endpoint /api/ai/catalog restituisce il catalogo comandi TV locali, confermando strict_local_only=true, local_only_profile=true, cloud_disabled=true e offline_guaranteed=false (in attesa di collaudo fisico WAN=0 e TTS su TV)");
             passed++;
         } else {
             System.err.println("[FAIL] Test 21: Catalogo comandi locali non valido o incompleto");
@@ -822,6 +864,37 @@ public class UnitTests {
             passed++;
         } else {
             System.err.println("[FAIL] Test 25: Mancato blocco HTTP 403 su impostazione credenziali Azure TTS");
+            failed++;
+        }
+
+        // Test 26 (PR-01 M1): Allineamento 1:1 Package Censiti TV AKAI e Immutabilità Policy STRICT_LOCAL_ONLY
+        boolean pkgRaiPlayOk = "it.rainet.androidtv".equals(TvAppPackages.PKG_RAIPLAY) &&
+                              !"it.rainet.android.tv".equals(TvAppPackages.PKG_RAIPLAY);
+        boolean pkgMediasetOk = "it.mediaset.infinitytv".equals(TvAppPackages.PKG_MEDIASET) &&
+                               !"it.mediaset.infinity.tv".equals(TvAppPackages.PKG_MEDIASET);
+        boolean pkgBrowserOk = "com.phlox.tvwebbrowser".equals(TvAppPackages.PKG_BROWSER_TVBRO);
+        boolean installedAuditOk = TvAppPackages.isCensusedInstalled("it.rainet.androidtv") &&
+                                   TvAppPackages.isCensusedInstalled("it.mediaset.infinitytv") &&
+                                   !TvAppPackages.isCensusedInstalled("com.phlox.tvwebbrowser");
+
+        boolean strictLocalImmutable = aiHandler.isStrictLocalOnly();
+        boolean policyExceptionThrown = false;
+        try {
+            aiHandler.setStrictLocalOnly(false);
+        } catch (UnsupportedOperationException expected) {
+            policyExceptionThrown = true;
+        }
+
+        // Verifica propagazione errori: comando sconosciuto restituisce CommandResult.success == false
+        CommandResult unknownRes = cmdHandler.executeCommand("invalid_unsupported_action_xyz");
+        boolean commandFailurePropagated = (unknownRes != null && !unknownRes.isSuccess());
+
+        if (pkgRaiPlayOk && pkgMediasetOk && pkgBrowserOk && installedAuditOk &&
+            strictLocalImmutable && policyExceptionThrown && commandFailurePropagated) {
+            System.out.println("[PASS] Test 26 (PR-01 M1): Allineamento 1:1 dei package ID censiti su TV AKAI (RaiPlay=" + TvAppPackages.PKG_RAIPLAY + ", Mediaset=" + TvAppPackages.PKG_MEDIASET + "), immutabilità policy STRICT_LOCAL_ONLY (eccezione su disattivazione) e propagazione corretta degli errori di esecuzione comandi");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 26: Fallimento verifica censimento package o immutabilità policy (pkgRaiPlayOk=" + pkgRaiPlayOk + ", pkgMediasetOk=" + pkgMediasetOk + ", installedAuditOk=" + installedAuditOk + ", policyExceptionThrown=" + policyExceptionThrown + ", commandFailurePropagated=" + commandFailurePropagated + ")");
             failed++;
         }
 

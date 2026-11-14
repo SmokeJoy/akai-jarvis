@@ -372,7 +372,10 @@ public class RestApiRouter {
 
             JSONObject out = new JSONObject();
             out.put("strict_local_only", true);
-            out.put("offline_guaranteed", true);
+            out.put("local_only_profile", true);
+            out.put("cloud_disabled", true);
+            out.put("offline_guaranteed", false);
+            out.put("offline_validation_pending", true);
             out.put("supported_commands", aiHandler != null ? aiHandler.getSupportedCatalog() : it.akai.customremote.ai.LocalIntentParser.getSupportedCatalog());
             sendJsonResponse(os, 200, out);
             return true;

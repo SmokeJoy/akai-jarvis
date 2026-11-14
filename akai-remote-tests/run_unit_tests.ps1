@@ -15,11 +15,12 @@ $qrSources = Get-ChildItem -Path (Join-Path $workspace "akai-remote-tv\app\src\m
 $securityMgr = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\SecurityManager.java"
 $uinputSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\UInputDriver.java"
 $commandResultSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\CommandResult.java"
+$tvAppPackagesSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\TvAppPackages.java"
 $routerSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\RestApiRouter.java"
 $localIntentSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\LocalIntentParser.java"
 $unitTestSrc = Join-Path $workspace "akai-remote-tests\UnitTests.java"
 
-$allSources = @() + $mockSources + $qrSources + @($securityMgr, $uinputSrc, $commandResultSrc, $routerSrc, $localIntentSrc, $unitTestSrc)
+$allSources = @() + $mockSources + $qrSources + @($securityMgr, $uinputSrc, $commandResultSrc, $tvAppPackagesSrc, $routerSrc, $localIntentSrc, $unitTestSrc)
 
 Write-Host "Compilazione test unitari per SecurityManager e QR Code..."
 & $javac -encoding UTF-8 -d $testBuildDir $allSources
