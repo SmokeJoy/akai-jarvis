@@ -27,6 +27,8 @@ public class HttpsRebindController {
     private boolean isWorkerRunning = false;
     private final ExecutorService workerExecutor;
     private final boolean ownsExecutor;
+    private final boolean allowPlaintextForTesting;
+    volatile Runnable testHookBeforeIdle = null;
 
     public interface SslContextProvider {
         SSLContext getSslContext(String ip) throws Exception;
@@ -43,16 +45,23 @@ public class HttpsRebindController {
     private Thread acceptorThread = null;
     private volatile boolean isRunning = true;
 
+    // Costruttore di produzione: impone rigidamente TLS (ZERO bind in chiaro sulla porta HTTPS)
     public HttpsRebindController(int port, SslContextProvider sslProvider, ListenerCallback callback) {
-        this(port, sslProvider, callback, Executors.newSingleThreadExecutor(), true);
+        this(port, sslProvider, callback, Executors.newSingleThreadExecutor(), true, false);
     }
 
     public HttpsRebindController(int port, SslContextProvider sslProvider, ListenerCallback callback, ExecutorService executor, boolean ownsExecutor) {
+        this(port, sslProvider, callback, executor, ownsExecutor, false);
+    }
+
+    // Costruttore per test host con flag esplicito per simulazioni mock di collisione porta TCP
+    public HttpsRebindController(int port, SslContextProvider sslProvider, ListenerCallback callback, ExecutorService executor, boolean ownsExecutor, boolean allowPlaintextForTesting) {
         this.port = port;
         this.sslProvider = sslProvider;
         this.callback = callback;
         this.workerExecutor = executor;
         this.ownsExecutor = ownsExecutor;
+        this.allowPlaintextForTesting = allowPlaintextForTesting;
     }
 
     public int getPort() {
@@ -91,7 +100,22 @@ public class HttpsRebindController {
         ServerSocket newServer = null;
         try {
             SSLContext sslContext = (sslProvider != null) ? sslProvider.getSslContext(ip) : null;
+            if (sslContext == null && !allowPlaintextForTesting) {
+                // FAIL-CLOSED: In produzione è severamente vietato aprire socket plaintext sulla porta HTTPS (8443)
+                activeSocket = null;
+                if (callback != null) {
+                    callback.onServerDegraded("SSLContext non disponibile per IP " + ip + ". Rifiuto bind plaintext.");
+                }
+                return false;
+            }
             SSLServerSocketFactory factory = (sslContext != null) ? sslContext.getServerSocketFactory() : null;
+            if (factory == null && !allowPlaintextForTesting) {
+                activeSocket = null;
+                if (callback != null) {
+                    callback.onServerDegraded("SSLServerSocketFactory non disponibile. Rifiuto bind plaintext.");
+                }
+                return false;
+            }
 
             // 1. Chiusura preventiva del socket precedente per liberare l'endpoint TCP
             if (oldSocket != null && !oldSocket.isClosed()) {
@@ -107,8 +131,10 @@ public class HttpsRebindController {
                 try {
                     if (factory != null) {
                         newServer = factory.createServerSocket();
-                    } else {
+                    } else if (allowPlaintextForTesting) {
                         newServer = new ServerSocket();
+                    } else {
+                        throw new IOException("Nessuna SSLServerSocketFactory valida configurata per porta HTTPS " + port);
                     }
                     newServer.setReuseAddress(true);
                     newServer.bind(new InetSocketAddress(port));
@@ -192,22 +218,28 @@ public class HttpsRebindController {
     private void processIpQueue() {
         while (true) {
             String targetIp;
+            if (testHookBeforeIdle != null) {
+                try { testHookBeforeIdle.run(); } catch (Exception ignored) {}
+            }
             synchronized (ipSyncLock) {
                 targetIp = pendingTargetIp;
+                if (targetIp == null) {
+                    // ATOMICO: azzeramento e transizione a idle avvengono nello stesso blocco sincronizzato
+                    // eliminando la finestra di lost wakeup tra controllo targetIp==null e isWorkerRunning=false
+                    isWorkerRunning = false;
+                    break;
+                }
                 pendingTargetIp = null;
             }
 
-            if (targetIp == null) {
-                synchronized (ipSyncLock) {
-                    isWorkerRunning = false;
-                }
-                break;
-            }
-
+            boolean alreadySynced = false;
             synchronized (ipSyncLock) {
                 if (targetIp.equals(currentServerIp) && isReady()) {
-                    continue;
+                    alreadySynced = true;
                 }
+            }
+            if (alreadySynced) {
+                continue;
             }
 
             boolean reloaded = reloadListenerForIp(targetIp);

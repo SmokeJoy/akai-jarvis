@@ -188,7 +188,7 @@ public class RemoteServerService extends Service {
                 @Override
                 public SSLContext getSslContext(String ip) throws Exception {
                     TlsCertificateManager.getInstance().getOrGenerateTlsInfo(RemoteServerService.this, ip);
-                    return createSSLContext();
+                    return createSSLContext(ip);
                 }
             },
             new HttpsRebindController.ListenerCallback() {
@@ -374,11 +374,12 @@ public class RemoteServerService extends Service {
             .build();
     }
 
-    private SSLContext createSSLContext() {
+    private SSLContext createSSLContext(String targetIp) {
+        String ipForSan = (targetIp != null && !targetIp.trim().isEmpty()) ? targetIp.trim() : getLocalIpAddress();
         try {
-            SSLContext ctx = TlsCertificateManager.getInstance().createSSLContext(this, getLocalIpAddress());
+            SSLContext ctx = TlsCertificateManager.getInstance().createSSLContext(this, ipForSan);
             if (ctx != null) {
-                Log.i(TAG, "SSLContext inizializzato con successo da TlsCertificateManager (M2 SAN & Local CA).");
+                Log.i(TAG, "SSLContext inizializzato con successo da TlsCertificateManager (M2 SAN & Local CA per " + ipForSan + ").");
                 return ctx;
             }
         } catch (Exception e) {

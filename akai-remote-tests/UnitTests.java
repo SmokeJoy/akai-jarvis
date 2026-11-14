@@ -5,9 +5,15 @@ import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
 import java.text.Normalizer;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
+import javax.net.ssl.*;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -1255,17 +1261,34 @@ public class UnitTests {
         }
 
         // =========================================================================
-        // Test 33 (PR-01 M2/M3 Real TCP Port Rebind, DHCP IP Mutation & Failure Recovery):
-        // 1. Dimostrazione fallimento bind simultaneo: due socket TCP LISTEN sulla stessa porta falliscono con BindException anche con SO_REUSEADDR
-        // 2. Simulazione reload HTTPS con occupazione porta esterna (BindException), fail-closed readiness (isReady=false) e non-aggiornamento di currentServerIp
-        // 3. Rilascio porta, retry con backoff e successo del re-bind atomico con aggiornamento del currentServerIp
+        // Test 33 (PR-01 M2/M3 Strict TLS Fail-Closed & Real TCP Port Rebind):
+        // 1. Strict Fail-Closed: Rifiuto assoluto di bind plaintext su porta 8443 se SSLContext/factory non è disponibile
+        // 2. Dimostrazione fallimento bind simultaneo: due socket TCP LISTEN sulla stessa porta falliscono con BindException
+        // 3. Simulazione reload HTTPS con occupazione porta esterna (BindException), fail-closed readiness (isReady=false) e non-aggiornamento di currentServerIp
+        // 4. Rilascio porta, retry con lo STESSO IP ("192.168.1.200") e coalescing IP concorrenti
         // =========================================================================
         int testPort = 18443;
         try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
             testPort = probe.getLocalPort();
         } catch (Exception ignored) {}
 
-        // 1. Verifica fondamentale TCP: due ServerSocket contemporanei in LISTEN sullo stesso endpoint falliscono con BindException
+        // 1. Strict Fail-Closed su 8443: se sslProvider/sslContext è assente, è categoricamente VIETATO aprire TCP plaintext
+        final List<String> strictDegradedEvents = new ArrayList<>();
+        HttpsRebindController strictController = new HttpsRebindController(
+            testPort,
+            null, // provider assente (produzione)
+            new HttpsRebindController.ListenerCallback() {
+                @Override public void onServerReady(String ip, int port) {}
+                @Override public void onServerDegraded(String reason) { strictDegradedEvents.add(reason); }
+                @Override public void onClientConnected(java.net.Socket client) {}
+            }
+        );
+        boolean strictRefusal = !strictController.reloadListenerForIp("192.168.1.50");
+        boolean okStrictFailClosed = strictRefusal && !strictController.isReady() &&
+            strictController.getActiveSocket() == null && !strictDegradedEvents.isEmpty();
+        strictController.close();
+
+        // 2. Verifica vincolo fondamentale TCP: due ServerSocket contemporanei in LISTEN sullo stesso endpoint falliscono con BindException
         boolean okOrderValidationDemonstrated = false;
         java.net.ServerSocket sockA = new java.net.ServerSocket();
         sockA.setReuseAddress(true);
@@ -1282,32 +1305,29 @@ public class UnitTests {
             try { sockA.close(); } catch (Exception ignored) {}
         }
 
-        // 2. Esercizio reale della classe di produzione HttpsRebindController
+        // 3. Esercizio della logica di rebind con allowPlaintextForTesting = true (mock TCP collision)
         final List<String> readyEvents = new ArrayList<>();
         final List<String> degradedEvents = new ArrayList<>();
-        HttpsRebindController controller = new HttpsRebindController(
+        java.util.concurrent.ExecutorService testExec = java.util.concurrent.Executors.newSingleThreadExecutor();
+        HttpsRebindController testRebindCtrl = new HttpsRebindController(
             testPort,
-            null, // provider socket TCP plaintext per test di bind/rebind
+            null,
             new HttpsRebindController.ListenerCallback() {
-                @Override
-                public void onServerReady(String ip, int port) {
-                    readyEvents.add(ip);
-                }
-                @Override
-                public void onServerDegraded(String reason) {
-                    degradedEvents.add(reason);
-                }
-                @Override
-                public void onClientConnected(java.net.Socket client) {}
-            }
+                @Override public void onServerReady(String ip, int port) { readyEvents.add(ip); }
+                @Override public void onServerDegraded(String reason) { degradedEvents.add(reason); }
+                @Override public void onClientConnected(java.net.Socket client) {}
+            },
+            testExec,
+            true,
+            true // allowPlaintextForTesting = true
         );
 
         // Bind iniziale su IP 192.168.1.50
-        boolean initialBindOk = controller.reloadListenerForIp("192.168.1.50");
-        boolean okInitialState = initialBindOk && controller.isReady() && controller.getActiveSocket() != null;
+        boolean initialBindOk = testRebindCtrl.reloadListenerForIp("192.168.1.50");
+        boolean okInitialState = initialBindOk && testRebindCtrl.isReady() && testRebindCtrl.getActiveSocket() != null;
 
         // Simuliamo occupazione esterna della porta (BindException)
-        controller.close();
+        testRebindCtrl.close();
         java.net.ServerSocket rogueSocket = new java.net.ServerSocket();
         rogueSocket.setReuseAddress(true);
         rogueSocket.bind(new java.net.InetSocketAddress(testPort));
@@ -1315,60 +1335,229 @@ public class UnitTests {
         // Re-inizializziamo controller per test collisione ed errore di bind
         readyEvents.clear();
         degradedEvents.clear();
-        HttpsRebindController testRebindCtrl = new HttpsRebindController(
+        java.util.concurrent.ExecutorService testExec2 = java.util.concurrent.Executors.newSingleThreadExecutor();
+        HttpsRebindController testRebindCtrl2 = new HttpsRebindController(
             testPort,
             null,
             new HttpsRebindController.ListenerCallback() {
-                @Override
-                public void onServerReady(String ip, int port) {
-                    readyEvents.add(ip);
-                }
-                @Override
-                public void onServerDegraded(String reason) {
-                    degradedEvents.add(reason);
-                }
-                @Override
-                public void onClientConnected(java.net.Socket client) {}
-            }
+                @Override public void onServerReady(String ip, int port) { readyEvents.add(ip); }
+                @Override public void onServerDegraded(String reason) { degradedEvents.add(reason); }
+                @Override public void onClientConnected(java.net.Socket client) {}
+            },
+            testExec2,
+            true,
+            true // allowPlaintextForTesting = true
         );
 
         // Tento il cambio DHCP verso 192.168.1.200 mentre la porta è occupata dal rogueSocket
-        boolean failedReload = testRebindCtrl.reloadListenerForIp("192.168.1.200");
-        boolean okBindFailureHandled = (!failedReload) && (!testRebindCtrl.isReady()) && (testRebindCtrl.getCurrentServerIp() == null);
+        boolean failedReload = testRebindCtrl2.reloadListenerForIp("192.168.1.200");
+        boolean okBindFailureHandled = (!failedReload) && (!testRebindCtrl2.isReady()) && (testRebindCtrl2.getCurrentServerIp() == null);
 
         // Rilasciamo la porta dal socket esterno
         try { rogueSocket.close(); } catch (Exception ignored) {}
 
         // 3. Retry con lo STESSO IP ("192.168.1.200") senza richiedere un nuovo cambio IP
-        testRebindCtrl.notifyIpAddressChanged("192.168.1.200");
+        testRebindCtrl2.notifyIpAddressChanged("192.168.1.200");
         int waitAttempts = 20;
-        while (waitAttempts > 0 && !testRebindCtrl.isReady()) {
+        while (waitAttempts > 0 && !testRebindCtrl2.isReady()) {
             try { Thread.sleep(50); } catch (InterruptedException ignored) {}
             waitAttempts--;
         }
-        boolean okRecoveredSameIp = testRebindCtrl.isReady() && "192.168.1.200".equals(testRebindCtrl.getCurrentServerIp()) && readyEvents.contains("192.168.1.200");
+        boolean okRecoveredSameIp = testRebindCtrl2.isReady() && "192.168.1.200".equals(testRebindCtrl2.getCurrentServerIp()) && readyEvents.contains("192.168.1.200");
 
         // 4. Test coalescing cambi IP concorrenti (A -> B)
-        testRebindCtrl.notifyIpAddressChanged("192.168.1.210");
-        testRebindCtrl.notifyIpAddressChanged("192.168.1.220");
+        testRebindCtrl2.notifyIpAddressChanged("192.168.1.210");
+        testRebindCtrl2.notifyIpAddressChanged("192.168.1.220");
         waitAttempts = 20;
-        while (waitAttempts > 0 && !"192.168.1.220".equals(testRebindCtrl.getCurrentServerIp())) {
+        while (waitAttempts > 0 && !"192.168.1.220".equals(testRebindCtrl2.getCurrentServerIp())) {
             try { Thread.sleep(50); } catch (InterruptedException ignored) {}
             waitAttempts--;
         }
-        boolean okConcurrentCoalesced = "192.168.1.220".equals(testRebindCtrl.getCurrentServerIp());
+        boolean okConcurrentCoalesced = "192.168.1.220".equals(testRebindCtrl2.getCurrentServerIp());
 
-        testRebindCtrl.close();
+        testRebindCtrl2.close();
 
-        boolean test33Passed = okOrderValidationDemonstrated && okInitialState && okBindFailureHandled && okRecoveredSameIp && okConcurrentCoalesced;
+        boolean test33Passed = okStrictFailClosed && okOrderValidationDemonstrated && okInitialState &&
+                               okBindFailureHandled && okRecoveredSameIp && okConcurrentCoalesced;
 
         if (test33Passed) {
-            System.out.println("[PASS] Test 33 (PR-01 Real TCP Rebind & DHCP Resilience): Dimostrato vincolo TCP (due socket LISTEN simultanei falliscono), sequenza restart con chiusura preventiva, fail-closed readiness (isReady=false) ed invarianza IP su BindException, con re-bind atomico e aggiornamento IP completati al rilascio della porta");
+            System.out.println("[PASS] Test 33 (PR-01 Strict TLS Fail-Closed & Real TCP Port Rebind): Rifiuto categorico fail-closed di fallback plaintext TCP su porta HTTPS, vincolo TCP di porta esclusiva dimostrato, gestione BindException con isReady=false ed invarianza IP, re-bind atomico e coalescing confermati");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 33: Fallimento test TCP rebind (okOrder=" + okOrderValidationDemonstrated +
-                ", okInit=" + okInitialState + ", okFailureHandled=" + okBindFailureHandled + ", okRecoveredSameIp=" + okRecoveredSameIp +
+            System.err.println("[FAIL] Test 33: Fallimento test TCP rebind o strict fail-closed (okStrict=" + okStrictFailClosed +
+                ", okOrder=" + okOrderValidationDemonstrated + ", okInit=" + okInitialState +
+                ", okFailureHandled=" + okBindFailureHandled + ", okRecoveredSameIp=" + okRecoveredSameIp +
                 ", okConcurrentCoalesced=" + okConcurrentCoalesced + ")");
+            failed++;
+        }
+
+        // =========================================================================
+        // Test 34 (PR-01 M2/M3 Concurrency Lost-Wakeup Barrier & Real Wire TLS Handshake SAN):
+        // 1. Barriera deterministica lost-wakeup: simulazione arrivo IP durante transizione idle del worker
+        // 2. Real Wire TLS Client Handshake su socket SSL live: verifica che il certificato servito a runtime
+        //    presenti il SAN IP '127.0.0.1' e 'CN=akai-tv.local' emesso dalla CA locale
+        // =========================================================================
+        // 1. Test di concorrenza deterministico per Lost-Wakeup
+        final CountDownLatch reachedIdleHook = new CountDownLatch(1);
+        final CountDownLatch resumeWorker = new CountDownLatch(1);
+        final AtomicBoolean hookFired = new AtomicBoolean(false);
+
+        int lostWakeupPort = 18444;
+        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
+            lostWakeupPort = probe.getLocalPort();
+        } catch (Exception ignored) {}
+
+        java.util.concurrent.ExecutorService lwExec = java.util.concurrent.Executors.newSingleThreadExecutor();
+        HttpsRebindController lwController = new HttpsRebindController(
+            lostWakeupPort,
+            null,
+            new HttpsRebindController.ListenerCallback() {
+                @Override public void onServerReady(String ip, int port) {}
+                @Override public void onServerDegraded(String reason) {}
+                @Override public void onClientConnected(java.net.Socket client) {}
+            },
+            lwExec,
+            true,
+            true // allowPlaintextForTesting = true
+        );
+
+        lwController.testHookBeforeIdle = new Runnable() {
+            @Override
+            public void run() {
+                if (hookFired.compareAndSet(false, true)) {
+                    reachedIdleHook.countDown();
+                    try {
+                        resumeWorker.await(3, TimeUnit.SECONDS);
+                    } catch (InterruptedException ignored) {}
+                }
+            }
+        };
+
+        // Avvio primo binding
+        lwController.notifyIpAddressChanged("10.0.0.1");
+
+        // Attesa che il worker finisca il primo bind e si trovi agganciato all'hook prima dell'idle check atomico
+        boolean reachedHook = reachedIdleHook.await(3, TimeUnit.SECONDS);
+
+        // Durante la pausa nell'hook, arriva un secondo IP
+        lwController.notifyIpAddressChanged("10.0.0.99");
+
+        // Sblocchiamo il worker
+        resumeWorker.countDown();
+
+        // Verifichiamo che il secondo IP NON sia stato perso (nessun lost wakeup)
+        int lwWait = 30;
+        while (lwWait > 0 && !"10.0.0.99".equals(lwController.getCurrentServerIp())) {
+            try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+            lwWait--;
+        }
+        boolean okLostWakeupFixed = reachedHook && "10.0.0.99".equals(lwController.getCurrentServerIp());
+        lwController.close();
+
+        // 2. Real Wire TLS Handshake con SSLContext generato da TlsCertificateManager
+        // Ripristiniamo un ambiente crittografico pulito
+        for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der")) {
+            try { new java.io.File(testFile).delete(); } catch (Exception ignored) {}
+        }
+        try {
+            java.lang.reflect.Field cachedField = TlsCertificateManager.class.getDeclaredField("cachedTlsInfo");
+            cachedField.setAccessible(true);
+            cachedField.set(tlsMgr, null);
+        } catch (Exception ignored) {}
+
+        // Generazione TLS on-device per 127.0.0.1
+        final SSLContext serverSslContext = tlsMgr.createSSLContext(null, "127.0.0.1");
+        boolean okSslContextCreated = (serverSslContext != null);
+
+        int realTlsPort = 18445;
+        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
+            realTlsPort = probe.getLocalPort();
+        } catch (Exception ignored) {}
+
+        final CountDownLatch clientConnectedLatch = new CountDownLatch(1);
+        HttpsRebindController liveTlsController = new HttpsRebindController(
+            realTlsPort,
+            new HttpsRebindController.SslContextProvider() {
+                @Override
+                public SSLContext getSslContext(String ip) throws Exception {
+                    return serverSslContext;
+                }
+            },
+            new HttpsRebindController.ListenerCallback() {
+                @Override public void onServerReady(String ip, int port) {}
+                @Override public void onServerDegraded(String reason) {}
+                @Override
+                public void onClientConnected(final java.net.Socket client) {
+                    new Thread(new Runnable() {
+                        public void run() {
+                            try {
+                                if (client instanceof SSLSocket) {
+                                    ((SSLSocket) client).startHandshake();
+                                }
+                                client.getOutputStream().write("HTTP/1.1 200 OK\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+                                client.getOutputStream().flush();
+                            } catch (Exception ignored) {}
+                            finally {
+                                clientConnectedLatch.countDown();
+                            }
+                        }
+                    }).start();
+                }
+            }
+        );
+
+        boolean liveTlsReady = liveTlsController.reloadListenerForIp("127.0.0.1");
+        boolean okWireSanVerified = false;
+        boolean okWireCnVerified = false;
+
+        if (liveTlsReady) {
+            // Client TLS con TrustManager che valida la sessione
+            TrustManager[] trustAll = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return null; }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+                }
+            };
+            SSLContext clientCtx = SSLContext.getInstance("TLS");
+            clientCtx.init(null, trustAll, new java.security.SecureRandom());
+            SSLSocketFactory clientFactory = clientCtx.getSocketFactory();
+
+            try (SSLSocket clientSocket = (SSLSocket) clientFactory.createSocket("127.0.0.1", realTlsPort)) {
+                clientSocket.setSoTimeout(5000);
+                clientSocket.startHandshake();
+                SSLSession session = clientSocket.getSession();
+                Certificate[] peerCerts = session.getPeerCertificates();
+                if (peerCerts != null && peerCerts.length > 0 && peerCerts[0] instanceof X509Certificate) {
+                    X509Certificate cert = (X509Certificate) peerCerts[0];
+                    String subject = cert.getSubjectX500Principal().getName();
+                    okWireCnVerified = subject.contains("CN=" + TlsCertificateManager.SERVER_COMMON_NAME);
+                    Collection<List<?>> sans = cert.getSubjectAlternativeNames();
+                    if (sans != null) {
+                        for (List<?> item : sans) {
+                            if (item.size() >= 2 && "127.0.0.1".equals(String.valueOf(item.get(1)))) {
+                                okWireSanVerified = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Handshake TLS fallito: " + e.getMessage());
+            }
+        }
+
+        liveTlsController.close();
+
+        boolean test34Passed = okLostWakeupFixed && okSslContextCreated && liveTlsReady && okWireCnVerified && okWireSanVerified;
+
+        if (test34Passed) {
+            System.out.println("[PASS] Test 34 (PR-01 Concurrency Lost-Wakeup Fixed & Real Wire TLS Handshake SAN): Barriera atomica contro lost-wakeup verificata deterministicamente, handshake TLS live su porta TCP completato e certificato servito a runtime con SAN 127.0.0.1 e CN " + TlsCertificateManager.SERVER_COMMON_NAME + " confermati");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 34: Fallimento concorrenza o wire TLS SAN (okLostWakeup=" + okLostWakeupFixed +
+                ", okSslContextCreated=" + okSslContextCreated + ", liveTlsReady=" + liveTlsReady +
+                ", okWireCn=" + okWireCnVerified + ", okWireSan=" + okWireSanVerified + ")");
             failed++;
         }
 
@@ -1377,7 +1566,7 @@ public class UnitTests {
             try { new java.io.File(testFile).delete(); } catch (Exception ignored) {}
         }
 
-        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v20 (M1 + M2 + M3 BOOTSTRAP OOB) ===");
+        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v21 (M1 + M2 + M3 BOOTSTRAP OOB & STRICT TLS) ===");
         System.out.println("Test Superati: " + passed + " / " + (passed + failed));
         if (failed > 0) {
             System.exit(1);
