@@ -30,7 +30,7 @@ param(
     [string]$Action = "status",
     [string]$ApkPath = $null,
     [string]$BackupDir = ".\backup_tv",
-    [string]$TargetTv = "192.168.1.101",
+    [string]$TargetTv = "192.168.1.8",
     [int]$HttpPort = 8088,
     [int]$HttpsPort = 8443,
     [string]$AuthToken = $null,
@@ -916,7 +916,7 @@ function Restore-TargetApplicationService {
         [string]$AdbExe,
         [string]$TargetAdb,
         [string]$PackageName,
-        [string]$TargetTv = "192.168.1.101",
+        [string]$TargetTv = "192.168.1.8",
         [int]$ExpectedHttpPort = 8088,
         [bool]$UnrootVerified = $true
     )
