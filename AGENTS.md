@@ -27,3 +27,8 @@ Prima di cambiare API Android, UI, SQLite, Keystore, rete, provider LLM, pipelin
 
 ## Progetto ChatGPT «AKAI TV BOOST»
 Le istruzioni pronte da applicare nel progetto ChatGPT sono in **[docs/CHATGPT_PROJECT_AKAI_TV_BOOST.md](docs/CHATGPT_PROJECT_AKAI_TV_BOOST.md)**. Il progetto ChatGPT e il repository GitHub sono sistemi distinti: gli aggiornamenti su GitHub NON cambiano automaticamente le impostazioni della UI del progetto. Per le nuove chat, leggere sempre la fonte canonica e l'issue #4, non soltanto il testo del progetto.
+
+## Decisione approvata 14/11/2026 — JARVIS autoevolutivo, SOLO dopo prima beta
+Leggere **[Roadmap autonomia](docs/AKAI_JARVIS_AUTONOMY_ROADMAP.md)**. Il proprietario ha approvato l'architettura (Skill Engine JSON/SQLite on-TV, Cloud Developer tramite agente LLM + GitHub Actions su branch/PR isolati, Update Manager con firma/backup/rollback), **non** la sua implementazione immediata. No Termux, shell root o compilatori residenti sulla TV; nuove procedure compatibili possono diventare autonome dopo verifica. Nuove APK passano da CI, firma, gate e conferma installazione. L'AI non può fare merge/deploy/flash da sola. Non confondere GitHub Actions con un coding-agent già configurato.
+
+**Delega collaudi:** il proprietario incarica ChatGPT del *GO/NO-GO tecnico* quando le evidenze sono sufficienti. Per la PR #1 (ultimo commit verificato `fd258556c28b42c56cc8dd52282d1b5cb5bfd0a5`, CI 2/2 successful), **GO solo a preflight read-only**, non a installazione immediata. Backup fisico, estrazione dati e installazione richiedono gate e comunicazione esplicita degli effetti; nessun nuovo intervento è già avvenuto. Stato vivo sempre nell'issue #4. Le credenziali, modifiche firmware/merge e chiamate cloud a pagamento non sono comprese.
