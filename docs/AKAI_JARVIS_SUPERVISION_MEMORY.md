@@ -128,3 +128,9 @@ Non esporre credenziali, PIN, SSID, IP privati o dati familiari in repo/commenti
 - **[Regole progetto ChatGPT AKAI TV BOOST](CHATGPT_PROJECT_AKAI_TV_BOOST.md):** testo operativo pronto per le *Istruzioni del progetto* nella UI ChatGPT. La UI del progetto è indipendente da GitHub: non dichiarare sincronizzate impostazioni non modificate.
 - Il file root **[AGENTS.md](../AGENTS.md)** è la regola workspace generale letta da Antigravity secondo la sua documentazione ufficiale; nessun bisogno di duplicare le stesse regole in numerosi file tecnici.
 - Registro vivo dei progressi: [issue #4](https://github.com/SmokeJoy/akai-jarvis/issues/4). Non trasformare l'issue in altra documentazione statica.
+
+## 12. Decisione del 14/11/2026: autoevoluzione POST-BETA e valutazione tecnica dei collaudi
+
+Il proprietario ha APPROVATO la roadmap in **[AKAI_JARVIS_AUTONOMY_ROADMAP.md](AKAI_JARVIS_AUTONOMY_ROADMAP.md)**: Skill Engine Java/JSON/SQLite con validazione e apprendimento zero-token; Cloud Developer esterno con DeepSeek/Kimi + agente orchestratore effettivo + GitHub Actions, patch in branch/PR con CI; Update Manager con versione/firma, backup e rollback. **Non installare Termux/shell/LLM/compilatori residenti sulla TV**, né abilitare auto-merge o update forzati. La roadmap parte **dopo** la prima beta fisica stabile; adesso nessun refactor per funzioni autoevolutive.
+
+Il proprietario delega al **supervisore ChatGPT** la firma del *GO/NO-GO tecnico* del primo test quando i requisiti siano verificati. Al 14/11/2026: PR #1 HEAD `fd258556c28b42c56cc8dd52282d1b5cb5bfd0a5`, Actions push `43633499134` e PR `43633507069` successful **host/mock**. GO preliminare per `preflight` read-only, NO-GO temporaneo per installazione finché non esistono prove di backup fisico coerente SQLite+WAL/APK, compatibilità firma/versione e recupero. Questo documento non attesta un backup/install già svolti, né autorizza firmware/merge/costi AI.
