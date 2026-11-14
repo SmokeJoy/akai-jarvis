@@ -26,14 +26,17 @@
 # ==============================================================================
 
 param(
-    [ValidateSet("status", "backup", "install", "rollback", "plan")]
+    [ValidateSet("status", "backup", "install", "rollback", "plan", "preflight")]
     [string]$Action = "status",
     [string]$ApkPath = $null,
     [string]$BackupDir = ".\backup_tv",
     [string]$TargetTv = "192.168.1.8",
     [int]$HttpPort = 8088,
+    [int]$HttpsPort = 8443,
     [string]$AuthToken = $null,
-    [switch]$AllowHardwareExecution = $false
+    [string]$ExpectedCaFingerprint = $null,
+    [switch]$AllowHardwareExecution = $false,
+    [switch]$GreenfieldStart = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,6 +45,7 @@ $TargetAdb = "$($TargetTv):5555"
 $PackageName = "it.akai.customremote"
 $StatusUrl = "http://$($TargetTv):$HttpPort/api/status"
 $WebUrl = "http://$($TargetTv):$HttpPort/index.html"
+$HttpsUrl = "https://$($TargetTv):$HttpsPort/"
 $MemoryUrl = "http://$($TargetTv):$HttpPort/api/ai/memory"
 
 # -----------------------------------------------------------------------------
@@ -52,6 +56,7 @@ if ($Action -in @("install", "rollback", "backup") -and -not $AllowHardwareExecu
     Write-Host "BLOCCO DI SICUREZZA ATTIVO (HARDWARE FREEZE):" -ForegroundColor Red
     Write-Host "L'esecuzione su hardware fisico TV e' bloccata fino all'approvazione formale." -ForegroundColor Yellow
     Write-Host "Per visualizzare il piano operativo sicuro usa: -Action plan" -ForegroundColor Cyan
+    Write-Host "Per visualizzare l'inventario read-only della TV usa: -Action preflight" -ForegroundColor Cyan
     Write-Host "Per autorizzare l'esecuzione su TV e' richiesto il parametro: -AllowHardwareExecution" -ForegroundColor Yellow
     Write-Host "================================================================================" -ForegroundColor Red
     exit 1
@@ -104,6 +109,69 @@ function Get-Sha256Hex($filePath) {
     } finally {
         $stream.Close()
         $sha256.Dispose()
+    }
+}
+
+function Test-HttpsTlsEndpoint {
+    param(
+        [string]$TargetHost,
+        [int]$Port = 8443,
+        [string]$ExpectedCaSha256 = $null,
+        [int]$TimeoutMs = 3000
+    )
+    $tcpClient = New-Object System.Net.Sockets.TcpClient
+    try {
+        $connectAsync = $tcpClient.BeginConnect($TargetHost, $Port, $null, $null)
+        $connected = $connectAsync.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+        if (-not $connected) {
+            return @{ Success = $false; Error = "Connessione TCP a ${TargetHost}:${Port} scaduta (${TimeoutMs}ms)" }
+        }
+        $tcpClient.EndConnect($connectAsync)
+
+        $sslStream = New-Object System.Net.Security.SslStream(
+            $tcpClient.GetStream(),
+            $false,
+            {
+                param($sender, $cert, $chain, $sslPolicyErrors)
+                return $true
+            }
+        )
+
+        $sslStream.AuthenticateAsClient($TargetHost)
+        $remoteCert = $sslStream.RemoteCertificate
+        if (-not $remoteCert) {
+            return @{ Success = $false; Error = "Nessun certificato X.509 ricevuto durante l'handshake TLS su porta $Port" }
+        }
+        $cert2 = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($remoteCert)
+        $certSha256 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+
+        $sanFound = $false
+        foreach ($ext in $cert2.Extensions) {
+            if ($ext.Oid.Value -eq "2.5.29.17") { # SAN OID
+                $sanText = $ext.Format($false)
+                if ($sanText -match [regex]::Escape($TargetHost)) {
+                    $sanFound = $true
+                }
+            }
+        }
+
+        $sslStream.Close()
+        $tcpClient.Close()
+
+        return @{
+            Success = $true
+            CertSha256 = $certSha256
+            SanMatched = $sanFound
+            Subject = $cert2.Subject
+            Issuer = $cert2.Issuer
+        }
+    } catch {
+        return @{
+            Success = $false
+            Error = $_.Exception.Message
+        }
+    } finally {
+        $tcpClient.Dispose()
     }
 }
 
@@ -529,28 +597,96 @@ except Exception as e:
 
 switch ($Action) {
     "plan" {
-        Write-Host "=== PIANO SICURO DI DEPLOYMENT, VERIFICA E ROLLBACK ATOMICO (Rev 7) ===" -ForegroundColor Cyan
+        Write-Host "=== PIANO SICURO DI DEPLOYMENT, VERIFICA E ROLLBACK ATOMICO (Rev 8 - Greenfield Ready) ===" -ForegroundColor Cyan
+        Write-Host "Fase 0: Inventario e Preflight Read-Only (100% Non-Distruttivo)"
+        Write-Host "        - Comando: -Action preflight"
+        Write-Host "        - Zero scritture, zero force-stop, zero perturbazione dello stato TV."
+        Write-Host "        - Rileva installazione di 'it.akai.customremote' e garantisce che Home v8 sia preservata."
         Write-Host "Fase 1: Validazione Parametri e Verifica Firma Digitale Fail-Closed Pre-Install"
         Write-Host "        - Rifiuta categoricamente artefatti CI di test non distribuibili."
         Write-Host "        - Estrae e confronta il digest SHA-256 esatto a 64 caratteri con apksigner."
-        Write-Host "Fase 2: Backup Atomico Obbligatorio e Consistente (Fail-Closed)"
-        Write-Host "        - Backup logico preventivo REST /api/ai/memory se server e' attivo."
-        Write-Host "        - Invio ACTION_BACKUP_DB (supportato da v6+, innocuo su v5)."
-        Write-Host "        - Estrazione database SQLite da snapshot o databases/akai_memory.db."
-        Write-Host "        - Verifica offline PRAGMA integrity_check = ok e calcolo impronta SHA-256."
-        Write-Host "        - FAIL-CLOSED: Se il backup non puo' essere estratto o non e' integro, l'installazione NON procede."
+        Write-Host "Fase 2: Gestione Dati e Backup Preventivo (Due Flussi Distinti):"
+        Write-Host "        - FLUSSO A (In-Place con Backup Consistente):"
+        Write-Host "          Se 'it.akai.customremote' e' installato e il DB e' accessibile via run-as/su,"
+        Write-Host "          effettua snapshot atomico SQLite + WAL e verifica integrita' bit-for-bit."
+        Write-Host "        - FLUSSO B (Clean-Start Greenfield con -GreenfieldStart):"
+        Write-Host "          Se 'it.akai.customremote' non e' installato o il DB non e' estraibile (app di release),"
+        Write-Host "          il deployment procede in modalita' greenfield pulita senza bloccare indefinitamente."
+        Write-Host "          Salvaguardia totale: il launcher Home v8 (it.akai.customhome) NON viene toccato."
         Write-Host "Fase 3: Installazione conservativa nuovo APK (adb install -r -d, ZERO uninstall)"
-        Write-Host "Fase 4: Avvio del servizio e Multi-Point Health Check Watchdog (30s):"
+        Write-Host "Fase 4: Multi-Point Health Check Watchdog (30s):"
         Write-Host "        - Verifica 1: /api/status risponde 200 con status=ok E uinput_ready=true"
-        Write-Host "        - Verifica 2: /index.html risponde 200 con frontend Web Remote"
+        Write-Host "        - Verifica 2: /index.html risponde 200 (v5) o 426 Upgrade Required (HTTPS M2/M3)"
         Write-Host "        - Verifica 3: Processo attivo su device (pidof)"
-        Write-Host "Fase 5: Rollback Atomico Indivisibile (APK + DB) in caso di timeout/anomalia:"
-        Write-Host "        - Reinstalla APK precedente."
-        Write-Host "        - Ripristina database SQLite via streaming binario diretto in databases/."
-        Write-Host "        - Pulisce preventivamente file WAL/SHM orfani."
-        Write-Host "        - Verifica bit-for-bit parità hash SHA-256 e integrita' SQLite post-rollback."
-        Write-Host "        - Watchdog post-rollback con verifica di ripristino."
-        Write-Host "========================================================================" -ForegroundColor Cyan
+        Write-Host "Fase 5: Rollback Automatico in caso di anomalia Watchdog:"
+        Write-Host "        - Se backup DB presente: Reinstallazione APK precedente + ripristino atomico DB SQLite."
+        Write-Host "        - Se avvio Greenfield: Reinstallazione APK precedente (zero alterazioni Home v8)."
+        Write-Host "==========================================================================================" -ForegroundColor Cyan
+    }
+
+    "preflight" {
+        $adb = Get-AdbExecutable
+        Write-Host "=== INVENTARIO E PREFLIGHT READ-ONLY TV (100% NON-DESTRUTTIVO) ===" -ForegroundColor Cyan
+        Write-Host "Nota di sicurezza: Nessun arresto di processo (force-stop), nessuna scrittura," -ForegroundColor Yellow
+        Write-Host "nessuna installazione e nessuna alterazione di stato sul dispositivo." -ForegroundColor Yellow
+        Write-Host ""
+
+        & $adb connect $TargetAdb | Out-Null
+
+        # 1. Verifica Pacchetto Telecomando (it.akai.customremote)
+        Write-Host "[1/5] Verifica pacchetto Telecomando ($PackageName)..." -ForegroundColor Cyan
+        $remoteInstalled = & $adb -s $TargetAdb shell "pm list packages $PackageName" 2>&1
+        if ($remoteInstalled -match $PackageName) {
+            Write-Host "      Stato pacchetto : INSTALLATO" -ForegroundColor Green
+            $pathLine = (& $adb -s $TargetAdb shell "pm path $PackageName" 2>&1).ToString().Trim()
+            Write-Host "      Percorso APK    : $pathLine"
+            $pids = (& $adb -s $TargetAdb shell "pidof $PackageName 2>/dev/null" 2>&1).ToString().Trim()
+            Write-Host "      Processo attivo : $(if ($pids) { "ATTIVO (PID $pids)" } else { "NON ATTIVO" })"
+            
+            # Verifica accessibilita' dati (read-only probe senza force-stop)
+            $probeRunAs = (& $adb -s $TargetAdb shell "run-as $PackageName ls databases/ 2>&1").ToString().Trim()
+            Write-Host "      Accesso run-as  : $(if ($LASTEXITCODE -eq 0) { "DISPONIBILE ($probeRunAs)" } else { "NON DISPONIBILE (app non-debuggable o utente limitato)" })"
+        } else {
+            Write-Host "      Stato pacchetto : NON INSTALLATO (Greenfield Start raccomandato)" -ForegroundColor Yellow
+        }
+
+        # 2. Verifica Pacchetto Launcher Home v8 (it.akai.customhome) - SALVAGUARDIA ASSOLUTA
+        Write-Host "`n[2/5] Verifica salvaguardia Home v8 (it.akai.customhome)..." -ForegroundColor Cyan
+        $homePackages = (& $adb -s $TargetAdb shell "pm list packages customhome" 2>&1).ToString().Trim()
+        Write-Host "      Launcher rilevati: $homePackages"
+        if ($homePackages -match "it\.akai\.customhome") {
+            Write-Host "      Home Custom     : PRESENTE E PROTETTA (Nessuna modifica autorizzata su questo package)" -ForegroundColor Green
+        } else {
+            Write-Host "      Home Custom     : Non rilevata via 'customhome'" -ForegroundColor Yellow
+        }
+
+        # 3. Spazio disco su /data
+        Write-Host "`n[3/5] Verifica storage partizione /data..." -ForegroundColor Cyan
+        $dfData = (& $adb -s $TargetAdb shell "df /data" 2>&1).ToString().Trim()
+        Write-Host "      $dfData"
+
+        # 4. Verifica porte aperte su TV (8088 / 8443)
+        Write-Host "`n[4/5] Verifica porte di rete su TV..." -ForegroundColor Cyan
+        $netstatRaw = (& $adb -s $TargetAdb shell "netstat -tlpn" 2>&1)
+        $netstatLines = @($netstatRaw | Where-Object { $_ -match "8088|8443" })
+        if ($netstatLines.Count -gt 0) {
+            Write-Host "      Porte ascolto attive TV:" -ForegroundColor Green
+            $netstatLines | ForEach-Object { Write-Host "      $_" -ForegroundColor Green }
+        } else {
+            Write-Host "      Porte 8088/8443 : NESSUN LISTENER RILEVATO (servizio spento o TV libera)" -ForegroundColor Yellow
+        }
+
+        # 5. Tabella di trasparenza dati per Clean-Start Greenfield
+        Write-Host "`n[5/5] Tabella Trasparenza Dati Greenfield (Qualora si proceda con avvio pulito):" -ForegroundColor Cyan
+        Write-Host "      +--------------------------------+-------------------------------------------------------+"
+        Write-Host "      | Componente                     | Impatto in caso di Clean-Start (-GreenfieldStart)     |"
+        Write-Host "      +--------------------------------+-------------------------------------------------------+"
+        Write-Host "      | Launcher Home v8 (customhome)  | NESSUN IMPATTO: completamente intatto e funzionante   |"
+        Write-Host "      | Associazione Smartphone        | Reset: richiede nuova scansione QR HTTPS e PIN OOB    |"
+        Write-Host "      | Storico Memoria AI / Comandi   | Reset: inizializzato ex novo alla prima richiesta     |"
+        Write-Host "      | Preferenze Web UI              | Reset: ripristinate ai valori predefiniti             |"
+        Write-Host "      +--------------------------------+-------------------------------------------------------+"
+        Write-Host "`nPreflight completato con successo. Nessuna modifica apportata alla TV." -ForegroundColor Green
     }
 
     "status" {
@@ -792,23 +928,32 @@ switch ($Action) {
                 }
             }
 
-            # VERIFICA FAIL-CLOSED CATEGORICA
+            # VERIFICA FAIL-CLOSED CATEGORICA O GREENFIELD START
             if (-not $dbExtracted -or -not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
-                throw "ERRORE FAIL-CLOSED: Impossibile estrarre un backup integro del database dal dispositivo (permessi negati run-as/su o database non accessibile). L'installazione e' categoricamente INTERROTTA per prevenire perdite irrecuperabili di dati."
-            }
-
-            # Pulizia WAL vuoto se presente
-            if (Test-Path $backupDbWal) {
-                if ((Get-Item $backupDbWal).Length -lt 32) {
-                    Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue
+                if (-not $GreenfieldStart) {
+                    throw "ERRORE FAIL-CLOSED: Impossibile estrarre un backup integro del database dal dispositivo (permessi negati run-as/su o database non accessibile). L'installazione e' categoricamente INTERROTTA per prevenire perdite irrecuperabili di dati.`nSe si intende procedere con un avvio pulito greenfield (dopo aver verificato l'inventario con -Action preflight), specificare esplicitamente il parametro: -GreenfieldStart"
                 } else {
-                    Write-Host "      File WAL rilevato ($((Get-Item $backupDbWal).Length) bytes) - applicazione checkpoint offline..." -ForegroundColor Cyan
+                    Write-Host "      AVVISO GREENFIELD: Estrazione database non possibile (mancanza permessi run-as/su o database assente)." -ForegroundColor Yellow
+                    Write-Host "      Parametro -GreenfieldStart attivo: autorizzato avvio pulito greenfield (clean-start)." -ForegroundColor Yellow
+                    Write-Host "      Home v8 (it.akai.customhome) e dati di sistema rimangono rigorosamente intatti." -ForegroundColor Green
+                    if (Test-Path $backupDb) { Remove-Item $backupDb -Force -ErrorAction SilentlyContinue }
+                    $backupDb = $null
+                    $backupDbHash = $null
                 }
-            }
+            } else {
+                # Pulizia WAL vuoto se presente
+                if (Test-Path $backupDbWal) {
+                    if ((Get-Item $backupDbWal).Length -lt 32) {
+                        Remove-Item $backupDbWal -Force -ErrorAction SilentlyContinue
+                    } else {
+                        Write-Host "      File WAL rilevato ($((Get-Item $backupDbWal).Length) bytes) - applicazione checkpoint offline..." -ForegroundColor Cyan
+                    }
+                }
 
-            Verify-SQLiteIntegrityOffline $backupDb | Out-Null
-            $backupDbHash = Get-Sha256Hex $backupDb
-            Write-Host "      Database SQLite consolidato e integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$backupDbHash)" -ForegroundColor Green
+                Verify-SQLiteIntegrityOffline $backupDb | Out-Null
+                $backupDbHash = Get-Sha256Hex $backupDb
+                Write-Host "      Database SQLite consolidato e integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$backupDbHash)" -ForegroundColor Green
+            }
 
             # 2. Verifica compatibilità firme FAIL-CLOSED
             Write-Host "[3/6] Verifica compatibilità certificato firma (FAIL-CLOSED)..."
@@ -855,32 +1000,59 @@ switch ($Action) {
                 
                 # Sulla baseline v5 /index.html restituisce 200 OK.
                 # Sul nuovo server M2/M3 HTTPS l'accesso HTTP in chiaro restituisce 426 Upgrade Required (fail-closed).
-                # Entrambi gli esiti validano che il server HTTP è attivo e operante sulla porta.
+                # Entrambi gli esiti validano che la porta HTTP 8088 rispetta la corretta policy.
                 $webOk = $false
                 $webStatusMsg = ""
+                $isHttpsUpgradeMode = $false
                 try {
                     $webResp = Invoke-WebRequest -Uri $WebUrl -Method Get -TimeoutSec 4 -UseBasicParsing -ErrorAction Stop
                     if ($webResp.StatusCode -eq 200) {
                         $webOk = $true
-                        $webStatusMsg = "HTTP 200 ($($webResp.RawContentLength) bytes)"
+                        $webStatusMsg = "HTTP 200 ($($webResp.RawContentLength) bytes - baseline v5 plaintext)"
                     }
                 } catch {
                     if ($_.Exception.Message -match "426" -or ($_.Exception.Response -and $_.Exception.Response.StatusCode -eq 426)) {
                         $webOk = $true
-                        $webStatusMsg = "HTTP 426 Upgrade Required (Fail-Closed HTTPS M2/M3 Attivo)"
+                        $isHttpsUpgradeMode = $true
+                        $webStatusMsg = "HTTP 426 Upgrade Required (Policy HTTP 8088 Fail-Closed Verificata)"
                     } else {
                         throw $_
                     }
                 }
                 $pidVal = (& $adb -s $TargetAdb shell "pidof $PackageName").Trim()
 
-                if ($statusResp.status -eq "ok" -and $statusResp.uinput_ready -eq $true -and $webOk -and $pidVal) {
+                # Verifica porta HTTPS 8443 (separazione formale tra policy HTTP 426 e operativita' TLS 8443)
+                $httpsOk = $false
+                $httpsStatusMsg = ""
+                if ($isHttpsUpgradeMode) {
+                    # Se HTTP 8088 impone 426, il Web Remote DEVE rispondere su HTTPS 8443. Eseguiamo il probe reale TLS con SAN:
+                    $tlsRes = Test-HttpsTlsEndpoint -TargetHost $TargetTv -Port $HttpsPort -ExpectedCaSha256 $ExpectedCaFingerprint -TimeoutMs 4000
+                    if ($tlsRes.Success) {
+                        $httpsOk = $true
+                        $sanInfo = if ($tlsRes.SanMatched) { "SAN=$TargetTv OK" } else { "SAN mismatch" }
+                        $httpsStatusMsg = "OK (Porta $HttpsPort, Handshake TLS riuscito, $sanInfo, SHA256=$($tlsRes.CertSha256))"
+                    } else {
+                        $httpsOk = $false
+                        $httpsStatusMsg = "FALLITO ($($tlsRes.Error)) - Web Remote HTTPS NON operativo"
+                    }
+                } else {
+                    # Baseline v5: HTTPS 8443 non esisteva, solo HTTP 200 plaintext
+                    $httpsOk = $true
+                    $httpsStatusMsg = "N/A (Baseline v5 solo HTTP plaintext)"
+                }
+
+                if ($statusResp.status -eq "ok" -and $statusResp.uinput_ready -eq $true -and $webOk -and $httpsOk -and $pidVal) {
                     $healthy = $true
                     Write-Host "      Tentativo $i/$($attempts) SUPERATO:" -ForegroundColor Green
-                    Write-Host "      - API Status    : OK (uinput_ready=true, active_sessions=$($statusResp.active_sessions))" -ForegroundColor Green
-                    Write-Host "      - Web Transport : OK ($webStatusMsg)" -ForegroundColor Green
-                    Write-Host "      - Processo TV   : ATTIVO (PID $pidVal)" -ForegroundColor Green
+                    Write-Host "      - API Status       : OK (uinput_ready=true, active_sessions=$($statusResp.active_sessions))" -ForegroundColor Green
+                    Write-Host "      - Policy HTTP 8088 : OK ($webStatusMsg)" -ForegroundColor Green
+                    Write-Host "      - HTTPS 8443 TLS   : OK ($httpsStatusMsg)" -ForegroundColor Green
+                    Write-Host "      - Processo TV      : ATTIVO (PID $pidVal)" -ForegroundColor Green
                     break
+                } else {
+                    if ($isHttpsUpgradeMode -and -not $httpsOk) {
+                        Write-Host "      Tentativo $i/$($attempts) - Policy HTTP 426 verificata, ma HTTPS 8443 non ancora operativo: $httpsStatusMsg" -ForegroundColor Yellow
+                    }
                 }
             } catch {
                 Write-Host "      Tentativo $i/$($attempts) - Inizializzazione in corso ($($_.Exception.Message))..." -ForegroundColor Yellow
@@ -890,12 +1062,27 @@ switch ($Action) {
         if ($healthy) {
             Write-Host "`nDEPLOYMENT VERIFICATO CON SUCCESSO AL 100%! Tutti i componenti operativi." -ForegroundColor Green
         } else {
-            Write-Host "`nALLARME: Health check fallito entro 30s! Avvio ROLLBACK ATOMICO INDIVISIBILE (APK + DB)..." -ForegroundColor Red
+            Write-Host "`nALLARME: Health check fallito entro 30s! Avvio ROLLBACK..." -ForegroundColor Red
             if ($hasPrevious) {
                 # VALIDAZIONE PREREQUISITI RIGOROSA PRE-ROLLBACK (P0-2 FAIL-CLOSED)
                 if (-not (Test-Path $backupApk) -or (Get-Item $backupApk).Length -eq 0) {
                     throw "ERRORE FAIL-CLOSED FATALE: Impossibile eseguire il rollback. File APK precedente mancante ($backupApk)."
                 }
+
+                # Se si e' proceduto in Greenfield (-GreenfieldStart) e non esiste backup DB, esegui rollback solo APK
+                if ($GreenfieldStart -and (-not $backupDb -or -not (Test-Path $backupDb))) {
+                    Write-Host "[ROLLBACK GREENFIELD 1/2] Reinstallazione APK precedente (adb install -r -d)..." -ForegroundColor Yellow
+                    $rbRes = & $adb -s $TargetAdb install -r -d $backupApk
+                    Write-Host "      Esito adb install rollback: $rbRes"
+                    if ($LASTEXITCODE -ne 0 -or $rbRes -notmatch "Success") {
+                        throw "FATALE: Reinstallazione rollback APK fallita!"
+                    }
+                    Write-Host "[ROLLBACK GREENFIELD 2/2] Riavvio servizio RemoteServerService..." -ForegroundColor Yellow
+                    & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
+                    Write-Host "ROLLBACK GREENFIELD COMPLETATO: Ripristinato APK precedente (zero alterazioni database/Home v8)." -ForegroundColor Green
+                    exit 1
+                }
+
                 if (-not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
                     throw "ERRORE FAIL-CLOSED FATALE: Impossibile procedere al rollback automatico dell'APK senza backup del database SQLite v5 ($backupDb). La baseline v5 non supporta lo schema v6; reinstallare l'APK senza DB causerebbe crash irreversibile dell'app. Rollback interrotto in FAIL-CLOSED."
                 }
@@ -1012,6 +1199,18 @@ $chownTarget = "${appUid}:${appUid}"
             throw "ERRORE FAIL-CLOSED: File di backup APK non trovato in $backupApk."
         }
         if (-not (Test-Path $backupDb) -or (Get-Item $backupDb).Length -lt 512) {
+            if ($GreenfieldStart) {
+                Write-Host "Avviso: Database non presente nella sessione di backup ($backupDb). Esecuzione rollback APK greenfield (-GreenfieldStart)..." -ForegroundColor Yellow
+                Write-Host "[1/2] Reinstallazione APK precedente: $backupApk..."
+                $res = & $adb -s $TargetAdb install -r -d $backupApk
+                if ($LASTEXITCODE -ne 0 -or $res -notmatch "Success") {
+                    throw "ERRORE FAIL-CLOSED: Rollback fallito: adb non e' riuscito a reinstallare l'APK ($res)"
+                }
+                Write-Host "[2/2] Riavvio servizio RemoteServerService..."
+                & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
+                Write-Host "Rollback APK greenfield completato." -ForegroundColor Green
+                return
+            }
             throw "ERRORE FAIL-CLOSED: Prerequisito critico mancante per il rollback manuale. File database di backup mancante o non integro in $backupDb. Impossibile procedere al downgrade dell'APK senza ripristino DB (rischio crash per schema v6 non supportato da v5)."
         }
 

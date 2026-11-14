@@ -1911,6 +1911,296 @@ if ($subPassed20 -eq 6) {
     $failed++
 }
 Remove-Item $testDir20 -Recurse -Force -ErrorAction SilentlyContinue
+
+# -----------------------------------------------------------------------------
+# TEST 21: Inventario e Preflight Read-Only (-Action preflight)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 21: Inventario e Preflight Read-Only TV (100% Non-Distruttivo) ---" -ForegroundColor Cyan
+$testDir21 = Join-Path $tempDir "akai_test_preflight_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir21 | Out-Null
+$mockAdb21 = if ($isWin) { Join-Path $testDir21 "adb.cmd" } else { Join-Path $testDir21 "adb" }
+
+if ($isWin) {
+@'
+@echo off
+set "ARGS=%*"
+if "%1"=="connect" exit /b 0
+echo %ARGS% | findstr /i "pm list packages customhome" >nul
+if %ERRORLEVEL% equ 0 (
+    echo package:it.akai.customhome.v8
+    exit /b 0
+)
+echo %ARGS% | findstr /i "pm list packages it.akai.customremote" >nul
+if %ERRORLEVEL% equ 0 (
+    echo package:it.akai.customremote
+    exit /b 0
+)
+echo %ARGS% | findstr /i "pm path" >nul
+if %ERRORLEVEL% equ 0 (
+    echo package:/data/app/it.akai.customremote-1/base.apk
+    exit /b 0
+)
+echo %ARGS% | findstr /i "pidof" >nul
+if %ERRORLEVEL% equ 0 (
+    echo 1234
+    exit /b 0
+)
+echo %ARGS% | findstr /i "run-as.*ls databases" >nul
+if %ERRORLEVEL% equ 0 (
+    echo akai_memory.db
+    exit /b 0
+)
+echo %ARGS% | findstr /i "df /data" >nul
+if %ERRORLEVEL% equ 0 (
+    echo /dev/block/bootdevice/by-name/userdata 5.2G 1.8G 3.4G 35%% /data
+    exit /b 0
+)
+echo %ARGS% | findstr /i "netstat" >nul
+if %ERRORLEVEL% equ 0 (
+    echo tcp 0 0 0.0.0.0:8088 0.0.0.0:* LISTEN 1234/it.akai.customremote
+    echo tcp 0 0 0.0.0.0:8443 0.0.0.0:* LISTEN 1234/it.akai.customremote
+    exit /b 0
+)
+echo %ARGS% | findstr /i "force-stop" >nul
+if %ERRORLEVEL% equ 0 (
+    echo VIOLATION_FORCE_STOP_CALLED >&2
+    exit /b 99
+)
+exit /b 0
+'@ | Out-File -FilePath $mockAdb21 -Encoding ascii
+} else {
+@'
+#!/bin/sh
+ARGS="$*"
+case "$1" in
+  connect) exit 0 ;;
+esac
+case "$ARGS" in
+  *"force-stop"*) echo "VIOLATION_FORCE_STOP_CALLED" >&2; exit 99 ;;
+  *"pm list packages customhome"*) echo "package:it.akai.customhome.v8"; exit 0 ;;
+  *"pm list packages it.akai.customremote"*) echo "package:it.akai.customremote"; exit 0 ;;
+  *"pm path"*) echo "package:/data/app/it.akai.customremote-1/base.apk"; exit 0 ;;
+  *"pidof"*) echo "1234"; exit 0 ;;
+  *"run-as"*"ls databases"*) echo "akai_memory.db"; exit 0 ;;
+  *"df /data"*) echo "/dev/block/bootdevice/by-name/userdata 5.2G 1.8G 3.4G 35% /data"; exit 0 ;;
+  *"netstat"*)
+    echo "tcp 0 0 0.0.0.0:8088 0.0.0.0:* LISTEN 1234/it.akai.customremote"
+    echo "tcp 0 0 0.0.0.0:8443 0.0.0.0:* LISTEN 1234/it.akai.customremote"
+    exit 0
+    ;;
+esac
+exit 0
+'@ | Out-File -FilePath $mockAdb21 -Encoding ascii
+    & chmod +x $mockAdb21
+}
+
+$mockAdbEscaped21 = $mockAdb21.Replace('\', '/')
+$mockDirEscaped21 = $testDir21.Replace('\', '/')
+$cmd21 = @"
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped21'
+`$env:PATH = '$mockDirEscaped21' + [System.IO.Path]::PathSeparator + `$env:PATH
+& '$scriptEscaped' -Action preflight
+"@
+$out21 = & $psExe -ExecutionPolicy Bypass -Command $cmd21 2>&1 | Out-String
+
+if ($out21 -match "INVENTARIO E PREFLIGHT READ-ONLY TV" -and
+    $out21 -match "Home Custom\s+:\s+PRESENTE E PROTETTA" -and
+    $out21 -match "Tabella Trasparenza Dati Greenfield" -and
+    $out21 -notmatch "VIOLATION_FORCE_STOP_CALLED") {
+    Write-Host "[PASS] [TEST AFFERMATIVO / PREFLIGHT READ-ONLY] Test 21: Inventario preflight completato senza alterazioni e senza force-stop" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST AFFERMATIVO / PREFLIGHT READ-ONLY] Test 21: Preflight fallito: $out21" -ForegroundColor Red
+    $failed++
+}
+Remove-Item $testDir21 -Recurse -Force -ErrorAction SilentlyContinue
+
+# -----------------------------------------------------------------------------
+# TEST 22: Greenfield Start con permessi DB negati (-Action install -GreenfieldStart)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 22: Clean-Start Greenfield con permessi negati DB (-GreenfieldStart) ---" -ForegroundColor Cyan
+$testDir22 = Join-Path $tempDir "akai_test_greenfield_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir22 | Out-Null
+
+$testApkOld22 = Join-Path $testDir22 "installed_old.apk"
+$testApkNew22 = Join-Path $testDir22 "candidate_new.apk"
+[System.IO.File]::WriteAllText($testApkOld22, "PK_DUMMY_OLD_APK")
+[System.IO.File]::WriteAllText($testApkNew22, "PK_DUMMY_NEW_APK")
+
+$mockAdbJs22 = Join-Path $testDir22 "mock_adb.js"
+@'
+const fs = require('fs');
+const path = require('path');
+const args = process.argv.slice(2);
+const argStr = args.join(' ');
+const stoppedFile = path.join(__dirname, 'stopped.flag');
+
+if (args[0] === 'connect') process.exit(0);
+if (argStr.includes('pm path')) {
+    console.log('package:/data/app/it.akai.customremote-1/base.apk');
+    process.exit(0);
+}
+if (argStr.includes('pull')) {
+    const dest = args[args.length - 1];
+    fs.writeFileSync(dest, 'PK_DUMMY_OLD_APK');
+    process.exit(0);
+}
+if (argStr.includes('exec-out')) {
+    console.error('run-as: package not debuggable');
+    process.exit(1);
+}
+if (argStr.includes('am force-stop') || argStr.includes('kill -9')) {
+    fs.writeFileSync(stoppedFile, '1');
+    process.exit(0);
+}
+if (argStr.includes('am startservice')) {
+    try { fs.unlinkSync(stoppedFile); } catch(e){}
+    process.exit(0);
+}
+if (argStr.includes('pidof')) {
+    if (fs.existsSync(stoppedFile)) {
+        console.log('PIDOF_CHECK:pids=[]:exit=[1]');
+    } else {
+        console.log('PIDOF_CHECK:pids=[1234]:exit=[0]');
+    }
+    process.exit(0);
+}
+if (argStr.includes('install')) {
+    console.log('Success');
+    process.exit(0);
+}
+if (argStr.includes('dumpsys')) {
+    console.log('userId=10045');
+    process.exit(0);
+}
+process.exit(0);
+'@ | Out-File -FilePath $mockAdbJs22 -Encoding ascii
+
+$mockAdbCmd22 = if ($isWin) { Join-Path $testDir22 "adb.cmd" } else { Join-Path $testDir22 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs22`" %*" | Out-File -FilePath $mockAdbCmd22 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs22`" `"`$@`"" | Out-File -FilePath $mockAdbCmd22 -Encoding ascii
+    & chmod +x $mockAdbCmd22
+}
+
+$mockSignerJs22 = Join-Path $testDir22 "apksigner.js"
+@"
+console.log('Signer #1 certificate SHA-256 digest: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
+process.exit(0);
+"@ | Out-File -FilePath $mockSignerJs22 -Encoding ascii
+
+$mockSignerCmd22 = if ($isWin) { Join-Path $testDir22 "apksigner.cmd" } else { Join-Path $testDir22 "apksigner" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockSignerJs22`" %*" | Out-File -FilePath $mockSignerCmd22 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSignerJs22`" `"`$@`"" | Out-File -FilePath $mockSignerCmd22 -Encoding ascii
+    & chmod +x $mockSignerCmd22
+}
+
+$mockAdbEscaped22 = $mockAdbCmd22.Replace('\', '/')
+$mockSignerEscaped22 = $mockSignerCmd22.Replace('\', '/')
+$mockDirEscaped22 = $testDir22.Replace('\', '/')
+$candApkEscaped22 = $testApkNew22.Replace('\', '/')
+
+# Utilizziamo mock server Node.js HTTP 200 per status e index.html (baseline v5 style)
+$nodeServerScript22 = Join-Path $testDir22 "mock_http_server.js"
+@'
+const http = require('http');
+const server = http.createServer((req, res) => {
+    if (req.url === '/api/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 0 }));
+    } else if (req.url === '/index.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body>Akai Web Remote v5</body></html>');
+    } else {
+        res.writeHead(404);
+        res.end();
+    }
+});
+server.listen(18088, '127.0.0.1');
+'@ | Out-File -FilePath $nodeServerScript22 -Encoding ascii
+
+$srvProc22 = [System.Diagnostics.Process]::Start("$validNode", "`"$nodeServerScript22`"")
+Start-Sleep -Milliseconds 600
+
+$cmd22 = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped22'
+`$env:APKSIGNER_EXECUTABLE = '$mockSignerEscaped22'
+`$env:PATH = '$mockDirEscaped22' + [System.IO.Path]::PathSeparator + `$env:PATH
+`$env:WATCHDOG_ATTEMPTS = '2'
+`$env:WATCHDOG_SLEEP_SEC = '1'
+& '$scriptEscaped' -Action install -ApkPath '$candApkEscaped22' -TargetTv '127.0.0.1' -HttpPort 18088 -AllowHardwareExecution -GreenfieldStart
+"@
+$out22 = & $psExe -ExecutionPolicy Bypass -Command $cmd22 2>&1 | Out-String
+
+try {
+    if ($srvProc22 -and -not $srvProc22.HasExited) { $srvProc22.Kill() }
+} catch {}
+
+if ($out22 -match "AVVISO GREENFIELD: Estrazione database non possibile" -and
+    $out22 -match "Parametro -GreenfieldStart attivo: autorizzato avvio pulito greenfield" -and
+    $out22 -match "DEPLOYMENT VERIFICATO CON SUCCESSO AL 100%") {
+    Write-Host "[PASS] [TEST AFFERMATIVO / GREENFIELD START] Test 22: Greenfield Start eseguito con successo in presenza di DB inaccessibile (zero blocchi fail-closed)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST AFFERMATIVO / GREENFIELD START] Test 22: Greenfield Start fallito: $out22" -ForegroundColor Red
+    $failed++
+}
+Remove-Item $testDir22 -Recurse -Force -ErrorAction SilentlyContinue
+
+# -----------------------------------------------------------------------------
+# TEST 23: Watchdog Port Separation (HTTP 426 Fail-Closed Policy vs HTTPS 8443 TLS Probe)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 23: Watchdog Port Separation (HTTP 426 Policy vs HTTPS 8443 TLS Probe) ---" -ForegroundColor Cyan
+$testDir23 = Join-Path $tempDir "akai_test_watchdog_tls_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir23 | Out-Null
+
+$nodeServerScript23 = Join-Path $testDir23 "mock_426_server.js"
+@'
+const http = require('http');
+// Creiamo un server HTTP sulla porta 18089 che risponde 426 su /index.html e 200 su /api/status
+const httpServer = http.createServer((req, res) => {
+    if (req.url === '/api/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 0 }));
+    } else if (req.url === '/index.html') {
+        res.writeHead(426, { 'Upgrade': 'TLS/1.2, HTTP/1.1', 'Content-Type': 'text/plain' });
+        res.end('Upgrade Required: HTTPS Mandatory on Port 8443');
+    } else {
+        res.writeHead(404);
+        res.end();
+    }
+});
+httpServer.listen(18089, '127.0.0.1');
+'@ | Out-File -FilePath $nodeServerScript23 -Encoding ascii
+
+$srvProc23 = [System.Diagnostics.Process]::Start("$validNode", "`"$nodeServerScript23`"")
+Start-Sleep -Milliseconds 600
+
+# Verifichiamo che quando la porta HTTPS 8443 e' SPENTA (solo HTTP 426 attivo), Test-HttpsTlsEndpoint fallisce deterministico
+$cmd23 = @"
+. '$scriptEscaped' -Action plan | Out-Null
+`$tlsProbe = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port 18443 -TimeoutMs 1500
+Write-Output ('PROBE_SUCCESS=' + `$tlsProbe.Success)
+Write-Output ('PROBE_ERROR=' + `$tlsProbe.Error)
+"@
+$out23 = & $psExe -ExecutionPolicy Bypass -Command $cmd23 2>&1 | Out-String
+
+try {
+    if ($srvProc23 -and -not $srvProc23.HasExited) { $srvProc23.Kill() }
+} catch {}
+
+if ($out23 -match "PROBE_SUCCESS=False" -and $out23 -match "PROBE_ERROR=") {
+    Write-Host "[PASS] [TEST AFFERMATIVO / WATCHDOG PORT SEPARATION] Test 23: Fallimento TLS 8443 rilevato deterministico (HTTP 426 non e' sufficiente da solo)" -ForegroundColor Green
+    $passed++
+} else {
+    Write-Host "[FAIL] [TEST AFFERMATIVO / WATCHDOG PORT SEPARATION] Test 23: Rilevamento TLS fallito: $out23" -ForegroundColor Red
+    $failed++
+}
+Remove-Item $testDir23 -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 
