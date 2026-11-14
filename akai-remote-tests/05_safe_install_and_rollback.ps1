@@ -1062,21 +1062,23 @@ function Test-PackageUpgradeGate {
                 try { $null = $fs.Read($headerBytes, 0, 4) } finally { $fs.Close() }
                 if ($headerBytes[0] -eq 0x50 -and $headerBytes[1] -eq 0x4B) {
                     $apksignerJar = Get-ApkSignerJar
-                    $aapt2Path = $null
+                    $aaptPath = $null
                     if ($apksignerJar) {
                         $buildToolsDir = Split-Path (Split-Path $apksignerJar -Parent) -Parent
-                        foreach ($cand in @("aapt2.exe", "aapt2")) {
+                        foreach ($cand in @("aapt.exe", "aapt", "aapt2.exe", "aapt2")) {
                             $p = Join-Path $buildToolsDir $cand
-                            if (Test-Path $p) { $aapt2Path = $p; break }
+                            if (Test-Path $p) { $aaptPath = $p; break }
                         }
                     }
-                    if (-not $aapt2Path) {
-                        $cmdAapt2 = Get-Command "aapt2" -ErrorAction SilentlyContinue
-                        if ($cmdAapt2) { $aapt2Path = $cmdAapt2.Source }
+                    if (-not $aaptPath) {
+                        foreach ($cmdName in @("aapt", "aapt2")) {
+                            $cmdAapt = Get-Command $cmdName -ErrorAction SilentlyContinue
+                            if ($cmdAapt) { $aaptPath = $cmdAapt.Source; break }
+                        }
                     }
-                    if ($aapt2Path) {
-                        $badgingOut = (& $aapt2Path dump badging $CandidateApkPath 2>&1 | Out-String)
-                        if ($LASTEXITCODE -eq 0 -and $badgingOut -match "package:\s+name='([^']+)'\s+versionCode='(\d+)'") {
+                    if ($aaptPath) {
+                        $badgingOut = (& $aaptPath dump badging $CandidateApkPath 2>&1 | Out-String)
+                        if ($badgingOut -match "package:\s+name='([^']+)'\s+versionCode='(\d+)'") {
                             $candidatePkg = $matches[1]
                             $candidateVersionCode = [int]$matches[2]
                         }
