@@ -129,12 +129,15 @@
                             <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
                         </svg>
                     </button>
-                    <input type="text" id="ai-text-input" class="ai-text-input" placeholder="Oppure scrivi... (es. 'metti Rai 1', 'cosa c'è stasera?')" autocomplete="off">
-                    <button id="btn-ai-send" class="ai-send-btn" title="Invia ad AKAI AI" aria-label="Invia">
+                    <input type="text" id="ai-text-input" class="ai-text-input" placeholder="Comando JARVIS testuale... (es. 'metti Rai 1', 'alza il volume')" autocomplete="off">
+                    <button id="btn-ai-send" class="ai-send-btn" title="Invia comando a JARVIS" aria-label="Invia">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                         </svg>
                     </button>
+                </div>
+                <div class="ai-input-hint">
+                    <small>💬 Fallback comandi offline: esegue comandi locali sulla TV a 0 token (indipendente da microfono e STT cloud)</small>
                 </div>
 
                 <!-- Quick Command Chips -->
@@ -231,7 +234,7 @@
 
                     <!-- TV Smartphone Typing Bar -->
                     <div class="keyboard-input-bar">
-                        <input type="text" id="keyboard-input" placeholder="Digita testo per la TV..." autocomplete="off">
+                        <input type="text" id="keyboard-input" placeholder="Digita caratteri per la TV (es. ricerca a schermo)..." autocomplete="off">
                         <button id="btn-send-text" class="btn-send-text" aria-label="Invia testo a schermo">
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>

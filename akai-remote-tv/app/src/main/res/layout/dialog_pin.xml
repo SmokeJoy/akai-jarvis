@@ -82,16 +82,16 @@
                     android:id="@+id/tv_dialog_url"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="http://192.168.1.8:8088"
+                    android:text="https://127.0.0.1:8443/"
                     android:textColor="#38BDF8"
-                    android:textSize="13sp"
+                    android:textSize="12sp"
                     android:textStyle="bold"
                     android:layout_marginTop="10dp" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Inquadra con la fotocamera"
+                    android:text="Inquadra con la fotocamera (HTTPS)"
                     android:textColor="#94A3B8"
                     android:textSize="11sp"
                     android:layout_marginTop="2dp" />
@@ -160,7 +160,17 @@
                     android:fontFamily="monospace"
                     android:gravity="center"
                     android:visibility="gone"
-                    android:layout_marginBottom="14dp" />
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:id="@+id/tv_ca_bootstrap_hint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Primo accesso? Scarica la Root CA da:\nhttp://127.0.0.1:8088/api/auth/ca.crt"
+                    android:textColor="#F59E0B"
+                    android:textSize="10.5sp"
+                    android:gravity="center"
+                    android:layout_marginBottom="12dp" />
 
                 <!-- Close Button -->
                 <Button

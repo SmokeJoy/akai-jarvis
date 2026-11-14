@@ -96,16 +96,33 @@ public class PinActivity extends Activity {
         int duration = intent.getIntExtra("duration", 120);
         String serverUrl = intent.getStringExtra("serverUrl");
         String caFingerprint = intent.getStringExtra("caFingerprint");
-        if (serverUrl == null || serverUrl.isEmpty()) {
-            serverUrl = "http://192.168.1.8:8088";
+
+        RemoteServerService s = RemoteServerService.getInstance();
+        String ip = (s != null) ? s.getLocalIpAddress() : "127.0.0.1";
+
+        if (serverUrl == null || serverUrl.isEmpty() || serverUrl.startsWith("http://")) {
+            serverUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
+        }
+
+        if (caFingerprint == null || caFingerprint.isEmpty()) {
+            TlsCertificateManager.TlsInfo info = TlsCertificateManager.getInstance().getOrGenerateTlsInfo(this, ip);
+            if (info != null) {
+                caFingerprint = info.caFingerprintSha256;
+            }
         }
 
         TextView tvPin = findViewById(R.id.tv_pin_code);
         final TextView tvCountdown = findViewById(R.id.tv_countdown);
         TextView tvUrl = findViewById(R.id.tv_dialog_url);
         TextView tvCaFp = findViewById(R.id.tv_ca_fingerprint);
+        TextView tvBootstrapHint = findViewById(R.id.tv_ca_bootstrap_hint);
         ImageView ivQr = findViewById(R.id.iv_qr_code);
         btnClose = findViewById(R.id.btn_close_dialog);
+
+        if (tvBootstrapHint != null) {
+            String caUrl = "http://" + ip + ":" + RemoteServerService.HTTP_PORT + "/api/auth/ca.crt";
+            tvBootstrapHint.setText("Primo accesso? Scarica prima la Root CA da:\n" + caUrl);
+        }
 
         if (pin != null && pin.length() >= 6 && tvPin != null) {
             tvPin.setText(pin.substring(0, 3) + " " + pin.substring(3));

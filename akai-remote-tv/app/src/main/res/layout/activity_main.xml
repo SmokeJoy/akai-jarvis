@@ -2,20 +2,21 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0F1015"
+    android:background="#0A0D14"
     android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="28dp"
+        android:padding="24dp"
         android:gravity="center_horizontal">
 
+        <!-- Header -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="AKAI Custom Remote"
+            android:text="AKAI Custom Remote &amp; JARVIS TV"
             android:textColor="#FFFFFF"
             android:textSize="26sp"
             android:textStyle="bold" />
@@ -23,97 +24,265 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Telecomando Locale per iPhone e Android"
+            android:text="Attivazione Sicura Fuori Banda (OOB) su Schermo TV · Funziona a PC Spento"
             android:textColor="#38BDF8"
-            android:textSize="15sp"
+            android:textSize="14sp"
             android:textStyle="bold"
             android:layout_marginTop="4dp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Controllo hardware autonomo (funzionante anche con PC spento)"
-            android:textColor="#94A3B8"
-            android:textSize="13sp"
-            android:layout_marginTop="2dp" />
-
-        <!-- Status Panel -->
+        <!-- Status Summary Bar -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="#181A22"
-            android:padding="22dp"
-            android:layout_marginTop="20dp">
+            android:orientation="horizontal"
+            android:background="#141824"
+            android:padding="12dp"
+            android:layout_marginTop="16dp"
+            android:gravity="center_vertical">
 
             <TextView
                 android:id="@+id/tv_service_status"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="Stato Server: Inizializzazione..."
+                android:layout_weight="1"
+                android:text="Stato Server: In ascolto"
                 android:textColor="#10B981"
-                android:textSize="16sp"
+                android:textSize="13sp"
                 android:textStyle="bold" />
 
             <TextView
-                android:id="@+id/tv_server_url"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Apri su Safari / Chrome: http://192.168.1.8:8088"
-                android:textColor="#38BDF8"
-                android:textSize="18sp"
-                android:textStyle="bold"
-                android:layout_marginTop="10dp" />
-
-            <TextView
                 android:id="@+id/tv_uinput_status"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="Driver Hardware Linux: /dev/uinput attivo"
+                android:layout_weight="1"
+                android:text="Driver /dev/uinput: Attivo"
                 android:textColor="#34D399"
-                android:textSize="14sp"
-                android:layout_marginTop="10dp" />
+                android:textSize="13sp" />
 
             <TextView
                 android:id="@+id/tv_paired_count"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Dispositivi associati: 0"
+                android:text="Sessioni attive: 0"
                 android:textColor="#CBD5E1"
-                android:textSize="14sp"
-                android:layout_marginTop="8dp" />
+                android:textSize="13sp" />
+        </LinearLayout>
 
-            <TextView
-                android:layout_width="wrap_content"
+        <!-- Hidden legacy view for backwards-compatibility -->
+        <TextView
+            android:id="@+id/tv_server_url"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:visibility="gone" />
+
+        <!-- Dual Card Onboarding: Step 1 (CA Bootstrap) & Step 2 (HTTPS JARVIS) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="18dp"
+            android:gravity="center">
+
+            <!-- Card 1: Step 1 - Root CA Bootstrap (HTTP 8088) -->
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="Protezione: PIN a 6 cifre, rate limiting anti-brute force, rete locale LAN"
-                android:textColor="#94A3B8"
-                android:textSize="12sp"
-                android:layout_marginTop="10dp" />
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="#181D2B"
+                android:padding="18dp"
+                android:layout_marginEnd="12dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="PASSO 1: SCARICA ROOT CA (HTTP)"
+                    android:textColor="#F59E0B"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Inquadra con la fotocamera per scaricare il certificato pubblico sulla LAN."
+                    android:textColor="#94A3B8"
+                    android:textSize="11sp"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="12dp" />
+
+                <!-- QR Container -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:background="#FFFFFF"
+                    android:padding="6dp">
+
+                    <ImageView
+                        android:id="@+id/iv_qr_ca"
+                        android:layout_width="140dp"
+                        android:layout_height="140dp"
+                        android:scaleType="fitCenter"
+                        android:contentDescription="QR Code Download Certificato Root CA" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tv_ca_url"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:text="http://127.0.0.1:8088/api/auth/ca.crt"
+                    android:textColor="#38BDF8"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="8dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="IMPRONTA SICUREZZA FUORI BANDA (CONFRONTA SUL TELEFONO):"
+                    android:textColor="#F87171"
+                    android:textSize="9.5sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="10dp" />
+
+                <TextView
+                    android:id="@+id/tv_ca_fingerprint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Calcolo impronta in corso..."
+                    android:textColor="#34D399"
+                    android:textSize="10sp"
+                    android:fontFamily="monospace"
+                    android:background="#0C101A"
+                    android:padding="6dp"
+                    android:layout_marginTop="4dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="• iOS: Scarica profilo &gt; Installa in Impostazioni &gt; Generali &gt; Info &gt; Attendibilità certificati.\n• Android: Impostazioni &gt; Sicurezza &gt; Installa certificato CA."
+                    android:textColor="#64748B"
+                    android:textSize="10sp"
+                    android:layout_marginTop="8dp" />
+            </LinearLayout>
+
+            <!-- Card 2: Step 2 - JARVIS HTTPS & PIN Pairing (HTTPS 8443) -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:background="#181D2B"
+                android:padding="18dp"
+                android:layout_marginStart="12dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="PASSO 2: APRI JARVIS (HTTPS 8443)"
+                    android:textColor="#38BDF8"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Dopo aver abilitato la Root CA, inquadra per aprire il telecomando cifrato."
+                    android:textColor="#94A3B8"
+                    android:textSize="11sp"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="12dp" />
+
+                <!-- QR Container -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:background="#FFFFFF"
+                    android:padding="6dp">
+
+                    <ImageView
+                        android:id="@+id/iv_qr_https"
+                        android:layout_width="140dp"
+                        android:layout_height="140dp"
+                        android:scaleType="fitCenter"
+                        android:contentDescription="QR Code Apertura JARVIS HTTPS" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tv_https_url"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:text="https://127.0.0.1:8443/"
+                    android:textColor="#34D399"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="8dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ASSOCIAZIONE CON TELECOMANDO TV:"
+                    android:textColor="#CBD5E1"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="10dp" />
+
+                <Button
+                    android:id="@+id/btn_show_pin"
+                    android:layout_width="match_parent"
+                    android:layout_height="46dp"
+                    android:text="Mostra Codice PIN di Associazione"
+                    android:textColor="#0A0D14"
+                    android:textStyle="bold"
+                    android:textSize="13sp"
+                    android:background="#38BDF8"
+                    android:focusable="true"
+                    android:layout_marginTop="6dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Genera un PIN a 6 cifre (120s) e apre la schermata a tutto schermo con il codice per associare lo smartphone."
+                    android:textColor="#64748B"
+                    android:textSize="10sp"
+                    android:layout_marginTop="6dp" />
+            </LinearLayout>
 
         </LinearLayout>
 
-        <!-- Action Buttons -->
-        <Button
-            android:id="@+id/btn_show_pin"
-            android:layout_width="320dp"
-            android:layout_height="50dp"
-            android:text="Associa Nuovo Telefono (Mostra QR &amp; PIN)"
-            android:layout_marginTop="24dp" />
+        <!-- System Controls -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="18dp"
+            android:gravity="center">
 
-        <Button
-            android:id="@+id/btn_revoke_all"
-            android:layout_width="320dp"
-            android:layout_height="48dp"
-            android:text="Revoca Tutti i Dispositivi Associati"
-            android:layout_marginTop="12dp" />
+            <Button
+                android:id="@+id/btn_revoke_all"
+                android:layout_width="260dp"
+                android:layout_height="44dp"
+                android:text="Revoca Tutte le Sessioni"
+                android:textColor="#FFFFFF"
+                android:background="#EF4444"
+                android:layout_marginEnd="12dp"
+                android:focusable="true" />
 
-        <Button
-            android:id="@+id/btn_minimize"
-            android:layout_width="320dp"
-            android:layout_height="48dp"
-            android:text="Riduci a Icona e Torna alla Home"
-            android:layout_marginTop="12dp" />
+            <Button
+                android:id="@+id/btn_minimize"
+                android:layout_width="260dp"
+                android:layout_height="44dp"
+                android:text="Riduci a Icona (Torna alla TV)"
+                android:textColor="#E2E8F0"
+                android:background="#334155"
+                android:layout_marginStart="12dp"
+                android:focusable="true" />
+        </LinearLayout>
 
     </LinearLayout>
 </ScrollView>

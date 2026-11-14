@@ -3,18 +3,17 @@ package it.akai.customremote;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.util.Collections;
-import java.util.List;
+import it.akai.customremote.qr.QrBitmapUtil;
 
 public class MainActivity extends Activity {
     private static final String TAG = "AKAI_MainActivity";
@@ -23,6 +22,12 @@ public class MainActivity extends Activity {
     private TextView tvServerUrl;
     private TextView tvUinputStatus;
     private TextView tvPairedCount;
+
+    private TextView tvCaFingerprint;
+    private TextView tvCaUrl;
+    private TextView tvHttpsUrl;
+    private ImageView ivQrCa;
+    private ImageView ivQrHttps;
 
     private Button btnShowPin;
     private Button btnRevokeAll;
@@ -38,6 +43,12 @@ public class MainActivity extends Activity {
         tvServerUrl = findViewById(R.id.tv_server_url);
         tvUinputStatus = findViewById(R.id.tv_uinput_status);
         tvPairedCount = findViewById(R.id.tv_paired_count);
+
+        tvCaFingerprint = findViewById(R.id.tv_ca_fingerprint);
+        tvCaUrl = findViewById(R.id.tv_ca_url);
+        tvHttpsUrl = findViewById(R.id.tv_https_url);
+        ivQrCa = findViewById(R.id.iv_qr_ca);
+        ivQrHttps = findViewById(R.id.iv_qr_https);
 
         btnShowPin = findViewById(R.id.btn_show_pin);
         btnRevokeAll = findViewById(R.id.btn_revoke_all);
@@ -57,14 +68,21 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 RemoteServerService s = RemoteServerService.getInstance();
+                String ip = (s != null) ? s.getLocalIpAddress() : getLocalIpAddress();
+                String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
+                TlsCertificateManager.TlsInfo info = TlsCertificateManager.getInstance().getOrGenerateTlsInfo(MainActivity.this, ip);
+                String caFp = (info != null) ? info.caFingerprintSha256 : null;
+
                 if (s != null && s.getSecurityManager() != null) {
                     String pin = s.getSecurityManager().generateNewPin();
                     int remaining = s.getSecurityManager().getPinRemainingSeconds();
-                    String url = "http://" + getLocalIpAddress() + ":" + RemoteServerService.HTTP_PORT;
-                    PinOverlayDialog.show(MainActivity.this, pin, remaining, url);
-                    Toast.makeText(MainActivity.this, "Codice PIN generato: " + pin, Toast.LENGTH_SHORT).show();
+                    PinOverlayDialog.show(MainActivity.this, pin, remaining, httpsUrl, caFp);
+                    Toast.makeText(MainActivity.this, "PIN generato: " + pin + " (120s)", Toast.LENGTH_SHORT).show();
                 } else {
-                    Toast.makeText(MainActivity.this, "Avvio del server in corso...", Toast.LENGTH_SHORT).show();
+                    SecurityManager sec = new SecurityManager(MainActivity.this);
+                    String pin = sec.generateNewPin();
+                    PinOverlayDialog.show(MainActivity.this, pin, 120, httpsUrl, caFp);
+                    Toast.makeText(MainActivity.this, "PIN temporaneo generato: " + pin, Toast.LENGTH_SHORT).show();
                 }
             }
         });
@@ -84,7 +102,7 @@ public class MainActivity extends Activity {
         btnMinimize.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                // Riduci a icona tornando a LTvLauncher senza arrestare il server
+                // Riduci a icona tornando a Home senza arrestare il server
                 finish();
             }
         });
@@ -100,38 +118,67 @@ public class MainActivity extends Activity {
         RemoteServerService s = RemoteServerService.getInstance();
         boolean running = (s != null);
 
-        tvServiceStatus.setText(running ? "Stato Server: IN ASCOLTO (Porta " + RemoteServerService.HTTP_PORT + ")" : "Stato Server: In avvio...");
-        tvServiceStatus.setTextColor(running ? 0xFF10B981 : 0xFFF59E0B);
-
-        String ip = getLocalIpAddress();
-        if (ip == null || ip.isEmpty()) {
-            ip = "192.168.1.8";
+        if (tvServiceStatus != null) {
+            tvServiceStatus.setText(running ? "Stato Server: IN ASCOLTO (Porte " + RemoteServerService.HTTP_PORT + " HTTP / " + RemoteServerService.HTTPS_PORT + " HTTPS)" : "Stato Server: In avvio...");
+            tvServiceStatus.setTextColor(running ? 0xFF10B981 : 0xFFF59E0B);
         }
-        tvServerUrl.setText("Apri su Safari / Chrome: http://" + ip + ":" + RemoteServerService.HTTP_PORT);
+
+        String ip = (s != null) ? s.getLocalIpAddress() : getLocalIpAddress();
+        String caDownloadUrl = "http://" + ip + ":" + RemoteServerService.HTTP_PORT + "/api/auth/ca.crt";
+        String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
+
+        if (tvServerUrl != null) {
+            tvServerUrl.setText(httpsUrl);
+        }
+
+        if (tvCaUrl != null) {
+            tvCaUrl.setText(caDownloadUrl);
+        }
+        if (tvHttpsUrl != null) {
+            tvHttpsUrl.setText(httpsUrl);
+        }
+
+        TlsCertificateManager tlsMgr = TlsCertificateManager.getInstance();
+        TlsCertificateManager.TlsInfo tlsInfo = tlsMgr.getOrGenerateTlsInfo(this, ip);
+        String caFp = (tlsInfo != null) ? tlsInfo.caFingerprintSha256 : "NON_CONFIGURATA";
+
+        if (tvCaFingerprint != null) {
+            tvCaFingerprint.setText(caFp);
+        }
+
+        // Render QR Code 1: Bootstrap Root CA Download (HTTP 8088)
+        if (ivQrCa != null) {
+            Bitmap caBmp = QrBitmapUtil.createQrBitmap(caDownloadUrl, 4, 1);
+            if (caBmp != null) {
+                ivQrCa.setImageBitmap(caBmp);
+            }
+        }
+
+        // Render QR Code 2: JARVIS Web Remote (HTTPS 8443)
+        if (ivQrHttps != null) {
+            Bitmap httpsBmp = QrBitmapUtil.createQrBitmap(httpsUrl, 4, 1);
+            if (httpsBmp != null) {
+                ivQrHttps.setImageBitmap(httpsBmp);
+            }
+        }
 
         boolean uinputOk = (s != null && s.getTvController() != null && s.getTvController().isUInputReady());
-        tvUinputStatus.setText("Driver Hardware Linux: " + (uinputOk ? "/dev/uinput ATTIVO (fd pronto)" : "Inizializzazione in corso..."));
-        tvUinputStatus.setTextColor(uinputOk ? 0xFF34D399 : 0xFFF59E0B);
+        if (tvUinputStatus != null) {
+            tvUinputStatus.setText("Driver Linux /dev/uinput: " + (uinputOk ? "ATTIVO" : "In attesa..."));
+            tvUinputStatus.setTextColor(uinputOk ? 0xFF34D399 : 0xFFF59E0B);
+        }
 
         int activeSessions = (s != null && s.getSecurityManager() != null) ? s.getSecurityManager().getActiveSessionCount() : 0;
-        tvPairedCount.setText("Dispositivi associati attivi: " + activeSessions);
+        if (tvPairedCount != null) {
+            tvPairedCount.setText("Sessioni attive: " + activeSessions);
+        }
     }
 
     private String getLocalIpAddress() {
-        try {
-            List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
-            for (NetworkInterface intf : interfaces) {
-                List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
-                for (InetAddress addr : addrs) {
-                    if (!addr.isLoopbackAddress()) {
-                        String sAddr = addr.getHostAddress();
-                        if (sAddr != null && sAddr.indexOf(':') < 0 && (sAddr.startsWith("192.168.") || sAddr.startsWith("10."))) {
-                            return sAddr;
-                        }
-                    }
-                }
-            }
-        } catch (Exception ignored) {}
-        return "192.168.1.8";
+        RemoteServerService s = RemoteServerService.getInstance();
+        if (s != null) {
+            return s.getLocalIpAddress();
+        }
+        return "127.0.0.1";
     }
 }

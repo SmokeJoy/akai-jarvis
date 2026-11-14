@@ -111,13 +111,15 @@ public class RestApiRouter {
         // Se la richiesta transita su HTTP in chiaro (porta 8088 / !isTls),
         // sono consentiti UNICAMENTE gli endpoint non-sensibili di bootstrap e trust onboarding:
         // 1. GET /api/status (handshake iniziale di raggiungibilità)
-        // 2. GET /api/auth/ca.crt (download del certificato Root CA per installazione trust su smartphone)
-        // 3. GET /api/auth/tls_info (metadati porta HTTPS 8443 e impronta anti-MITM)
+        // 2. GET /api/auth/ca.crt, /ca.crt, /ca.pem (download del certificato Root CA per installazione trust su smartphone)
+        // 3. GET /api/auth/tls_info, /tls_info (metadati porta HTTPS 8443 e impronta anti-MITM)
+        // 4. GET /setup, /bootstrap (guida HTML statica minima senza token per download CA)
         // Qualsiasi richiesta a endpoint sensibili (PIN pairing, token, comandi TV, modulo AI, memoria)
         // via HTTP in chiaro viene categoricamente RIFIUTATA con HTTP 426 Upgrade Required.
         boolean isBootstrapEndpoint = ("/api/status".equals(path) && "GET".equals(method)) ||
-                                      ("/api/auth/ca.crt".equals(path) && "GET".equals(method)) ||
-                                      ("/api/auth/tls_info".equals(path) && "GET".equals(method));
+                                      (("/api/auth/ca.crt".equals(path) || "/ca.crt".equals(path) || "/ca.pem".equals(path)) && "GET".equals(method)) ||
+                                      (("/api/auth/tls_info".equals(path) || "/tls_info".equals(path)) && "GET".equals(method)) ||
+                                      (("/setup".equals(path) || "/bootstrap".equals(path)) && "GET".equals(method));
 
         if (!isTls && !isBootstrapEndpoint) {
             JSONObject err = new JSONObject();
@@ -126,7 +128,43 @@ public class RestApiRouter {
             err.put("status", "UPGRADE_REQUIRED");
             err.put("message", "Questo endpoint scambia credenziali, token o comandi TV ed è accessibile esclusivamente tramite HTTPS sicuro sulla porta 8443. Scarica la CA da /api/auth/ca.crt e utilizza HTTPS.");
             err.put("https_port", 8443);
+            err.put("ca_download_url", "http://" + localIpAddress + ":" + httpPort + "/api/auth/ca.crt");
+            err.put("bootstrap_url", "http://" + localIpAddress + ":" + httpPort + "/setup");
             sendJsonResponse(os, 426, err); // HTTP 426 Upgrade Required
+            return true;
+        }
+
+        // Bootstrap Guide HTML (accesso in chiaro consentito senza token né credenziali)
+        if (("/setup".equals(path) || "/bootstrap".equals(path)) && "GET".equals(method)) {
+            String caFp = null;
+            if (tlsCertificateManager != null) {
+                TlsCertificateManager.TlsInfo info = tlsCertificateManager.getOrGenerateTlsInfo(null, localIpAddress);
+                if (info != null) caFp = info.caFingerprintSha256;
+            }
+            if (caFp == null) caFp = "NON_CONFIGURATA";
+            String html = "<!DOCTYPE html><html lang=\"it\"><head><meta charset=\"UTF-8\">" +
+                "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">" +
+                "<title>AKAI JARVIS TV - Bootstrap Sicurezza</title>" +
+                "<style>body{font-family:sans-serif;background:#0a0d14;color:#e2e8f0;padding:20px;text-align:center;}" +
+                ".card{background:#141824;border:1px solid #334155;border-radius:12px;max-width:520px;margin:16px auto;padding:20px;text-align:left;}" +
+                ".btn{display:block;background:#38bdf8;color:#0a0d14;text-decoration:none;font-weight:bold;padding:12px;border-radius:8px;text-align:center;margin:10px 0;}" +
+                ".btn-sec{background:#1e293b;color:#38bdf8;border:1px solid #38bdf8;}" +
+                "code{background:#040711;color:#34d399;padding:6px;border-radius:4px;word-break:break-all;font-size:11.5px;display:block;margin:8px 0;font-family:monospace;}" +
+                "</style></head><body>" +
+                "<h2>AKAI JARVIS · Onboarding Fuori Banda</h2>" +
+                "<div class=\"card\">" +
+                "<h3>1. Scarica e Installa Certificato Root CA</h3>" +
+                "<p>Scarica il certificato pubblico della TV ed installalo nel tuo dispositivo mobile:</p>" +
+                "<a class=\"btn\" href=\"/api/auth/ca.crt\" download=\"akai_root_ca.crt\">📥 Scarica Certificato CA (ca.crt)</a>" +
+                "<p><strong>Confronta l'impronta SHA-256 con quella mostrata sullo schermo TV:</strong></p>" +
+                "<code>" + caFp + "</code>" +
+                "</div>" +
+                "<div class=\"card\">" +
+                "<h3>2. Accedi al Telecomando Cifrato HTTPS</h3>" +
+                "<p>Dopo aver completato l'installazione della Root CA sul telefono, apri l'interfaccia protetta:</p>" +
+                "<a class=\"btn btn-sec\" href=\"https://" + localIpAddress + ":8443/\">🚀 Apri JARVIS Web Remote (HTTPS:8443)</a>" +
+                "</div></body></html>";
+            sendRawResponse(os, 200, "OK", "text/html; charset=UTF-8", html.getBytes(StandardCharsets.UTF_8));
             return true;
         }
 
@@ -205,7 +243,9 @@ public class RestApiRouter {
 
             String pin = securityManager.generateNewPin();
             int remaining = securityManager.getPinRemainingSeconds();
-            String serverUrl = "http://" + localIpAddress + ":" + httpPort;
+            int targetPort = (tlsCertificateManager != null) ? TlsCertificateManager.HTTPS_PORT : httpPort;
+            String scheme = (tlsCertificateManager != null) ? "https://" : "http://";
+            String serverUrl = scheme + localIpAddress + ":" + targetPort;
             String caFp = null;
             if (tlsCertificateManager != null) {
                 TlsCertificateManager.TlsInfo info = tlsCertificateManager.getOrGenerateTlsInfo(null, localIpAddress);
@@ -218,8 +258,11 @@ public class RestApiRouter {
             JSONObject res = new JSONObject();
             res.put("success", true);
             res.put("expires_in", remaining);
+            res.put("server_url", serverUrl);
+            res.put("ca_download_url", "http://" + localIpAddress + ":" + httpPort + "/api/auth/ca.crt");
             if (caFp != null) {
                 res.put("ca_fingerprint_sha256", caFp);
+                res.put("ca_sha256", caFp);
             }
             sendJsonResponse(os, 200, res);
             return true;

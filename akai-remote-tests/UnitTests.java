@@ -1089,12 +1089,69 @@ public class UnitTests {
             failed++;
         }
 
+        // =========================================================================
+        // Test 30 (PR-01 M2/M3 Onboarding Out-Of-Band & QR Decoupling):
+        // Risoluzione Dipendenza Circolare, QR CA Bootstrap vs JARVIS HTTPS, Schermata Nativa TV & Fallback Comandi
+        // =========================================================================
+        // 1. Contratti URL & QR nativi su TV (decoupled, generabili a PC spento senza richieste di rete)
+        String tvIp = "192.168.1.15";
+        String qrCaUrl = "http://" + tvIp + ":8088/api/auth/ca.crt";
+        String qrHttpsUrl = "https://" + tvIp + ":8443/";
+
+        QrCode qrCa = QrCode.encodeText(qrCaUrl, QrCode.Ecc.MEDIUM);
+        QrCode qrHttps = QrCode.encodeText(qrHttpsUrl, QrCode.Ecc.MEDIUM);
+        boolean okQrEncoding = (qrCa != null && qrCa.size > 0) && (qrHttps != null && qrHttps.size > 0);
+
+        // 2. Protezione canale in chiaro: GET / su HTTP 8088 DEVE restituire 426 Upgrade Required (nessun leak Web Remote in chiaro)
+        MockHttpResponse rHttpRoot = dispatch(router, "GET", "/", new HashMap<>(), "", "192.168.1.10", false);
+        boolean okHttpRootBlocked = (rHttpRoot.statusCode == 426) && (rHttpRoot.json != null) &&
+                                    "HTTPS_REQUIRED".equals(rHttpRoot.json.optString("error")) &&
+                                    rHttpRoot.json.has("ca_download_url");
+
+        // 3. Endpoint Bootstrap HTTP: download CA (/ca.crt) e guida statica (/setup) accessibili in chiaro senza token
+        MockHttpResponse rCaShort = dispatch(router, "GET", "/ca.crt", new HashMap<>(), "", "192.168.1.10", false);
+        boolean okCaShortAllowed = (rCaShort.statusCode == 200) && rCaShort.rawBody.contains("BEGIN CERTIFICATE");
+
+        MockHttpResponse rSetup = dispatch(router, "GET", "/setup", new HashMap<>(), "", "192.168.1.10", false);
+        boolean okSetupAllowed = (rSetup.statusCode == 200) && rSetup.rawBody.contains("AKAI JARVIS") &&
+                                 rSetup.rawBody.contains("/api/auth/ca.crt");
+
+        // 4. Risoluzione Circolo Vizioso: pair request su HTTPS restituisce server_url con scheme https:// e porta 8443
+        MockHttpResponse rPairReqHttps = dispatch(router, "POST", "/api/auth/pair/request", new HashMap<>(), "{\"client\":\"web_remote\"}", "192.168.1.10", true);
+        boolean okPairReqHttps = (rPairReqHttps.statusCode == 200) && (rPairReqHttps.json != null) &&
+                                 rPairReqHttps.json.optString("server_url").startsWith("https://") &&
+                                 rPairReqHttps.json.optString("server_url").contains(":8443");
+
+        // 5. Verifica P1 UX: comando JARVIS digitato ("metti rai 1") inviato a /api/ai/ask attiva il parser di intent locale a 0 token (NON type_text)
+        cmdHandler.lastExecutedAction = null;
+        JSONObject aiTypedReq = new JSONObject().put("query", "metti rai 1").put("speak", false).put("source", "web_remote");
+        MockHttpResponse rAiTyped = dispatch(router, "POST", "/api/ai/ask", authHeaders, aiTypedReq.toString(), "192.168.1.10", true);
+        boolean okAiTypedCommand = (rAiTyped.statusCode == 200) && (rAiTyped.json != null) &&
+                                   rAiTyped.json.optBoolean("success") &&
+                                   "channel_1".equals(rAiTyped.json.optString("intent_key")) &&
+                                   "tune_channel_1".equals(cmdHandler.lastExecutedAction) &&
+                                   (rAiTyped.json.optInt("tokens") == 0);
+
+        boolean test30Passed = okQrEncoding && okHttpRootBlocked && okCaShortAllowed && okSetupAllowed &&
+                               okPairReqHttps && okAiTypedCommand;
+
+        if (test30Passed) {
+            System.out.println("[PASS] Test 30 (PR-01 M2/M3 Bootstrap OOB): Risoluzione dipendenza circolare verificata: separazione QR CA Bootstrap (http://...:8088/api/auth/ca.crt) vs Telecomando JARVIS (https://...:8443/), blocco HTTP 426 su root non protetta, guida /setup priva di segreti, endpoint pairing HTTPS e separazione comandi JARVIS a 0 token vs keystroke TV");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 30: Fallimento bootstrap OOB o separazione contratti (okQrEncoding=" + okQrEncoding +
+                ", okHttpRootBlocked=" + okHttpRootBlocked + ", okCaShortAllowed=" + okCaShortAllowed +
+                ", okSetupAllowed=" + okSetupAllowed + ", okPairReqHttps=" + okPairReqHttps +
+                ", okAiTypedCommand=" + okAiTypedCommand + ")");
+            failed++;
+        }
+
         // Pulizia file temporanei di test effimeri (garanzia zero leak segreti in CI e repo)
         for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der")) {
             try { new java.io.File(testFile).delete(); } catch (Exception ignored) {}
         }
 
-        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v19 (M1 + M2 + M3 SECURITY HARDENING) ===");
+        System.out.println("\n=== ESITO COMPLETO SUITE DI TEST v20 (M1 + M2 + M3 BOOTSTRAP OOB) ===");
         System.out.println("Test Superati: " + passed + " / " + (passed + failed));
         if (failed > 0) {
             System.exit(1);

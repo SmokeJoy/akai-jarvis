@@ -8,16 +8,19 @@
     'use strict';
 
     // State management
+    const isInitialHttps = (location.protocol === 'https:');
+    const defaultInitialPort = isInitialHttps ? '8443' : '8088';
     const state = {
-        host: localStorage.getItem('akai_host') || (location.hostname && location.hostname !== 'localhost' ? location.hostname : '192.168.1.8'),
-        port: localStorage.getItem('akai_port') || (location.port ? location.port : '8088'),
-        proto: localStorage.getItem('akai_proto') || (location.protocol === 'https:' ? 'https' : 'http'),
+        host: localStorage.getItem('akai_host') || (location.hostname && location.hostname !== 'localhost' ? location.hostname : ''),
+        port: localStorage.getItem('akai_port') || (location.port ? location.port : defaultInitialPort),
+        proto: localStorage.getItem('akai_proto') || (isInitialHttps ? 'https' : 'http'),
         token: localStorage.getItem('akai_token') || null,
         connected: false,
         pingMs: 0,
         pingTimer: null,
         speechRecognition: null,
-        isListening: false
+        isListening: false,
+        caFingerprint: null
     };
 
     // Conversation State Machine (P1-02, P1-03, P1-04)
@@ -104,6 +107,13 @@
         pairingError: document.getElementById('pairing-error'),
         btnSubmitPin: document.getElementById('btn-submit-pin'),
         btnClosePairing: document.getElementById('btn-close-pairing'),
+        caTrustCard: document.getElementById('ca-trust-card'),
+        chkConfirmCaTv: document.getElementById('chk-confirm-ca-tv'),
+        caFpVal: document.getElementById('ca-fp-val'),
+        btnDownloadCa: document.getElementById('btn-download-ca'),
+        btnToggleCaInstructions: document.getElementById('btn-toggle-ca-instructions'),
+        caInstructionsPanel: document.getElementById('ca-instructions-panel'),
+        voiceEnvNotice: document.getElementById('voice-env-notice'),
 
         // Settings Modal
         modalSettings: document.getElementById('modal-settings'),
@@ -272,14 +282,38 @@
     }
 
     function initSpeechRecognition() {
+        const isHttps = (location.protocol === 'https:');
+        const isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+        const isSecure = (window.isSecureContext === true) || isLocal;
+
         const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRec) {
-            console.warn('SpeechRecognition API not available in this browser environment.');
+
+        if (!isSecure && !isLocal) {
+            console.warn('SpeechRecognition: Insecure HTTP Context.');
+            if (elements.voiceEnvNotice) {
+                elements.voiceEnvNotice.innerHTML = '<strong>⚠️ Connessione HTTP non cifrata:</strong> Safari (iOS) e Chrome (Android) consentono l\'accesso al microfono solo in <strong>Secure Context (HTTPS)</strong>. Passa a HTTPS (porta 8443) nelle Impostazioni dopo aver installato il certificato della TV, oppure usa la casella di testo qui sotto per digitare comandi a costo 0 token.';
+                elements.voiceEnvNotice.classList.remove('hidden');
+            }
             if (elements.voiceFootnote) {
-                elements.voiceFootnote.textContent = 'Riconoscimento vocale supportato su Safari iOS e Chrome Android su HTTPS.';
+                elements.voiceFootnote.textContent = 'Microfono disabilitato su HTTP non protetto. Digita da tastiera o usa HTTPS.';
+            }
+        } else if (!SpeechRec) {
+            console.warn('SpeechRecognition API not available in this browser environment.');
+            if (elements.voiceEnvNotice) {
+                elements.voiceEnvNotice.innerHTML = '<strong>ℹ️ Riconoscimento vocale non supportato dal browser:</strong> utilizza la casella di testo sottostante per inviare comandi TV istantanei a costo 0 token.';
+                elements.voiceEnvNotice.classList.remove('hidden');
+            }
+            if (elements.voiceFootnote) {
+                elements.voiceFootnote.textContent = 'Riconoscimento vocale supportato nativamente su Safari iOS e Chrome Android su HTTPS.';
             }
             return;
+        } else {
+            if (elements.voiceFootnote) {
+                elements.voiceFootnote.textContent = 'Voce Web (motore STT del sistema operativo del telefono; per uso a connessione Internet WAN disattivata, verificare la dettatura offline nelle impostazioni del telefono).';
+            }
         }
+
+        if (!SpeechRec) return;
 
         const recognizer = new SpeechRec();
         recognizer.lang = 'it-IT';
@@ -624,6 +658,15 @@
             if (res.ok) {
                 displayAiResponse(data, query);
                 return true;
+            } else if (res.status === 426) {
+                displayAiResponse({
+                    success: false,
+                    status: 'UPGRADE_REQUIRED',
+                    reply: 'Connessione HTTPS (porta 8443) obbligatoria. HTTP in chiaro non consentito per inviare comandi TV.',
+                    verified: false
+                }, query);
+                showToast('HTTPS obbligatorio (HTTP 426)', true);
+                return false;
             } else if (res.status === 401) {
                 handleSessionExpired();
                 return false;
@@ -743,6 +786,11 @@
                 body: JSON.stringify({ action })
             });
 
+            if (res.status === 426) {
+                showToast('HTTPS obbligatorio (HTTP 426): passa alla porta 8443', true);
+                return;
+            }
+
             if (res.status === 401) {
                 handleSessionExpired();
                 return;
@@ -776,6 +824,11 @@
                 },
                 body: JSON.stringify({ action: 'type_text', text })
             });
+
+            if (res.status === 426) {
+                showToast('HTTPS obbligatorio (HTTP 426): passa alla porta 8443', true);
+                return;
+            }
 
             if (res.ok) {
                 showToast(`Testo inviato: "${text}"`);
@@ -1290,17 +1343,79 @@
     // PAIRING MODAL & PIN AUTHENTICATION
     // =========================================================================
 
-    function openPairingModal() {
+    async function openPairingModal() {
         elements.modalPairing.classList.remove('hidden');
         elements.pinInput.value = '';
         elements.pinInput.focus();
         elements.pairingError.classList.add('hidden');
+
+        // Configure CA cert download link
+        if (elements.btnDownloadCa) {
+            elements.btnDownloadCa.href = `${state.proto}://${state.host}:${state.port}/api/auth/ca.crt`;
+        }
+
+        if (elements.caFpVal) {
+            elements.caFpVal.textContent = state.caFingerprint || 'Richiesta impronta alla TV...';
+        }
+
+        try {
+            // First try pair request which generates a fresh PIN on TV and returns fingerprint
+            const reqRes = await fetch(getApiUrl('/api/auth/pair/request'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ client: 'web_remote' })
+            });
+            if (reqRes.status === 426) {
+                const reqData = await reqRes.json().catch(() => ({}));
+                const httpsPort = reqData.https_port || '8443';
+                const targetHost = state.host || location.hostname || '127.0.0.1';
+                elements.pairingError.innerHTML = `Connessione non cifrata (HTTP). Per associare in sicurezza, scarica il certificato CA qui sotto e passa a HTTPS sulla porta ${httpsPort}: <a href="https://${targetHost}:${httpsPort}" target="_blank" style="color:var(--accent); text-decoration:underline;">https://${targetHost}:${httpsPort}</a>`;
+                elements.pairingError.classList.remove('hidden');
+                const infoRes = await fetch(getApiUrl('/api/auth/tls_info'));
+                if (infoRes.ok) {
+                    const infoData = await infoRes.json().catch(() => ({}));
+                    if (infoData.ca_sha256) {
+                        state.caFingerprint = infoData.ca_sha256;
+                        if (elements.caFpVal) elements.caFpVal.textContent = state.caFingerprint;
+                    }
+                }
+            } else if (reqRes.ok) {
+                const reqData = await reqRes.json();
+                if (reqData.ca_fingerprint_sha256) {
+                    state.caFingerprint = reqData.ca_fingerprint_sha256;
+                    if (elements.caFpVal) elements.caFpVal.textContent = state.caFingerprint;
+                }
+                if (reqData.expires_in && elements.pinCountdown) {
+                    elements.pinCountdown.textContent = reqData.expires_in;
+                }
+            } else {
+                const infoRes = await fetch(getApiUrl('/api/auth/tls_info'));
+                if (infoRes.ok) {
+                    const infoData = await infoRes.json();
+                    if (infoData.ca_sha256) {
+                        state.caFingerprint = infoData.ca_sha256;
+                        if (elements.caFpVal) elements.caFpVal.textContent = state.caFingerprint;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('CA fingerprint lookup failed:', e);
+            if (elements.caFpVal && !state.caFingerprint) {
+                elements.caFpVal.textContent = 'Impronta visualizzata a schermo sulla TV';
+            }
+        }
     }
 
     async function submitPin() {
         const pin = elements.pinInput.value.trim();
         if (pin.length !== 6) {
             elements.pairingError.textContent = 'Inserisci un PIN numerico valido di 6 cifre';
+            elements.pairingError.classList.remove('hidden');
+            return;
+        }
+
+        if (elements.chkConfirmCaTv && !elements.chkConfirmCaTv.checked) {
+            elements.pairingError.textContent = "Conferma obbligatoria: confronta l'impronta mostrata sullo schermo della TV con quella qui sopra e spunta la casella prima di associare.";
             elements.pairingError.classList.remove('hidden');
             return;
         }
@@ -1319,7 +1434,15 @@
                 })
             });
 
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 426 || (data && data.error === 'HTTPS_REQUIRED')) {
+                const targetPort = data.https_port || '8443';
+                const targetHost = state.host || location.hostname || '127.0.0.1';
+                elements.pairingError.innerHTML = `Connessione sicura richiesta (HTTP 426). Passa a HTTPS: <a href="https://${targetHost}:${targetPort}" target="_blank" style="color:var(--accent); text-decoration:underline;">https://${targetHost}:${targetPort}</a>`;
+                elements.pairingError.classList.remove('hidden');
+                return;
+            }
+
             if (res.ok && data.token) {
                 state.token = data.token;
                 localStorage.setItem('akai_token', state.token);
@@ -1664,6 +1787,28 @@
                 }
             });
         }
+
+        // Anti-MITM CA Instructions Toggle
+        if (elements.btnToggleCaInstructions && elements.caInstructionsPanel) {
+            elements.btnToggleCaInstructions.addEventListener('click', () => {
+                elements.caInstructionsPanel.classList.toggle('hidden');
+            });
+        }
+
+        // Auto-switch port when changing protocol in settings
+        document.querySelectorAll('input[name="proto"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                if (e.target.value === 'https') {
+                    if (elements.serverPort && (elements.serverPort.value === '8088' || elements.serverPort.value === '8080')) {
+                        elements.serverPort.value = '8443';
+                    }
+                } else if (e.target.value === 'http') {
+                    if (elements.serverPort && elements.serverPort.value === '8443') {
+                        elements.serverPort.value = '8088';
+                    }
+                }
+            });
+        });
 
         // Escape key to close modals
         window.addEventListener('keydown', (e) => {
