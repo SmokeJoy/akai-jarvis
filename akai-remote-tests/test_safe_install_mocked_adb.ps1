@@ -4151,6 +4151,131 @@ try {
     Remove-Item $testDir33 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# -----------------------------------------------------------------------------
+# TEST 34: Modalita' Sola Lettura -Action verify-tls e Validazione Fuori Banda OOB (P1 Operativo)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 34: Modalita' Sola Lettura -Action verify-tls e Validazione OOB ---" -ForegroundColor Cyan
+$testDir34 = Join-Path $tempDir "e2e_verify_tls_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir34 | Out-Null
+
+$mockAdbJs34 = Join-Path $testDir34 "mock_adb_34.js"
+$auditLog34 = Join-Path $testDir34 "adb_audit_34.txt"
+$auditEsc34 = $auditLog34.Replace('\', '/')
+$pfx34 = Join-Path $testDir34 "cert34.pfx"
+
+$shaCa34 = New-MockTlsPfx -FilePath $pfx34 -SanIp "127.0.0.1"
+$httpsProc34 = Start-MockHttpsNodeServer -PfxPath $pfx34 -BaseDir $testDir34
+$httpsPort34 = $httpsProc34.Port
+
+@"
+const fs = require('fs');
+const argv = process.argv.slice(2);
+const args = argv.join(' ');
+fs.appendFileSync('$auditEsc34', args + '\n');
+
+if (args.includes('install') || args.includes('force-stop') || args.includes('root')) {
+    console.error('VIOLATION: Chiamata adb vietata in modalita sola lettura: ' + args);
+    process.exit(1);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs34 -Encoding ascii
+
+$mockAdbCmd34 = if ($isWin) { Join-Path $testDir34 "adb.cmd" } else { Join-Path $testDir34 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs34`" %*" | Out-File -FilePath $mockAdbCmd34 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs34`" `"`$@`"" | Out-File -FilePath $mockAdbCmd34 -Encoding ascii
+    & chmod +x $mockAdbCmd34
+}
+
+try {
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $mockAdbEscaped = $mockAdbCmd34.Replace('\', '/')
+    $nodeEscaped = $validNode.Replace('\', '/')
+
+    # Sotto-test 34a: Esecuzione -Action verify-tls SENZA -ExpectedCaFingerprint
+    # Deve restare in stato PROVISIONAL, riportare l'impronta osservata come NON VERIFICATA e non toccare ADB
+    $testCmd34a = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped'
+& '$scriptEscaped' -Action verify-tls -TargetTv '127.0.0.1' -HttpsPort $httpsPort34
+"@
+    $res34a = & $psExe -ExecutionPolicy Bypass -Command $testCmd34a 2>&1 | Out-String
+
+    $prov34Ok = ($res34a -match "\[PROVISIONAL / OOB TRUST PENDING\]" -and
+                 $res34a -match "Impronta osservata su connessione TLS \(NON VERIFICATA\): $shaCa34" -and
+                 $res34a -notmatch "\[APPROVED\]" -and
+                 $res34a -match "Modalita' 100% READ-ONLY")
+
+    if ($prov34Ok) {
+        Write-Host "   [PASS] Sotto-test 34a: -Action verify-tls senza fingerprint resta in PROVISIONAL (read-only, zero ADB)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 34a: Esito non conforme: $res34a" -ForegroundColor Red
+    }
+
+    # Sotto-test 34b: Esecuzione -Action verify-tls CON -ExpectedCaFingerprint ERRATO (mismatch)
+    # Deve fallire categoricamente (exit non-zero, CA_UNTRUSTED_MISMATCH)
+    $wrongFp = "0000000000000000000000000000000000000000000000000000000000000000"
+    $testCmd34b = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped'
+& '$scriptEscaped' -Action verify-tls -TargetTv '127.0.0.1' -HttpsPort $httpsPort34 -ExpectedCaFingerprint '$wrongFp'
+"@
+    $res34b = & $psExe -ExecutionPolicy Bypass -Command $testCmd34b 2>&1 | Out-String
+
+    $mismatch34Ok = ($res34b -match "FALLIMENTO VERIFICA TLS" -and
+                     $res34b -match "CA_UNTRUSTED_MISMATCH" -and
+                     $res34b -notmatch "\[APPROVED\]")
+
+    if ($mismatch34Ok) {
+        Write-Host "   [PASS] Sotto-test 34b: -Action verify-tls con impronta errata blocca categoricamente in Fail-Closed (CA_UNTRUSTED_MISMATCH)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 34b: Mancato blocco fail-closed: $res34b" -ForegroundColor Red
+    }
+
+    # Sotto-test 34c: Esecuzione -Action verify-tls CON -ExpectedCaFingerprint VALIDO ($shaCa34 convalidata OOB)
+    # Deve restituire APPROVED al 100%
+    $testCmd34c = @"
+`$env:NODE_EXE = '$nodeEscaped'
+`$env:ADB_EXECUTABLE = '$mockAdbEscaped'
+& '$scriptEscaped' -Action verify-tls -TargetTv '127.0.0.1' -HttpsPort $httpsPort34 -ExpectedCaFingerprint '$shaCa34'
+"@
+    $res34c = & $psExe -ExecutionPolicy Bypass -Command $testCmd34c 2>&1 | Out-String
+
+    $appr34Ok = ($res34c -match "\[APPROVED\] CONVALIDA CRITTOGRAFICA RIUSCITA AL 100%" -and
+                 $res34c -match "Autenticazione canale TLS confermata: autorizzato utilizzo credenziali/PIN/chiavi")
+
+    if ($appr34Ok) {
+        Write-Host "   [PASS] Sotto-test 34c: -Action verify-tls con impronta OOB valida convalidata al 100% (APPROVED)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 34c: Mancata approvazione: $res34c" -ForegroundColor Red
+    }
+
+    # Sotto-test 34d: Verifica zero invocazioni ADB (sola lettura pura)
+    $adbCalls = if (Test-Path $auditLog34) { Get-Content $auditLog34 } else { @() }
+    $adbPurityOk = ($adbCalls.Count -eq 0)
+
+    if ($adbPurityOk) {
+        Write-Host "   [PASS] Sotto-test 34d: Verifica assoluta di sola lettura: ZERO chiamate ADB effettuate (install, force-stop, root = 0)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 34d: Violazione purezza read-only, rilevate chiamate ADB: $adbCalls" -ForegroundColor Red
+    }
+
+    if ($prov34Ok -and $mismatch34Ok -and $appr34Ok -and $adbPurityOk) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / READ-ONLY VERIFY-TLS] Test 34: Modalita' sola lettura verify-tls convalidata al 100% (P1 Operativo)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / READ-ONLY VERIFY-TLS] Test 34: Fallito" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / READ-ONLY VERIFY-TLS] Test 34: Eccezione imprevista: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($httpsProc34 -and $httpsProc34.Process -and -not $httpsProc34.Process.HasExited) { Stop-Process -Id $httpsProc34.Process.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir34 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 

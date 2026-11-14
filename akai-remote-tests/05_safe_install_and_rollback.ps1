@@ -26,7 +26,7 @@
 # ==============================================================================
 
 param(
-    [ValidateSet("status", "backup", "install", "rollback", "plan", "preflight")]
+    [ValidateSet("status", "backup", "install", "rollback", "plan", "preflight", "verify-tls")]
     [string]$Action = "status",
     [string]$ApkPath = $null,
     [string]$BackupDir = ".\backup_tv",
@@ -1573,6 +1573,42 @@ switch ($Action) {
         }
     }
 
+    "verify-tls" {
+        Write-Host "=== VERIFICA RIGOROSA SOLA LETTURA ROOT CA E SAN HTTPS (Test-HttpsTlsEndpoint) ===" -ForegroundColor Cyan
+        Write-Host "Modalita' 100% READ-ONLY: zero comandi ADB, zero force-stop, zero install, zero backup." -ForegroundColor Cyan
+        Write-Host "Target Host                    : $TargetTv"
+        Write-Host "Porta HTTPS                    : $HttpsPort"
+        Write-Host "Impronta CA Fuori Banda Attesa : $(if ($ExpectedCaFingerprint) { $ExpectedCaFingerprint } else { '(NESSUNA - sola ispezione handshake)' })"
+
+        $tlsRes = Test-HttpsTlsEndpoint -TargetHost $TargetTv -Port $HttpsPort -ExpectedCaSha256 $ExpectedCaFingerprint
+
+        if (-not $tlsRes.SanMatched -or ($tlsRes.Status -ne "APPROVED" -and $tlsRes.Status -ne "TLS_HANDSHAKE_ONLY/UNVERIFIED")) {
+            Write-Host "`nFALLIMENTO VERIFICA TLS: $($tlsRes.Error) (Status: $($tlsRes.Status))" -ForegroundColor Red
+            exit 1
+        }
+
+        Write-Host "`nHandshake TLS completato con successo." -ForegroundColor Green
+        Write-Host "Subject Certificato Server : $($tlsRes.Subject)"
+        Write-Host "Issuer Certificato Server  : $($tlsRes.Issuer)"
+        Write-Host "SAN Rilevati               : $($tlsRes.FormattedSan)"
+        Write-Host "SAN Matched ($TargetTv)     : $($tlsRes.SanMatched)"
+        Write-Host "Impronta osservata su connessione TLS (NON VERIFICATA): $($tlsRes.RootCaSha256)" -ForegroundColor Cyan
+
+        if ($tlsRes.Status -eq "APPROVED") {
+            Write-Host "`n[APPROVED] CONVALIDA CRITTOGRAFICA RIUSCITA AL 100%!" -ForegroundColor Green
+            Write-Host "La Root CA corrisponde esattamente all'impronta verificata fuori banda sullo schermo TV." -ForegroundColor Green
+            Write-Host "Autenticazione canale TLS confermata: autorizzato utilizzo credenziali/PIN/chiavi." -ForegroundColor Green
+            exit 0
+        } else {
+            Write-Host "`n[PROVISIONAL / OOB TRUST PENDING] STATO PROVVISORIO NON AUTORIZZATO" -ForegroundColor Yellow
+            Write-Host "AVVISO DI SICUREZZA: Handshake TLS attivo ma Root CA non ancora validata fuori banda sullo schermo TV." -ForegroundColor Yellow
+            Write-Host "DIVIETO: Non utilizzare credenziali/PIN/chiavi su HTTPS finche' l'impronta non e' verificata fuori banda." -ForegroundColor Yellow
+            Write-Host "Per approvare, convalidare visivamente l'impronta sullo schermo TV e rieseguire:" -ForegroundColor Cyan
+            Write-Host "  powershell -File .\akai-remote-tests\05_safe_install_and_rollback.ps1 -Action verify-tls -TargetTv $TargetTv -HttpsPort $HttpsPort -ExpectedCaFingerprint <IMPRONTA_LETTA_SULLO_SCHERMO_TV>" -ForegroundColor Cyan
+            exit 0
+        }
+    }
+
     "backup" {
         $adb = Get-AdbExecutable
         Write-Host "=== BACKUP PREVENTIVO ATOMICO E VERIFICA INTEGRITÀ ===" -ForegroundColor Cyan
@@ -2056,9 +2092,11 @@ switch ($Action) {
             } else {
                 Write-Host "`nSTATO PROVVISORIO: AVVIO TECNICO RIUSCITO (PROVISIONAL / OOB TRUST PENDING)" -ForegroundColor Yellow
                 Write-Host "AVVISO DI SICUREZZA: Handshake TLS attivo ma Root CA non ancora validata fuori banda sullo schermo TV." -ForegroundColor Yellow
-                Write-Host "Impronta Root CA rilevata sul device : $($tlsRes.RootCaSha256)" -ForegroundColor Cyan
+                Write-Host "Impronta osservata su connessione TLS (NON VERIFICATA): $($tlsRes.RootCaSha256)" -ForegroundColor Cyan
                 Write-Host "DIVIETO: Non utilizzare credenziali/PIN/chiavi su HTTPS finche' l'impronta non e' verificata fuori banda." -ForegroundColor Yellow
-                Write-Host "Per la validazione definitiva ri-eseguire con parametro: -ExpectedCaFingerprint $($tlsRes.RootCaSha256)" -ForegroundColor Cyan
+                Write-Host "Per la convalida fuori banda (OOB) della Root CA in modalita' SOLA LETTURA (senza reinstallare):" -ForegroundColor Cyan
+                Write-Host "  powershell -File .\akai-remote-tests\05_safe_install_and_rollback.ps1 -Action verify-tls -TargetTv $TargetTv -HttpsPort $HttpsPort -ExpectedCaFingerprint <IMPRONTA_LETTA_SULLO_SCHERMO_TV>" -ForegroundColor Cyan
+                Write-Host "AVVERTENZA CRITICA: Inserire esclusivamente l'impronta letta VISIVAMENTE sullo schermo TV, MAI copiare l'impronta di rete!" -ForegroundColor Yellow
             }
         } else {
             Write-Host "`nALLARME: Health check fallito entro 30s! Avvio ROLLBACK..." -ForegroundColor Red
