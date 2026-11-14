@@ -28,6 +28,8 @@ public class MainActivity extends Activity {
     private static final String TAG = "AKAI_MainActivity";
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
     private final Handler retryHandler = new Handler(Looper.getMainLooper());
+    private final java.util.concurrent.atomic.AtomicLong uiGenToken = new java.util.concurrent.atomic.AtomicLong(0);
+    private String lastNotifiedIp = null;
     private int retryCount = 0;
     private static final int MAX_RETRIES = 15;
     private ServiceStateListener stateListener = null;
@@ -178,20 +180,48 @@ public class MainActivity extends Activity {
         btnShowPin.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                RemoteServerService s = RemoteServerService.getInstance();
+                final RemoteServerService s = RemoteServerService.getInstance();
                 if (s == null || !s.isReady() || s.getSecurityManager() == null) {
                     Toast.makeText(MainActivity.this, "Inizializzazione server sicuro in corso... Riprova tra pochi secondi.", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                String ip = s.getLocalIpAddress();
-                String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
-                TlsCertificateManager.TlsInfo info = TlsCertificateManager.getInstance().getOrGenerateTlsInfo(MainActivity.this, ip);
-                String caFp = (info != null) ? info.caFingerprintSha256 : null;
+                final String ip = s.getLocalIpAddress();
+                final String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
 
-                String pin = s.getSecurityManager().generateNewPin();
-                int remaining = s.getSecurityManager().getPinRemainingSeconds();
-                PinOverlayDialog.show(MainActivity.this, pin, remaining, httpsUrl, caFp);
-                Toast.makeText(MainActivity.this, "Schermata PIN aperta a schermo (valida 120s)", Toast.LENGTH_SHORT).show();
+                // Disabilita temporaneamente il bottone durante il retrieval asincrono su worker thread
+                btnShowPin.setEnabled(false);
+                bgExecutor.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            TlsCertificateManager.TlsInfo info = TlsCertificateManager.getInstance().getOrGenerateTlsInfo(MainActivity.this, ip);
+                            final String caFp = (info != null) ? info.caFingerprintSha256 : null;
+                            final String pin = s.getSecurityManager().generateNewPin();
+                            final int remaining = s.getSecurityManager().getPinRemainingSeconds();
+
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    btnShowPin.setEnabled(true);
+                                    if (isFinishing() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed())) {
+                                        return;
+                                    }
+                                    PinOverlayDialog.show(MainActivity.this, pin, remaining, httpsUrl, caFp);
+                                    Toast.makeText(MainActivity.this, "Schermata PIN aperta a schermo (valida 120s)", Toast.LENGTH_SHORT).show();
+                                }
+                            });
+                        } catch (Exception e) {
+                            Log.e(TAG, "Errore recupero credenziali TLS / PIN per dialog", e);
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    btnShowPin.setEnabled(true);
+                                    Toast.makeText(MainActivity.this, "Errore generazione PIN sicuro.", Toast.LENGTH_SHORT).show();
+                                }
+                            });
+                        }
+                    }
+                });
             }
         });
 
@@ -292,8 +322,11 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // Notifica al server per verificare/sincronizzare SAN del certificato server
-        s.notifyIpAddressChanged(ip);
+        // Notifica asincrona al server per verificare/sincronizzare SAN del certificato server solo se mutato
+        if (lastNotifiedIp == null || !lastNotifiedIp.equals(ip)) {
+            lastNotifiedIp = ip;
+            s.notifyIpAddressChanged(ip);
+        }
 
         final String caDownloadUrl = "http://" + ip + ":" + RemoteServerService.HTTP_PORT + "/api/auth/ca.crt";
         final String httpsUrl = "https://" + ip + ":" + RemoteServerService.HTTPS_PORT + "/";
@@ -306,10 +339,15 @@ public class MainActivity extends Activity {
             tvCaFingerprint.setText("Generazione / verifica certificati TLS e QR code in corso...");
         }
 
-        // Calcolo asincrono su thread dedicato per non bloccare il rendering UI su architettura TV ARMv7
+        final long token = uiGenToken.incrementAndGet();
+
+        // Calcolo asincrono serializzato su worker thread per non bloccare il rendering UI su architettura TV ARMv7
         bgExecutor.execute(new Runnable() {
             @Override
             public void run() {
+                if (token != uiGenToken.get()) {
+                    return; // Richiesta obsoleta: token generazionale superato
+                }
                 try {
                     TlsCertificateManager tlsMgr = TlsCertificateManager.getInstance();
                     TlsCertificateManager.TlsInfo tlsInfo = tlsMgr.getOrGenerateTlsInfo(MainActivity.this, ip);
@@ -321,6 +359,9 @@ public class MainActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
+                            if (token != uiGenToken.get()) {
+                                return; // Risultato scartato per prevenire visualizzazione dati disallineati rispetto all'IP corrente
+                            }
                             if (isFinishing() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed())) {
                                 return;
                             }
@@ -340,6 +381,7 @@ public class MainActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
+                            if (token != uiGenToken.get()) return;
                             if (tvCaFingerprint != null) {
                                 tvCaFingerprint.setText("ERRORE_INIZIALIZZAZIONE_TLS: " + e.getMessage());
                             }

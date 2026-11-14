@@ -264,50 +264,112 @@ public class RemoteServerService extends Service {
     }
 
     private String currentServerIp = null;
+    private final Object ipSyncLock = new Object();
+    private boolean isReloadingIp = false;
 
-    public synchronized void notifyIpAddressChanged(String newIp) {
+    public void notifyIpAddressChanged(final String newIp) {
         if (newIp == null || newIp.trim().isEmpty() || "127.0.0.1".equals(newIp.trim())) {
             return;
         }
-        if (currentServerIp != null && currentServerIp.equals(newIp.trim())) {
-            return;
+        final String targetIp = newIp.trim();
+        synchronized (ipSyncLock) {
+            if (targetIp.equals(currentServerIp) || isReloadingIp) {
+                return;
+            }
+            isReloadingIp = true;
         }
-        Log.i(TAG, "IP LAN TV mutato (" + currentServerIp + " -> " + newIp + "). Rinnovo SAN e ricaricamento listener HTTPS...");
-        currentServerIp = newIp.trim();
 
-        // 1. Aggiorna certificato server SAN
-        TlsCertificateManager.getInstance().getOrGenerateTlsInfo(this, newIp);
+        // Spostiamo tutte le operazioni crittografiche (RSA SAN) e di rete su thread pool dedicato
+        // per non bloccare mai il main thread della TV o provocare frame drop
+        threadPool.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Log.i(TAG, "IP LAN TV mutato (" + currentServerIp + " -> " + targetIp + "). Rinnovo SAN e ricaricamento listener HTTPS...");
 
-        // 2. Ricarica atomica listener HTTPS
-        reloadHttpsListener();
+                    // 1. Aggiorna certificato server SAN
+                    TlsCertificateManager.getInstance().getOrGenerateTlsInfo(RemoteServerService.this, targetIp);
 
-        // 3. Notifica listener UI
-        for (ServiceStateListener l : sStateListeners) {
-            try {
-                l.onServerReady(newIp, HTTP_PORT, HTTPS_PORT);
-            } catch (Exception ignored) {}
-        }
+                    // 2. Ricarica atomica listener HTTPS
+                    boolean reloaded = reloadHttpsListener();
+
+                    if (reloaded) {
+                        // Aggiorna currentServerIp SOLO ed ESCLUSIVAMENTE in caso di bind riuscito
+                        synchronized (ipSyncLock) {
+                            currentServerIp = targetIp;
+                        }
+                        Log.i(TAG, "Listener HTTPS ricaricato con successo per IP " + targetIp);
+
+                        // 3. Notifica listener UI registrati
+                        for (ServiceStateListener l : sStateListeners) {
+                            try {
+                                l.onServerReady(targetIp, HTTP_PORT, HTTPS_PORT);
+                            } catch (Exception ignored) {}
+                        }
+                    } else {
+                        Log.w(TAG, "reloadHttpsListener fallito per IP " + targetIp + ". currentServerIp NON aggiornato per consentire retry futuri.");
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Errore durante notifyIpAddressChanged per " + targetIp, ex);
+                } finally {
+                    synchronized (ipSyncLock) {
+                        isReloadingIp = false;
+                    }
+                }
+            }
+        });
     }
 
     public synchronized boolean reloadHttpsListener() {
         if (!isRunning) return false;
+        final SSLServerSocket oldSocket = httpsServerSocket;
         try {
             SSLContext sslContext = createSSLContext();
             if (sslContext == null) {
                 Log.e(TAG, "reloadHttpsListener: createSSLContext fallito");
                 return false;
             }
-            SSLServerSocketFactory factory = sslContext.getServerSocketFactory();
-            SSLServerSocket newSslServer = (SSLServerSocket) factory.createServerSocket();
-            newSslServer.setReuseAddress(true);
-            newSslServer.bind(new InetSocketAddress(HTTPS_PORT));
 
-            SSLServerSocket oldSocket = httpsServerSocket;
-            httpsServerSocket = newSslServer;
+            // 1. Chiusura preventiva del socket precedente per liberare la porta HTTPS_PORT (8443)
+            // In ambiente Linux/Android setReuseAddress(true) non consente due socket TCP LISTEN simultanei sullo stesso endpoint
             if (oldSocket != null && !oldSocket.isClosed()) {
-                try { oldSocket.close(); } catch (Exception ignored) {}
+                try {
+                    oldSocket.close();
+                } catch (Exception ignored) {}
             }
 
+            // 2. Creazione e bind del nuovo socket con retries e backoff breve
+            SSLServerSocketFactory factory = sslContext.getServerSocketFactory();
+            SSLServerSocket newSslServer = null;
+            int retries = 5;
+            IOException lastBindEx = null;
+            while (retries > 0) {
+                try {
+                    newSslServer = (SSLServerSocket) factory.createServerSocket();
+                    newSslServer.setReuseAddress(true);
+                    newSslServer.bind(new InetSocketAddress(HTTPS_PORT));
+                    lastBindEx = null;
+                    break;
+                } catch (IOException e) {
+                    lastBindEx = e;
+                    retries--;
+                    if (newSslServer != null) {
+                        try { newSslServer.close(); } catch (Exception ignored) {}
+                        newSslServer = null;
+                    }
+                    if (retries > 0) {
+                        try { Thread.sleep(60); } catch (InterruptedException ignored) {}
+                    }
+                }
+            }
+
+            if (newSslServer == null || !newSslServer.isBound()) {
+                throw (lastBindEx != null) ? lastBindEx : new IOException("Impossibile effettuare il bind su porta " + HTTPS_PORT);
+            }
+
+            httpsServerSocket = newSslServer;
+
+            // 3. Riavvio o riallineamento thread acceptor
             if (httpsAcceptorThread == null || !httpsAcceptorThread.isAlive()) {
                 httpsAcceptorThread = new Thread(new Runnable() {
                     @Override
@@ -334,6 +396,7 @@ public class RemoteServerService extends Service {
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Errore durante il reload dell'HTTPS listener: " + e.getMessage(), e);
+            httpsServerSocket = null; // Fail-closed: segnala stato non-ready coerente in isReady()
             return false;
         }
     }
