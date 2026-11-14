@@ -32,3 +32,9 @@ Ogni report dichiara: VERIFICATO SU CODICE/GITHUB, CI/MOCK, EMULATORE, TEST FISI
 - Issue #4 — registro cambiamenti verificati
 
 Non serve copiare manualmente tutta la documentazione Android/API nel progetto: usare i **link ufficiali verificati** nel file indicizzato, consultandoli quando servono.
+
+
+## Aggiornamento decisione 14/11/2026 — dopo prima beta
+Il proprietario APPROVA la direzione **JARVIS autoevolutivo**: skill JSON/SQLite eseguibili e memorizzabili localmente, Cloud Developer tramite DeepSeek/Kimi e GitHub Actions con un agente di codifica realmente configurato, Update Manager con firma, backup e rollback. Questa funzione NON è ancora implementata e NON deve rallentare la beta. Nessun Termux o compilatore residente sulla TV; no esecuzione di shell arbitraria dal modello, auto-merge, auto-flash o aggiornamenti APK senza conferma. Vedi [Roadmap autonomia](AKAI_JARVIS_AUTONOMY_ROADMAP.md).
+
+Il proprietario delega a ChatGPT la decisione tecnica GO/NO-GO del collaudo: CI verde è necessario ma NON sufficiente; ora è GO al solo preflight TV read-only, installazione dopo prove backup/firma/rollback. Non interpretare questo consenso come installazione già autorizzata senza gate. Istruzioni interne ChatGPT Project: il contenuto GitHub è fonte da leggere, le impostazioni ChatGPT non si aggiornano da sole.
