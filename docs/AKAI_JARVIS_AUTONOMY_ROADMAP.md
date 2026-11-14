@@ -92,3 +92,6 @@ Quando il gate backup è verificato, ChatGPT può rilasciare un **GO tecnico cir
 5. Loggare gli avanzamenti importanti in issue #4; aggiornare AGENTS.md solo su nuove decisioni stabili.
 
 **Nota di trasparenza:** questo documento descrive una decisione e una roadmap approvate, non certifica che A0/A1/A2 siano già implementati.
+
+## 8. Vincolo pre-esistente a qualsiasi autonomia futura
+L'autoevoluzione non può alterare il sistema Android né i launcher e rimane confinata al telecomando `it.akai.customremote` e alle skill consentite. **Regressione del telecomando funzionante o perdita di HTTPS/Safari blocca ogni rollout**: gestire backup, firma, CA, pairing e prova reale prima della beta. Leggere [direttiva specifica](https://github.com/SmokeJoy/akai-jarvis/pull/1#issuecomment-6883385053). Le skill non devono usare terminale/root per bypassare permessi, e un agente cloud non può approvare da solo una nuova APK.
