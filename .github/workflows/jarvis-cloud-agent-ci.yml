@@ -1,0 +1,26 @@
+name: JARVIS Cloud Developer — Safe CI
+
+on:
+  pull_request:
+    paths:
+      - 'jarvis-cloud-agent/**'
+      - '.github/workflows/jarvis-cloud-*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test developer sandbox with mock data only
+        run: python -m unittest discover -s jarvis-cloud-agent -p 'test_*.py' -v
+      - name: Python syntax
+        run: python -m py_compile jarvis-cloud-agent/developer.py
