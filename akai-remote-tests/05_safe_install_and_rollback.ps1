@@ -112,6 +112,162 @@ function Get-Sha256Hex($filePath) {
     }
 }
 
+function Read-Asn1DerTlv {
+    param(
+        [byte[]]$Bytes,
+        [int]$Offset
+    )
+    if (-not $Bytes -or $Offset -lt 0 -or $Offset -ge $Bytes.Length) {
+        return $null
+    }
+    $tag = $Bytes[$Offset]
+    $pos = $Offset + 1
+    if ($pos -ge $Bytes.Length) { return $null }
+    $lenByte = $Bytes[$pos]
+    $pos++
+    [int]$length = 0
+    if (($lenByte -band 0x80) -eq 0) {
+        $length = [int]$lenByte
+    } else {
+        $numOctets = [int]($lenByte -band 0x7F)
+        if ($numOctets -le 0 -or $numOctets -gt 4 -or ($pos + $numOctets) -gt $Bytes.Length) {
+            return $null
+        }
+        for ($i = 0; $i -lt $numOctets; $i++) {
+            $length = ($length -shl 8) -bor [int]$Bytes[$pos + $i]
+        }
+        $pos += $numOctets
+    }
+    if ($length -lt 0 -or ($pos + $length) -gt $Bytes.Length) {
+        return $null
+    }
+    return @{
+        Tag         = $tag
+        StartOffset = $Offset
+        ValueOffset = $pos
+        Length      = $length
+        NextOffset  = $pos + $length
+    }
+}
+
+function Convert-EcdsaDerSignatureToIeeeP1363 {
+    param(
+        [byte[]]$DerSignature,
+        [int]$CoordinateSizeBytes
+    )
+    if (-not $DerSignature -or $CoordinateSizeBytes -le 0) { return $null }
+    $seq = Read-Asn1DerTlv -Bytes $DerSignature -Offset 0
+    if (-not $seq -or $seq.Tag -ne 0x30 -or $seq.NextOffset -ne $DerSignature.Length) { return $null }
+    $rTlv = Read-Asn1DerTlv -Bytes $DerSignature -Offset $seq.ValueOffset
+    if (-not $rTlv -or $rTlv.Tag -ne 0x02) { return $null }
+    $sTlv = Read-Asn1DerTlv -Bytes $DerSignature -Offset $rTlv.NextOffset
+    if (-not $sTlv -or $sTlv.Tag -ne 0x02 -or $sTlv.NextOffset -ne $seq.NextOffset) { return $null }
+
+    $out = New-Object byte[] ($CoordinateSizeBytes * 2)
+    $parts = @(
+        @{ Tlv = $rTlv; DestOffset = 0 },
+        @{ Tlv = $sTlv; DestOffset = $CoordinateSizeBytes }
+    )
+    foreach ($part in $parts) {
+        $tlv = $part.Tlv
+        $srcStart = $tlv.ValueOffset
+        $srcLen = $tlv.Length
+        while ($srcLen -gt 1 -and $DerSignature[$srcStart] -eq 0x00) {
+            $srcStart++
+            $srcLen--
+        }
+        if ($srcLen -gt $CoordinateSizeBytes) { return $null }
+        $padOffset = $part.DestOffset + ($CoordinateSizeBytes - $srcLen)
+        [System.Buffer]::BlockCopy($DerSignature, $srcStart, $out, $padOffset, $srcLen)
+    }
+    return $out
+}
+
+function Test-X509CertificateSignature {
+    param(
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$ChildCert,
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$IssuerCert
+    )
+    if (-not $ChildCert -or -not $IssuerCert) { return $false }
+    try {
+        [byte[]]$raw = $ChildCert.RawData
+        if (-not $raw -or $raw.Length -lt 16) { return $false }
+
+        $outer = Read-Asn1DerTlv -Bytes $raw -Offset 0
+        if (-not $outer -or $outer.Tag -ne 0x30 -or $outer.NextOffset -ne $raw.Length) { return $false }
+
+        $tbs = Read-Asn1DerTlv -Bytes $raw -Offset $outer.ValueOffset
+        if (-not $tbs -or $tbs.Tag -ne 0x30) { return $false }
+
+        $alg = Read-Asn1DerTlv -Bytes $raw -Offset $tbs.NextOffset
+        if (-not $alg -or $alg.Tag -ne 0x30) { return $false }
+
+        $sigBit = Read-Asn1DerTlv -Bytes $raw -Offset $alg.NextOffset
+        if (-not $sigBit -or $sigBit.Tag -ne 0x03 -or $sigBit.NextOffset -ne $outer.NextOffset -or $sigBit.Length -lt 2) {
+            return $false
+        }
+        if ($raw[$sigBit.ValueOffset] -ne 0x00) { return $false }
+
+        $tbsLen = $tbs.NextOffset - $tbs.StartOffset
+        $tbsBytes = New-Object byte[] $tbsLen
+        [System.Buffer]::BlockCopy($raw, $tbs.StartOffset, $tbsBytes, 0, $tbsLen)
+
+        $sigLen = $sigBit.Length - 1
+        $sigBytes = New-Object byte[] $sigLen
+        [System.Buffer]::BlockCopy($raw, ($sigBit.ValueOffset + 1), $sigBytes, 0, $sigLen)
+
+        $sigOid = $ChildCert.SignatureAlgorithm.Value
+        $keyKind = $null
+        $hashName = $null
+        switch ($sigOid) {
+            "1.2.840.113549.1.1.11" { $keyKind = "RSA";   $hashName = [System.Security.Cryptography.HashAlgorithmName]::SHA256 }
+            "1.2.840.113549.1.1.12" { $keyKind = "RSA";   $hashName = [System.Security.Cryptography.HashAlgorithmName]::SHA384 }
+            "1.2.840.113549.1.1.13" { $keyKind = "RSA";   $hashName = [System.Security.Cryptography.HashAlgorithmName]::SHA512 }
+            "1.2.840.10045.4.3.2"   { $keyKind = "ECDSA"; $hashName = [System.Security.Cryptography.HashAlgorithmName]::SHA256 }
+            "1.2.840.10045.4.3.3"   { $keyKind = "ECDSA"; $hashName = [System.Security.Cryptography.HashAlgorithmName]::SHA384 }
+            "1.2.840.10045.4.3.4"   { $keyKind = "ECDSA"; $hashName = [System.Security.Cryptography.HashAlgorithmName]::SHA512 }
+            default { return $false }
+        }
+
+        if ($keyKind -eq "RSA") {
+            $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($IssuerCert)
+            if ($null -eq $rsa) { return $false }
+            try {
+                return [bool]$rsa.VerifyData($tbsBytes, $sigBytes, $hashName, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            } finally {
+                $rsa.Dispose()
+            }
+        } elseif ($keyKind -eq "ECDSA") {
+            $ecdsa = [System.Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey($IssuerCert)
+            if ($null -eq $ecdsa) { return $false }
+            try {
+                $coordSize = [int][Math]::Ceiling($ecdsa.KeySize / 8.0)
+                $ieeeSig = Convert-EcdsaDerSignatureToIeeeP1363 -DerSignature $sigBytes -CoordinateSizeBytes $coordSize
+                if (-not $ieeeSig) { return $false }
+                return [bool]$ecdsa.VerifyData($tbsBytes, $ieeeSig, $hashName)
+            } finally {
+                $ecdsa.Dispose()
+            }
+        }
+        return $false
+    } catch {
+        return $false
+    }
+}
+
+function Compare-ByteArraysEqual {
+    param(
+        [byte[]]$A,
+        [byte[]]$B
+    )
+    if ($null -eq $A -or $null -eq $B) { return $false }
+    if ($A.Length -ne $B.Length) { return $false }
+    for ($i = 0; $i -lt $A.Length; $i++) {
+        if ($A[$i] -ne $B[$i]) { return $false }
+    }
+    return $true
+}
+
 function Test-HttpsTlsEndpoint {
     param(
         [string]$TargetHost,
@@ -145,13 +301,22 @@ function Test-HttpsTlsEndpoint {
             if ($certificate) {
                 $holder.RawCertBytes = $certificate.GetRawCertData()
             }
+            $list = @()
             if ($chain -and $chain.ChainElements) {
-                $list = @()
                 foreach ($el in $chain.ChainElements) {
-                    $list += ,($el.Certificate.GetRawCertData())
+                    if ($el -and $el.Certificate) {
+                        $list += ,($el.Certificate.GetRawCertData())
+                    }
                 }
-                $holder.ChainRawCerts = $list
             }
+            if ($chain -and $chain.ChainPolicy -and $chain.ChainPolicy.ExtraStore) {
+                foreach ($xc in $chain.ChainPolicy.ExtraStore) {
+                    if ($xc) {
+                        $list += ,($xc.GetRawCertData())
+                    }
+                }
+            }
+            $holder.ChainRawCerts = $list
             $holder.Errors = $sslPolicyErrors
             return $true
         }
@@ -188,7 +353,25 @@ function Test-HttpsTlsEndpoint {
             }
         }
 
-        # 1. Validazione periodo temporale (NotBefore <= UtcNow <= NotAfter)
+        # Costruisce la collezione deduplicata di tutti i certificati presentati dal peer durante l'handshake
+        $peerCerts = New-Object 'System.Collections.Generic.List[System.Security.Cryptography.X509Certificates.X509Certificate2]'
+        $peerShaMap = @{}
+        $serverCertSha256 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+        $peerCerts.Add($cert2)
+        $peerShaMap[$serverCertSha256] = $cert2
+
+        if ($holder.ChainRawCerts -and $holder.ChainRawCerts.Count -gt 0) {
+            foreach ($rawCert in $holder.ChainRawCerts) {
+                $cElem = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(,[byte[]]$rawCert)
+                $cFp = $cElem.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+                if (-not $peerShaMap.ContainsKey($cFp)) {
+                    $peerShaMap[$cFp] = $cElem
+                    $peerCerts.Add($cElem)
+                }
+            }
+        }
+
+        # 1. Validazione periodo temporale (NotBefore <= UtcNow <= NotAfter) su foglia e su tutta la catena presentata
         $now = [DateTime]::UtcNow
         $notBeforeUtc = ([DateTime]$cert2.NotBefore).ToUniversalTime()
         $notAfterUtc = ([DateTime]$cert2.NotAfter).ToUniversalTime()
@@ -200,7 +383,7 @@ function Test-HttpsTlsEndpoint {
                 Status = "CERT_EXPIRED_OR_NOT_YET_VALID"
                 SanMatched = $false
                 CaMatched = $false
-                CertSha256 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+                CertSha256 = $serverCertSha256
                 Error = "Certificato non valido nel periodo temporale corrente (NotBefore: $($cert2.NotBefore), NotAfter: $($cert2.NotAfter))"
             }
         }
@@ -296,19 +479,9 @@ function Test-HttpsTlsEndpoint {
             }
         }
 
-        # 3. Validazione Catena e Impronta Root CA
-        $chainFingerprints = @()
-        if ($holder.ChainRawCerts -and $holder.ChainRawCerts.Count -gt 0) {
-            foreach ($rawCert in $holder.ChainRawCerts) {
-                $cElem = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(,[byte[]]$rawCert)
-                $chainFingerprints += $cElem.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
-            }
-        }
-        $serverCertSha256 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
-        if ($chainFingerprints.Count -eq 0) {
-            $chainFingerprints += $serverCertSha256
-        }
-        $rootCaSha256 = $chainFingerprints[$chainFingerprints.Count - 1]
+        # 3. Validazione Crittografica Completa della Catena X.509 e Impronta Root CA
+        $lastPeer = $peerCerts[$peerCerts.Count - 1]
+        $rootCaSha256 = $lastPeer.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
 
         $caMatched = $false
         $caStatus = ""
@@ -316,10 +489,7 @@ function Test-HttpsTlsEndpoint {
             $caStatus = "TLS_HANDSHAKE_ONLY/UNVERIFIED"
         } else {
             $cleanExpected = $ExpectedCaSha256.Replace(':', '').Replace(' ', '').ToLower().Trim()
-            if ($chainFingerprints -contains $cleanExpected) {
-                $caMatched = $true
-                $caStatus = "APPROVED"
-            } else {
+            if (-not $peerShaMap.ContainsKey($cleanExpected)) {
                 $sslStream.Close()
                 $tcpClient.Close()
                 return @{
@@ -329,8 +499,146 @@ function Test-HttpsTlsEndpoint {
                     CaMatched = $false
                     RootCaSha256 = $rootCaSha256
                     ExpectedCaSha256 = $cleanExpected
-                    Error = "CA Mismatch: l'impronta della CA del server ($rootCaSha256) non corrisponde all'impronta fuori banda attesa ($cleanExpected)"
+                    Error = "CA Mismatch: nessun certificato nella catena TLS ($rootCaSha256) corrisponde all'impronta fuori banda attesa ($cleanExpected)"
                 }
+            }
+
+            $pinnedCaCert = $peerShaMap[$cleanExpected]
+            $customChain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+            try {
+                $customChain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+                $customChain.ChainPolicy.VerificationTime = $now
+                foreach ($pc in $peerCerts) {
+                    [void]$customChain.ChainPolicy.ExtraStore.Add($pc)
+                }
+
+                $usesCustomRootTrust = ($null -ne $customChain.ChainPolicy.PSObject.Properties['TrustMode'])
+                if ($usesCustomRootTrust) {
+                    $customChain.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust
+                    [void]$customChain.ChainPolicy.CustomTrustStore.Add($pinnedCaCert)
+                    $customChain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+                } else {
+                    $customChain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
+                }
+
+                $chainBuilt = $customChain.Build($cert2)
+                $badChainStatuses = @()
+                if ($customChain.ChainStatus) {
+                    foreach ($st in $customChain.ChainStatus) {
+                        if ($st.Status -eq [System.Security.Cryptography.X509Certificates.X509ChainStatusFlags]::NoError) {
+                            continue
+                        }
+                        if (-not $usesCustomRootTrust -and $st.Status -eq [System.Security.Cryptography.X509Certificates.X509ChainStatusFlags]::UntrustedRoot) {
+                            continue
+                        }
+                        $badChainStatuses += $st.Status.ToString()
+                    }
+                }
+
+                if (-not $chainBuilt -or $badChainStatuses.Count -gt 0 -or -not $customChain.ChainElements -or $customChain.ChainElements.Count -lt 1) {
+                    $sslStream.Close()
+                    $tcpClient.Close()
+                    return @{
+                        Success = $false
+                        Status = "CA_UNTRUSTED_MISMATCH"
+                        SanMatched = $sanMatched
+                        CaMatched = $false
+                        RootCaSha256 = $rootCaSha256
+                        ExpectedCaSha256 = $cleanExpected
+                        Error = "Validazione catena X.509 fallita (ChainBuilt=$chainBuilt, Status=$($badChainStatuses -join ','))"
+                    }
+                }
+
+                $elemCount = $customChain.ChainElements.Count
+                $firstElemSha = $customChain.ChainElements[0].Certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+                $builtRootCert = $customChain.ChainElements[$elemCount - 1].Certificate
+                $builtRootSha = $builtRootCert.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+                $rootCaSha256 = $builtRootSha
+
+                if ($firstElemSha -ne $serverCertSha256 -or $builtRootSha -ne $cleanExpected) {
+                    $sslStream.Close()
+                    $tcpClient.Close()
+                    return @{
+                        Success = $false
+                        Status = "CA_UNTRUSTED_MISMATCH"
+                        SanMatched = $sanMatched
+                        CaMatched = $false
+                        RootCaSha256 = $builtRootSha
+                        ExpectedCaSha256 = $cleanExpected
+                        Error = "Catena X.509 non ancorata alla Root CA attesa (BuiltRoot=$builtRootSha, Atteso=$cleanExpected)"
+                    }
+                }
+
+                $cryptoChainError = $null
+                for ($idx = 0; $idx -lt $elemCount; $idx++) {
+                    $elCert = $customChain.ChainElements[$idx].Certificate
+                    $elNb = ([DateTime]$elCert.NotBefore).ToUniversalTime()
+                    $elNa = ([DateTime]$elCert.NotAfter).ToUniversalTime()
+                    if ($now -lt $elNb -or $now -gt $elNa) {
+                        $cryptoChainError = "Certificato nella catena [index=$idx, Subject=$($elCert.Subject)] fuori finestra temporale (NotBefore=$elNb, NotAfter=$elNa)"
+                        break
+                    }
+
+                    if ($elemCount -gt 1 -and $idx -ge 1) {
+                        $bcExt = $null
+                        $kuExt = $null
+                        foreach ($ex in $elCert.Extensions) {
+                            if ($ex.Oid.Value -eq "2.5.29.19") { $bcExt = $ex }
+                            elseif ($ex.Oid.Value -eq "2.5.29.15") { $kuExt = $ex }
+                        }
+                        if (-not ($bcExt -is [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]) -or -not $bcExt.CertificateAuthority) {
+                            $cryptoChainError = "Certificato emittente [index=$idx, Subject=$($elCert.Subject)] privo di BasicConstraints CertificateAuthority=true"
+                            break
+                        }
+                        if ($kuExt -is [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]) {
+                            if (($kuExt.KeyUsages -band [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign) -eq 0) {
+                                $cryptoChainError = "Certificato emittente [index=$idx, Subject=$($elCert.Subject)] privo del flag KeyUsage KeyCertSign"
+                                break
+                            }
+                        }
+                    }
+
+                    if ($idx -lt ($elemCount - 1)) {
+                        $issuerCert = $customChain.ChainElements[$idx + 1].Certificate
+                        if (-not (Compare-ByteArraysEqual -A $elCert.IssuerName.RawData -B $issuerCert.SubjectName.RawData)) {
+                            $cryptoChainError = "Disallineamento DN Issuer/Subject nella catena al livello $idx"
+                            break
+                        }
+                        if (-not (Test-X509CertificateSignature -ChildCert $elCert -IssuerCert $issuerCert)) {
+                            $cryptoChainError = "Firma crittografica non valida per il certificato [index=$idx, Subject=$($elCert.Subject)] rispetto all'emittente [$($issuerCert.Subject)]"
+                            break
+                        }
+                    } else {
+                        if (-not (Compare-ByteArraysEqual -A $elCert.IssuerName.RawData -B $elCert.SubjectName.RawData)) {
+                            $cryptoChainError = "Certificato ancora finale [Subject=$($elCert.Subject)] non autofirmato (Issuer != Subject)"
+                            break
+                        }
+                        if (-not (Test-X509CertificateSignature -ChildCert $elCert -IssuerCert $elCert)) {
+                            $cryptoChainError = "Autofirma crittografica della Root CA [Subject=$($elCert.Subject)] non valida"
+                            break
+                        }
+                    }
+                }
+
+                if ($cryptoChainError) {
+                    $sslStream.Close()
+                    $tcpClient.Close()
+                    return @{
+                        Success = $false
+                        Status = "CA_UNTRUSTED_MISMATCH"
+                        SanMatched = $sanMatched
+                        CaMatched = $false
+                        RootCaSha256 = $builtRootSha
+                        ExpectedCaSha256 = $cleanExpected
+                        Error = "Verifica crittografica catena fallita: $cryptoChainError"
+                    }
+                }
+
+                $caMatched = $true
+                $caStatus = "APPROVED"
+            } finally {
+                $customChain.Reset()
+                $customChain.Dispose()
             }
         }
 

@@ -2377,34 +2377,11 @@ try {
 }
 
 # -----------------------------------------------------------------------------
-# TEST 25-28: Verifica Rigorosa Autenticazione Server TLS (SAN Mismatch, CA Hostile, CA Unverified, CA Approved)
+# TEST 25-28: Verifica Rigorosa Autenticazione Server TLS (SAN Mismatch, CA Hostile/Forged Chain, CA Unverified, CA Approved 1-tier & 2-tier PKI)
 # -----------------------------------------------------------------------------
 Write-Host "`n--- Esecuzione Test 25-28: Autenticazione Rigorosa Server TLS (Test-HttpsTlsEndpoint) ---" -ForegroundColor Cyan
 $testDirTls = Join-Path $tempDir "akai_test_tls_suite_$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $testDirTls | Out-Null
-
-$pfx127 = Join-Path $testDirTls "cert127.pfx"
-$pfx192 = Join-Path $testDirTls "cert192.pfx"
-
-# 1. Certificato con SAN IP 127.0.0.1
-$rsa1 = [System.Security.Cryptography.RSA]::Create(2048)
-$san1 = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
-$san1.AddIpAddress([System.Net.IPAddress]::Parse('127.0.0.1'))
-$req1 = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=127.0.0.1', $rsa1, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
-$req1.CertificateExtensions.Add($san1.Build())
-$cert1 = $req1.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
-[System.IO.File]::WriteAllBytes($pfx127, $cert1.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'pass123'))
-$sha127 = $cert1.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
-
-# 2. Certificato con SAN IP 192.168.1.99 (per indurre SAN Mismatch su 127.0.0.1)
-$rsa2 = [System.Security.Cryptography.RSA]::Create(2048)
-$san2 = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
-$san2.AddIpAddress([System.Net.IPAddress]::Parse('192.168.1.99'))
-$req2 = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=192.168.1.99', $rsa2, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
-$req2.CertificateExtensions.Add($san2.Build())
-$cert2 = $req2.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
-[System.IO.File]::WriteAllBytes($pfx192, $cert2.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'pass123'))
-$sha192 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
 
 # Helper per avviare server HTTPS Node.js effimero
 function Start-EphemeralNodeHttpsServer($pfxPath) {
@@ -2417,95 +2394,247 @@ function Start-EphemeralNodeHttpsServer($pfxPath) {
 const https = require('https');
 const fs = require('fs');
 const srv = https.createServer({ pfx: fs.readFileSync('$escapedPfx'), passphrase: 'pass123' }, (req, res) => res.end('ok'));
+srv.on('error', () => {});
+srv.on('tlsClientError', () => {});
 srv.listen(0, '127.0.0.1', () => {
-    fs.writeFileSync('$escapedPort', srv.address().port.toString());
+    const portStr = srv.address().port.toString();
+    fs.writeFileSync('$escapedPort.tmp', portStr);
+    fs.renameSync('$escapedPort.tmp', '$escapedPort');
 });
 setInterval(() => {}, 1000);
 "@
     [System.IO.File]::WriteAllText($jsPath, $srvCode)
     $proc = Start-Process -FilePath "$validNode" -ArgumentList "`"$jsPath`"" -PassThru
-    $cnt = 30
-    while (-not (Test-Path $pFile) -and $cnt -gt 0) {
+    $cnt = 50
+    [int]$port = 0
+    while ($cnt -gt 0) {
+        if (Test-Path $pFile) {
+            $rawPort = Get-Content $pFile -Raw -ErrorAction SilentlyContinue
+            if ($rawPort -and $rawPort -match '^\s*(\d+)\s*$' -and ([int]$matches[1] -gt 0)) {
+                $port = [int]$matches[1]
+                break
+            }
+        }
         Start-Sleep -Milliseconds 100
         $cnt--
     }
-    $port = [int](Get-Content $pFile)
+    if ($port -le 0) {
+        if ($proc -and -not $proc.HasExited) { $proc.Kill() }
+        throw "Server HTTPS Node.js effimero non avviato entro il timeout previsto"
+    }
     return @{ Process = $proc; Port = $port }
 }
 
-# TEST 25: SAN Mismatch
-$srv25 = Start-EphemeralNodeHttpsServer $pfx192
-$cmd25 = @"
+try {
+    $pfx127 = Join-Path $testDirTls "cert127.pfx"
+    $pfx192 = Join-Path $testDirTls "cert192.pfx"
+    $pfxValid2Tier = Join-Path $testDirTls "cert_valid_2tier.pfx"
+    $pfxForged2Tier = Join-Path $testDirTls "cert_forged_2tier.pfx"
+
+    # 1. Certificato self-signed con SAN IP 127.0.0.1
+    $rsa1 = [System.Security.Cryptography.RSA]::Create(2048)
+    $san1 = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+    $san1.AddIpAddress([System.Net.IPAddress]::Parse('127.0.0.1'))
+    $req1 = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=127.0.0.1', $rsa1, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $req1.CertificateExtensions.Add($san1.Build())
+    $cert1 = $req1.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+    [System.IO.File]::WriteAllBytes($pfx127, $cert1.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'pass123'))
+    $sha127 = $cert1.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+
+    # 2. Certificato self-signed con SAN IP 192.168.1.99 (per indurre SAN Mismatch su 127.0.0.1)
+    $rsa2 = [System.Security.Cryptography.RSA]::Create(2048)
+    $san2 = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+    $san2.AddIpAddress([System.Net.IPAddress]::Parse('192.168.1.99'))
+    $req2 = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=192.168.1.99', $rsa2, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $req2.CertificateExtensions.Add($san2.Build())
+    $cert2 = $req2.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+    [System.IO.File]::WriteAllBytes($pfx192, $cert2.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'pass123'))
+    $sha192 = $cert2.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+
+    # 3. PKI reale a 2 livelli (Root CA autentica + Foglia SAN=127.0.0.1 firmata dalla Root CA)
+    $rsaRealCa = [System.Security.Cryptography.RSA]::Create(2048)
+    $reqRealCa = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=AKAI Jarvis Test Root CA', $rsaRealCa, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $reqRealCa.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
+    $reqRealCa.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(([System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::CrlSign), $true))
+    $realRootCa = $reqRealCa.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(2))
+    $realRootCaSha = $realRootCa.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLower()
+    $realRootCaPubOnly = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(,$realRootCa.RawData)
+
+    $rsaValidLeaf = [System.Security.Cryptography.RSA]::Create(2048)
+    $sanValidLeaf = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+    $sanValidLeaf.AddIpAddress([System.Net.IPAddress]::Parse('127.0.0.1'))
+    $reqValidLeaf = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=127.0.0.1', $rsaValidLeaf, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $reqValidLeaf.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
+    $reqValidLeaf.CertificateExtensions.Add($sanValidLeaf.Build())
+    $validLeafPub = $reqValidLeaf.Create($realRootCa, [DateTimeOffset]::UtcNow.AddHours(-1), [DateTimeOffset]::UtcNow.AddDays(1), [byte[]]@(0x01, 0x02, 0x03, 0x04))
+    $validLeafPriv = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($validLeafPub, $rsaValidLeaf)
+
+    $colValid2Tier = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2Collection
+    [void]$colValid2Tier.Add($validLeafPriv)
+    [void]$colValid2Tier.Add($realRootCaPubOnly)
+    [System.IO.File]::WriteAllBytes($pfxValid2Tier, $colValid2Tier.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pkcs12, 'pass123'))
+
+    # 4. Catena contraffatta: Foglia SAN=127.0.0.1 firmata da Rogue CA (stesso Subject DN ma chiave diversa) + Root CA autentica allegata nel bundle TLS
+    $rsaRogueCa = [System.Security.Cryptography.RSA]::Create(2048)
+    $reqRogueCa = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=AKAI Jarvis Test Root CA', $rsaRogueCa, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $reqRogueCa.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
+    $reqRogueCa.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(([System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::CrlSign), $true))
+    $rogueCa = $reqRogueCa.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(2))
+
+    $rsaForgedLeaf = [System.Security.Cryptography.RSA]::Create(2048)
+    $sanForgedLeaf = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+    $sanForgedLeaf.AddIpAddress([System.Net.IPAddress]::Parse('127.0.0.1'))
+    $reqForgedLeaf = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=127.0.0.1', $rsaForgedLeaf, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $reqForgedLeaf.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
+    $reqForgedLeaf.CertificateExtensions.Add($sanForgedLeaf.Build())
+    $forgedLeafPub = $reqForgedLeaf.Create($rogueCa, [DateTimeOffset]::UtcNow.AddHours(-1), [DateTimeOffset]::UtcNow.AddDays(1), [byte[]]@(0x05, 0x06, 0x07, 0x08))
+    $forgedLeafPriv = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($forgedLeafPub, $rsaForgedLeaf)
+
+    $colForged2Tier = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2Collection
+    [void]$colForged2Tier.Add($forgedLeafPriv)
+    [void]$colForged2Tier.Add($realRootCaPubOnly)
+    [System.IO.File]::WriteAllBytes($pfxForged2Tier, $colForged2Tier.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pkcs12, 'pass123'))
+
+    # TEST 25: SAN Mismatch
+    $srv25 = Start-EphemeralNodeHttpsServer $pfx192
+    try {
+        $cmd25 = @"
 . '$scriptEscaped' -Action plan | Out-Null
 `$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv25.Port) -ExpectedCaSha256 '$sha192'
 Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':SAN=' + `$res.SanMatched)
 "@
-$out25 = & $psExe -ExecutionPolicy Bypass -Command $cmd25 2>&1 | Out-String
-$srv25.Process.Kill()
+        $out25 = & $psExe -ExecutionPolicy Bypass -Command $cmd25 2>&1 | Out-String
+    } finally {
+        if ($srv25.Process -and -not $srv25.Process.HasExited) { $srv25.Process.Kill() }
+    }
 
-if ($out25 -match "SUCCESS=False:STATUS=SAN_MISMATCH:SAN=False") {
-    Write-Host "[PASS] [TEST NEGATIVO / TLS SAN MISMATCH] Test 25: Certificato con SAN discrepanza (192.168.1.99 su 127.0.0.1) categoricamente bloccato (SAN_MISMATCH)" -ForegroundColor Green
-    $passed++
-} else {
-    Write-Host "[FAIL] [TEST NEGATIVO / TLS SAN MISMATCH] Test 25: Fallito: $out25" -ForegroundColor Red
-    $failed++
-}
+    if ($out25 -match "SUCCESS=False:STATUS=SAN_MISMATCH:SAN=False") {
+        Write-Host "[PASS] [TEST NEGATIVO / TLS SAN MISMATCH] Test 25: Certificato con SAN discrepanza (192.168.1.99 su 127.0.0.1) categoricamente bloccato (SAN_MISMATCH)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / TLS SAN MISMATCH] Test 25: Fallito: $out25" -ForegroundColor Red
+        $failed++
+    }
 
-# TEST 26: Hostile / Untrusted CA
-$srv26 = Start-EphemeralNodeHttpsServer $pfx127
-$cmd26 = @"
+    # TEST 26: Hostile / Untrusted CA & Chain Forgery Attack (26a + 26b)
+    $subPassed26 = 0
+    $srv26a = Start-EphemeralNodeHttpsServer $pfx127
+    try {
+        $cmd26a = @"
 . '$scriptEscaped' -Action plan | Out-Null
-`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv26.Port) -ExpectedCaSha256 '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'
+`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv26a.Port) -ExpectedCaSha256 '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'
 Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':CA=' + `$res.CaMatched)
 "@
-$out26 = & $psExe -ExecutionPolicy Bypass -Command $cmd26 2>&1 | Out-String
-$srv26.Process.Kill()
+        $out26a = & $psExe -ExecutionPolicy Bypass -Command $cmd26a 2>&1 | Out-String
+    } finally {
+        if ($srv26a.Process -and -not $srv26a.Process.HasExited) { $srv26a.Process.Kill() }
+    }
 
-if ($out26 -match "SUCCESS=False:STATUS=CA_UNTRUSTED_MISMATCH:CA=False") {
-    Write-Host "[PASS] [TEST NEGATIVO / TLS CA UNTRUSTED] Test 26: Certificato con CA ostile o non attesa bloccato categoricamente (CA_UNTRUSTED_MISMATCH)" -ForegroundColor Green
-    $passed++
-} else {
-    Write-Host "[FAIL] [TEST NEGATIVO / TLS CA UNTRUSTED] Test 26: Fallito: $out26" -ForegroundColor Red
-    $failed++
-}
+    if ($out26a -match "SUCCESS=False:STATUS=CA_UNTRUSTED_MISMATCH:CA=False") {
+        $subPassed26++
+        Write-Host "   [PASS] Sotto-test 26a: Certificato con CA non corrispondente all'impronta attesa bloccato categoricamente (CA_UNTRUSTED_MISMATCH)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 26a fallito: $out26a" -ForegroundColor Red
+    }
 
-# TEST 27: Unverified Mode (No Out-of-band CA)
-$srv27 = Start-EphemeralNodeHttpsServer $pfx127
-$cmd27 = @"
+    $srv26b = Start-EphemeralNodeHttpsServer $pfxForged2Tier
+    try {
+        $cmd26b = @"
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv26b.Port) -ExpectedCaSha256 '$realRootCaSha'
+Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':CA=' + `$res.CaMatched + ':ERR=' + `$res.Error)
+"@
+        $out26b = & $psExe -ExecutionPolicy Bypass -Command $cmd26b 2>&1 | Out-String
+    } finally {
+        if ($srv26b.Process -and -not $srv26b.Process.HasExited) { $srv26b.Process.Kill() }
+    }
+
+    if ($out26b -match "SUCCESS=False:STATUS=CA_UNTRUSTED_MISMATCH:CA=False") {
+        $subPassed26++
+        Write-Host "   [PASS] Sotto-test 26b: Catena TLS contraffatta (foglia SAN valida firmata da chiave rogue + Root CA attesa allegata come extra cert) rifiutata crittograficamente" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 26b fallito: $out26b" -ForegroundColor Red
+    }
+
+    if ($subPassed26 -eq 2) {
+        Write-Host "[PASS] [TEST NEGATIVO / TLS CA UNTRUSTED & CHAIN FORGERY] Test 26: Impronta ostile e firma catena contraffatta bloccate categoricamente ($subPassed26/2)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / TLS CA UNTRUSTED & CHAIN FORGERY] Test 26: Sotto-test superati: $subPassed26 / 2" -ForegroundColor Red
+        $failed++
+    }
+
+    # TEST 27: Unverified Mode (No Out-of-band CA)
+    $srv27 = Start-EphemeralNodeHttpsServer $pfx127
+    try {
+        $cmd27 = @"
 . '$scriptEscaped' -Action plan | Out-Null
 `$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv27.Port)
 Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':CA=' + `$res.CaMatched)
 "@
-$out27 = & $psExe -ExecutionPolicy Bypass -Command $cmd27 2>&1 | Out-String
-$srv27.Process.Kill()
+        $out27 = & $psExe -ExecutionPolicy Bypass -Command $cmd27 2>&1 | Out-String
+    } finally {
+        if ($srv27.Process -and -not $srv27.Process.HasExited) { $srv27.Process.Kill() }
+    }
 
-if ($out27 -match "SUCCESS=False:STATUS=TLS_HANDSHAKE_ONLY/UNVERIFIED:CA=False") {
-    Write-Host "[PASS] [TEST NEGATIVO / TLS UNVERIFIED CA] Test 27: Handshake TLS senza CA fuori banda restituito come TLS_HANDSHAKE_ONLY/UNVERIFIED (non autorizza deployment)" -ForegroundColor Green
-    $passed++
-} else {
-    Write-Host "[FAIL] [TEST NEGATIVO / TLS UNVERIFIED CA] Test 27: Fallito: $out27" -ForegroundColor Red
-    $failed++
-}
+    if ($out27 -match "SUCCESS=False:STATUS=TLS_HANDSHAKE_ONLY/UNVERIFIED:CA=False") {
+        Write-Host "[PASS] [TEST NEGATIVO / TLS UNVERIFIED CA] Test 27: Handshake TLS senza CA fuori banda restituito come TLS_HANDSHAKE_ONLY/UNVERIFIED (non autorizza deployment)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO / TLS UNVERIFIED CA] Test 27: Fallito: $out27" -ForegroundColor Red
+        $failed++
+    }
 
-# TEST 28: Approved Mode (SAN e CA Match)
-$srv28 = Start-EphemeralNodeHttpsServer $pfx127
-$cmd28 = @"
+    # TEST 28: Approved Mode - Self-Signed Pinned (28a) & Valid 2-Tier PKI Chain (28b)
+    $subPassed28 = 0
+    $srv28a = Start-EphemeralNodeHttpsServer $pfx127
+    try {
+        $cmd28a = @"
 . '$scriptEscaped' -Action plan | Out-Null
-`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv28.Port) -ExpectedCaSha256 '$sha127'
+`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv28a.Port) -ExpectedCaSha256 '$sha127'
 Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':SAN=' + `$res.SanMatched + ':CA=' + `$res.CaMatched)
 "@
-$out28 = & $psExe -ExecutionPolicy Bypass -Command $cmd28 2>&1 | Out-String
-$srv28.Process.Kill()
+        $out28a = & $psExe -ExecutionPolicy Bypass -Command $cmd28a 2>&1 | Out-String
+    } finally {
+        if ($srv28a.Process -and -not $srv28a.Process.HasExited) { $srv28a.Process.Kill() }
+    }
 
-if ($out28 -match "SUCCESS=True:STATUS=APPROVED:SAN=True:CA=True") {
-    Write-Host "[PASS] [TEST AFFERMATIVO / TLS APPROVED] Test 28: Handshake TLS con SAN typed IP/DNS e impronta Root CA fuori banda approvato al 100% (APPROVED)" -ForegroundColor Green
-    $passed++
-} else {
-    Write-Host "[FAIL] [TEST AFFERMATIVO / TLS APPROVED] Test 28: Fallito: $out28" -ForegroundColor Red
-    $failed++
+    if ($out28a -match "SUCCESS=True:STATUS=APPROVED:SAN=True:CA=True") {
+        $subPassed28++
+        Write-Host "   [PASS] Sotto-test 28a: Certificato foglia autofirmato pinned approvato con firma ed estensioni verificate (APPROVED)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 28a fallito: $out28a" -ForegroundColor Red
+    }
+
+    $srv28b = Start-EphemeralNodeHttpsServer $pfxValid2Tier
+    try {
+        $cmd28b = @"
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Test-HttpsTlsEndpoint -TargetHost '127.0.0.1' -Port $($srv28b.Port) -ExpectedCaSha256 '$realRootCaSha'
+Write-Output ('SUCCESS=' + `$res.Success + ':STATUS=' + `$res.Status + ':SAN=' + `$res.SanMatched + ':CA=' + `$res.CaMatched)
+"@
+        $out28b = & $psExe -ExecutionPolicy Bypass -Command $cmd28b 2>&1 | Out-String
+    } finally {
+        if ($srv28b.Process -and -not $srv28b.Process.HasExited) { $srv28b.Process.Kill() }
+    }
+
+    if ($out28b -match "SUCCESS=True:STATUS=APPROVED:SAN=True:CA=True") {
+        $subPassed28++
+        Write-Host "   [PASS] Sotto-test 28b: Catena PKI valida a 2 livelli (Foglia SAN=127.0.0.1 firmata da Root CA BasicConstraints CA=true) approvata al 100% (APPROVED)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 28b fallito: $out28b" -ForegroundColor Red
+    }
+
+    if ($subPassed28 -eq 2) {
+        Write-Host "[PASS] [TEST AFFERMATIVO / TLS APPROVED 1-TIER & 2-TIER] Test 28: Handshake TLS con SAN typed IP/DNS e verifica crittografica completa catena CA approvato al 100% ($subPassed28/2)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO / TLS APPROVED 1-TIER & 2-TIER] Test 28: Sotto-test superati: $subPassed28 / 2" -ForegroundColor Red
+        $failed++
+    }
+} finally {
+    Remove-Item $testDirTls -Recurse -Force -ErrorAction SilentlyContinue
 }
-
-Remove-Item $testDirTls -Recurse -Force -ErrorAction SilentlyContinue
 
 # ==============================================================================
 # TEST 29: [ADB ROOT/UNROOT + WAL BACKUP & EACCES GUARD]
