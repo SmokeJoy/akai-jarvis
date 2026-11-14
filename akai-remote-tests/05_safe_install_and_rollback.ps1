@@ -1452,7 +1452,13 @@ switch ($Action) {
                 $installedRemoteApk = $matches[1].Trim()
                 $tempProbeApk = Join-Path ([System.IO.Path]::GetTempPath()) "akai_preflight_probe_$([System.Guid]::NewGuid().ToString('N')).apk"
                 try {
-                    $pullRes = & $adb -s $TargetAdb pull $installedRemoteApk $tempProbeApk 2>&1
+                    $prevEap = $ErrorActionPreference
+                    $ErrorActionPreference = "Continue"
+                    try {
+                        & $adb -s $TargetAdb pull $installedRemoteApk $tempProbeApk 2>$null | Out-Null
+                    } finally {
+                        $ErrorActionPreference = $prevEap
+                    }
                     if ((Test-Path $tempProbeApk) -and (Get-Item $tempProbeApk).Length -gt 0) {
                         $installedFp = Get-ApkCertificateFingerprint $tempProbeApk
                         if ($installedFp -and $installedFp.Length -eq 64) {
@@ -1501,7 +1507,7 @@ switch ($Action) {
 
         # 3. Spazio disco su /data
         Write-Host "`n[3/6] Verifica storage partizione /data..." -ForegroundColor Cyan
-        $dfData = (& $adb -s $TargetAdb shell "df /data" 2>&1).ToString().Trim()
+        $dfData = (& $adb -s $TargetAdb shell "df -h /data" 2>&1 | Out-String).Trim()
         Write-Host "      $dfData"
 
         # 4. Verifica Hardware, SELinux, Root e permessi /dev/uinput (Read-Only Gate)
