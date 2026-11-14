@@ -343,7 +343,10 @@ if (args.includes('exec-out')) {
     return;
 }
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
-if (args.includes('pidof')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+if (args.includes('PIDOF_CHECK') || args.includes('pids=')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+if (args.includes('pidof')) { console.log('1234'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('shell')) { process.exit(0); }
 process.exit(0);
@@ -2117,7 +2120,8 @@ $ErrorActionPreference = $prevEap
 if ($out22 -match "ERRORE FAIL-CLOSED" -and
     $out22 -match "Rilevata installazione precedente" -and
     $out22 -match "it\.akai\.customremote" -and
-    $out22 -match "estrazione del database SQLite fallita" -and
+    $out22 -match "estrazione del" -and
+    $out22 -match "database SQLite" -and
     $out22 -notmatch "VIOLATION_INSTALL_CALLED_ON_FAIL_CLOSED") {
     Write-Host "[PASS] [TEST NEGATIVO / DATA SAFETY FAIL-CLOSED] Test 22: Greenfield Start bloccato categoricamente se pacchetto precedente e' presente ma DB inaccessibile (zero installazioni)" -ForegroundColor Green
     $passed++

@@ -890,12 +890,33 @@ switch ($Action) {
         }
 
         # 3. Spazio disco su /data
-        Write-Host "`n[3/5] Verifica storage partizione /data..." -ForegroundColor Cyan
+        Write-Host "`n[3/6] Verifica storage partizione /data..." -ForegroundColor Cyan
         $dfData = (& $adb -s $TargetAdb shell "df /data" 2>&1).ToString().Trim()
         Write-Host "      $dfData"
 
-        # 4. Verifica porte aperte su TV (8088 / 8443)
-        Write-Host "`n[4/5] Verifica porte di rete su TV..." -ForegroundColor Cyan
+        # 4. Verifica Hardware, SELinux, Root e permessi /dev/uinput (Read-Only Gate)
+        Write-Host "`n[4/6] Verifica Hardware, Identita', SELinux e permessi /dev/uinput..." -ForegroundColor Cyan
+        $buildFp = (& $adb -s $TargetAdb shell "getprop ro.build.fingerprint" 2>&1 | Out-String).Trim()
+        $model = (& $adb -s $TargetAdb shell "getprop ro.product.model" 2>&1 | Out-String).Trim()
+        $platform = (& $adb -s $TargetAdb shell "getprop ro.board.platform" 2>&1 | Out-String).Trim()
+        Write-Host "      Modello / Piattaforma : $(if ($model) { "$model ($platform)" } else { "NON RILEVABILE" })"
+        Write-Host "      Build Fingerprint     : $(if ($buildFp) { $buildFp } else { "NON RILEVABILE" })"
+
+        $idRes = (& $adb -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
+        Write-Host "      Contesto Shell (id)   : $(if ($idRes) { $idRes } else { "NON RILEVABILE" })"
+
+        $selinux = (& $adb -s $TargetAdb shell "getenforce" 2>&1 | Out-String).Trim()
+        Write-Host "      SELinux Enforcement   : $(if ($selinux) { $selinux } else { "NON RILEVABILE" })"
+
+        $suCheck = (& $adb -s $TargetAdb shell "which su 2>/dev/null; su -c id 2>/dev/null" 2>&1 | Out-String).Trim()
+        $rootState = if ($suCheck -match "uid=0") { "DISPONIBILE (root attivo via su)" } else { "NON ATTIVO (shell utente standard / su non abilitato)" }
+        Write-Host "      Stato Root            : $rootState"
+
+        $uinputLs = (& $adb -s $TargetAdb shell "ls -la /dev/uinput 2>&1" | Out-String).Trim()
+        Write-Host "      Permessi /dev/uinput  : $(if ($uinputLs) { $uinputLs } else { "NON RILEVABILE" })"
+
+        # 5. Verifica porte aperte su TV (8088 / 8443)
+        Write-Host "`n[5/6] Verifica porte di rete su TV..." -ForegroundColor Cyan
         $netstatRaw = (& $adb -s $TargetAdb shell "netstat -tlpn" 2>&1)
         $netstatLines = @($netstatRaw | Where-Object { $_ -match "8088|8443" })
         if ($netstatLines.Count -gt 0) {
@@ -905,8 +926,8 @@ switch ($Action) {
             Write-Host "      Porte 8088/8443 : NESSUN LISTENER RILEVATO (servizio spento o TV libera)" -ForegroundColor Yellow
         }
 
-        # 5. Tabella di trasparenza dati per Clean-Start Greenfield
-        Write-Host "`n[5/5] Tabella Trasparenza Dati Greenfield (Qualora si proceda con avvio pulito):" -ForegroundColor Cyan
+        # 6. Tabella di trasparenza dati per Clean-Start Greenfield
+        Write-Host "`n[6/6] Tabella Trasparenza Dati Greenfield (Qualora si proceda con avvio pulito):" -ForegroundColor Cyan
         Write-Host "      +--------------------------------+-------------------------------------------------------+"
         Write-Host "      | Componente                     | Impatto in caso di Clean-Start (-GreenfieldStart)     |"
         Write-Host "      +--------------------------------+-------------------------------------------------------+"
