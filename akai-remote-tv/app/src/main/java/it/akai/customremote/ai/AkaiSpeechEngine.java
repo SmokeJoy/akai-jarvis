@@ -175,8 +175,8 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         String region = getAzureRegion();
         String apiKey = getAzureKey();
 
-        // Tentativo con voce neurale cloud se configurata e chiave presente
-        if (!CloudSpeechAdapter.VOICE_OFFLINE.equals(voice) && apiKey != null && !apiKey.isEmpty()) {
+        // Tentativo con voce neurale cloud se configurata e chiave presente (inibito se STRICT_LOCAL_ONLY)
+        if (!AkaiAiController.isStrictLocalOnly() && !CloudSpeechAdapter.VOICE_OFFLINE.equals(voice) && apiKey != null && !apiKey.isEmpty()) {
             Log.i(TAG, "Attempting neural speech with voice: " + voice + " (" + region + ")");
             boolean neuralSuccess = mCloudAdapter.speakNeural(text, voice, region, apiKey, null);
             if (neuralSuccess) {
@@ -199,7 +199,7 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         String region = getAzureRegion();
         String apiKey = getAzureKey();
 
-        if (!CloudSpeechAdapter.VOICE_OFFLINE.equals(voice) && apiKey != null && !apiKey.isEmpty()) {
+        if (!AkaiAiController.isStrictLocalOnly() && !CloudSpeechAdapter.VOICE_OFFLINE.equals(voice) && apiKey != null && !apiKey.isEmpty()) {
             return mCloudAdapter.speakNeural(text, voice, region, apiKey, null);
         }
         return speakOfflineTts(text, true);

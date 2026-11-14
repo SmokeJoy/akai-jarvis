@@ -108,7 +108,7 @@ public class LocalIntentParser {
         if (clean.equals("home") || clean.equals("vai alla home") || clean.equals("torna alla home") || clean.equals("schermata principale") || clean.equals("esci")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "home")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "home", "Schermata Home", acts, "Ritorno alla schermata Home...", "local_fast_path", "{\"type\":\"pkg_is\",\"value\":\"it.akai.customhome\"}");
+            return new ParsedIntent(true, "home", "Schermata Home", acts, "Ritorno alla schermata Home...", "local_fast_path", "{\"type\":\"pkg_any_of\",\"values\":[\"it.akai.customhome.v8\",\"it.akai.customhome\"]}");
         }
 
         if (clean.equals("indietro") || clean.equals("torna indietro") || clean.equals("back")) {
@@ -199,27 +199,27 @@ public class LocalIntentParser {
         // Navigazione D-Pad e Menu
         if (clean.equals("su") || clean.equals("in alto") || clean.equals("freccia su") || clean.equals("muovi su")) {
             JSONArray acts = new JSONArray();
-            try { acts.put(new JSONObject().put("type", "command").put("action", "up")); } catch (Exception ignored) {}
+            try { acts.put(new JSONObject().put("type", "command").put("action", "dpad_up")); } catch (Exception ignored) {}
             return new ParsedIntent(true, "dpad_up", "Sposta cursore in alto", acts, "Cursore su", "local_fast_path", null);
         }
         if (clean.equals("giu") || clean.equals("in basso") || clean.equals("freccia giu") || clean.equals("muovi giu")) {
             JSONArray acts = new JSONArray();
-            try { acts.put(new JSONObject().put("type", "command").put("action", "down")); } catch (Exception ignored) {}
+            try { acts.put(new JSONObject().put("type", "command").put("action", "dpad_down")); } catch (Exception ignored) {}
             return new ParsedIntent(true, "dpad_down", "Sposta cursore in basso", acts, "Cursore giu", "local_fast_path", null);
         }
         if (clean.equals("sinistra") || clean.equals("a sinistra") || clean.equals("freccia sinistra")) {
             JSONArray acts = new JSONArray();
-            try { acts.put(new JSONObject().put("type", "command").put("action", "left")); } catch (Exception ignored) {}
+            try { acts.put(new JSONObject().put("type", "command").put("action", "dpad_left")); } catch (Exception ignored) {}
             return new ParsedIntent(true, "dpad_left", "Sposta cursore a sinistra", acts, "Cursore a sinistra", "local_fast_path", null);
         }
         if (clean.equals("destra") || clean.equals("a destra") || clean.equals("freccia destra")) {
             JSONArray acts = new JSONArray();
-            try { acts.put(new JSONObject().put("type", "command").put("action", "right")); } catch (Exception ignored) {}
+            try { acts.put(new JSONObject().put("type", "command").put("action", "dpad_right")); } catch (Exception ignored) {}
             return new ParsedIntent(true, "dpad_right", "Sposta cursore a destra", acts, "Cursore a destra", "local_fast_path", null);
         }
         if (clean.equals("ok") || clean.equals("conferma") || clean.equals("seleziona") || clean.equals("invio") || clean.equals("premi ok")) {
             JSONArray acts = new JSONArray();
-            try { acts.put(new JSONObject().put("type", "command").put("action", "center")); } catch (Exception ignored) {}
+            try { acts.put(new JSONObject().put("type", "command").put("action", "dpad_center")); } catch (Exception ignored) {}
             return new ParsedIntent(true, "dpad_center", "Conferma selezione (OK)", acts, "Tasto OK inviato", "local_fast_path", null);
         }
         if (clean.equals("menu") || clean.equals("apri menu") || clean.equals("tasto menu")) {

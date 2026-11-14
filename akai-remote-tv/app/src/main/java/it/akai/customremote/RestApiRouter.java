@@ -36,6 +36,8 @@ public class RestApiRouter {
         JSONObject processQuery(String query, boolean speak);
         boolean isStrictLocalOnly();
         JSONArray getSupportedCatalog();
+        default boolean speak(String text, boolean interrupt) { return false; }
+        default boolean previewVoice(String voice, String text) { return false; }
     }
 
     private final SecurityManager securityManager;
@@ -317,7 +319,8 @@ public class RestApiRouter {
 
             if (aiHandler != null) {
                 JSONObject res = aiHandler.processQuery(query, speak);
-                sendJsonResponse(os, 200, res);
+                int status = res.optBoolean("success", false) ? 200 : 400;
+                sendJsonResponse(os, status, res);
                 return true;
             }
 
@@ -389,6 +392,91 @@ public class RestApiRouter {
             err.put("strict_local_only", true);
             sendJsonResponse(os, 403, err);
             return true;
+        }
+
+        // AI Direct Speech Playback (/api/ai/speak)
+        if ("/api/ai/speak".equals(path) && "POST".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return true;
+            }
+
+            JSONObject req = new JSONObject(body != null && !body.isEmpty() ? body : "{}");
+            String textToSpeak = req.optString("text", "");
+            boolean interrupt = req.optBoolean("interrupt", true);
+
+            boolean queued = false;
+            if (aiHandler != null) {
+                queued = aiHandler.speak(textToSpeak, interrupt);
+            }
+
+            JSONObject out = new JSONObject();
+            out.put("success", queued);
+            out.put("spoken", textToSpeak);
+            out.put("strict_local_only", aiHandler != null ? aiHandler.isStrictLocalOnly() : true);
+            sendJsonResponse(os, queued ? 200 : 500, out);
+            return true;
+        }
+
+        // AI Voice Preview (/api/ai/tts_preview)
+        if ("/api/ai/tts_preview".equals(path) && "POST".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return true;
+            }
+
+            JSONObject req = new JSONObject(body != null && !body.isEmpty() ? body : "{}");
+            String voice = req.optString("voice", "it-IT-DiegoNeural");
+            boolean localOnly = aiHandler != null ? aiHandler.isStrictLocalOnly() : true;
+
+            if (localOnly && !"offline_espeak".equals(voice)) {
+                JSONObject err = new JSONObject();
+                err.put("success", false);
+                err.put("error", "Anteprima voci neurali cloud inibita nel profilo STRICT_LOCAL_ONLY (zero leak verso server esterni)");
+                err.put("strict_local_only", true);
+                sendJsonResponse(os, 403, err);
+                return true;
+            }
+
+            boolean started = false;
+            if (aiHandler != null) {
+                started = aiHandler.previewVoice(voice, req.optString("text", ""));
+            }
+
+            JSONObject out = new JSONObject();
+            out.put("success", started);
+            out.put("voice", voice);
+            out.put("strict_local_only", localOnly);
+            sendJsonResponse(os, started ? 200 : 500, out);
+            return true;
+        }
+
+        // AI TTS Neural Configuration Update (/api/ai/tts_config)
+        if ("/api/ai/tts_config".equals(path) && "POST".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return true;
+            }
+
+            JSONObject req = new JSONObject(body != null && !body.isEmpty() ? body : "{}");
+            boolean localOnly = aiHandler != null ? aiHandler.isStrictLocalOnly() : true;
+
+            if (localOnly) {
+                boolean settingAzureKey = req.has("azure_key") && !req.optString("azure_key", "").isEmpty();
+                boolean settingAzureRegion = req.has("azure_region");
+                boolean settingCloudVoice = req.has("voice") && !"offline_espeak".equals(req.optString("voice", ""));
+                if (settingAzureKey || settingAzureRegion || settingCloudVoice) {
+                    JSONObject err = new JSONObject();
+                    err.put("success", false);
+                    err.put("error", "Modifica credenziali o attivazione voci cloud inibita nel profilo STRICT_LOCAL_ONLY");
+                    err.put("strict_local_only", true);
+                    sendJsonResponse(os, 403, err);
+                    return true;
+                }
+            }
         }
 
         return false;

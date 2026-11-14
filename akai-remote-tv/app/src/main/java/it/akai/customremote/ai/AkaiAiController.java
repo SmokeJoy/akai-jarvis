@@ -96,9 +96,14 @@ public class AkaiAiController {
                 try {
                     JSONObject initCond = new JSONObject(parsed.initialState);
                     String expectedPkg = initCond.optString("pkg", "");
-                    if (!expectedPkg.isEmpty() && !expectedPkg.equals(preSnap.foregroundPackage)) {
+                    boolean pkgMatches = expectedPkg.isEmpty() || expectedPkg.equals(preSnap.foregroundPackage);
+                    if (!pkgMatches && ("it.akai.customhome".equals(expectedPkg) || "it.akai.customhome.v8".equals(expectedPkg)) &&
+                            ("it.akai.customhome.v8".equals(preSnap.foregroundPackage) || "it.akai.customhome".equals(preSnap.foregroundPackage))) {
+                        pkgMatches = true;
+                    }
+                    if (!pkgMatches) {
                         Log.w(TAG, "Stato iniziale non corrispondente: atteso " + expectedPkg + ", rilevato " + preSnap.foregroundPackage);
-                        if ("it.akai.customhome".equals(expectedPkg)) {
+                        if ("it.akai.customhome".equals(expectedPkg) || "it.akai.customhome.v8".equals(expectedPkg)) {
                             Log.i(TAG, "Allineamento automatico: ritorno alla Home prima di eseguire la procedura memorizzata...");
                             tvController.executeCommand("home");
                             try { Thread.sleep(800); } catch (InterruptedException ignored) {}

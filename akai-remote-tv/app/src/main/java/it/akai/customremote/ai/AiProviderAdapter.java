@@ -380,6 +380,15 @@ public class AiProviderAdapter {
 
     public JSONObject testConnection(String provider, String apiKey, String model) {
         JSONObject res = new JSONObject();
+        if (AkaiAiController.isStrictLocalOnly()) {
+            try {
+                res.put("success", false);
+                res.put("error", "Chiamate verso provider cloud disabilitate nel profilo STRICT_LOCAL_ONLY");
+                res.put("message", "Profilo STRICT_LOCAL_ONLY attivo: test connessione cloud disabilitato per sicurezza");
+                res.put("strict_local_only", true);
+            } catch (Exception ignored) {}
+            return res;
+        }
         if (PROVIDER_LOCAL.equals(provider)) {
             try {
                 res.put("success", true);
@@ -444,6 +453,9 @@ public class AiProviderAdapter {
     }
 
     public AiResponse planActionSequence(String userGoal, String screenContext, JSONObject preferences, JSONArray conversationHistory) {
+        if (AkaiAiController.isStrictLocalOnly()) {
+            return AiResponse.failure("Profilo STRICT_LOCAL_ONLY attivo (zero chiamate a provider cloud esterne).");
+        }
         String provider = getActiveProvider();
         if (PROVIDER_LOCAL.equals(provider)) {
             return AiResponse.failure("Modalità Solo Locale attiva.");
@@ -599,6 +611,9 @@ public class AiProviderAdapter {
     }
 
     private JSONObject executeHttpRequest(String endpointUrl, String apiKey, JSONObject bodyJson) throws Exception {
+        if (AkaiAiController.isStrictLocalOnly()) {
+            throw new IllegalStateException("STRICT_LOCAL_ONLY active: Cloud HTTP requests strictly prohibited.");
+        }
         URL url = new URL(endpointUrl);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");

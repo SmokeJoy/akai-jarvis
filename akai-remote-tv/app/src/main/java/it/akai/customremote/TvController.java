@@ -82,18 +82,25 @@ public class TvController {
                 return new CommandResult(false, "Indietro non disponibile (richiede Servizio Accessibilità attivo)");
 
             // D-PAD Navigation (Primary: UInput Virtual Driver, Secondary: Accessibility Focus)
+            case "up":
             case "dpad_up":
                 return executeDpad(UInputDriver.KEY_UP, AccessibilityNodeInfo.FOCUS_INPUT, "Su");
 
+            case "down":
             case "dpad_down":
                 return executeDpad(UInputDriver.KEY_DOWN, AccessibilityNodeInfo.FOCUS_INPUT, "Giù");
 
+            case "left":
             case "dpad_left":
                 return executeDpad(UInputDriver.KEY_LEFT, AccessibilityNodeInfo.FOCUS_INPUT, "Sinistra");
 
+            case "right":
             case "dpad_right":
                 return executeDpad(UInputDriver.KEY_RIGHT, AccessibilityNodeInfo.FOCUS_INPUT, "Destra");
 
+            case "center":
+            case "select":
+            case "enter":
             case "dpad_center":
                 if (uinputDriver.isAvailable() && uinputDriver.sendKey(UInputDriver.KEY_ENTER)) {
                     return new CommandResult(true, "OK");
@@ -146,21 +153,40 @@ public class TvController {
             case "input_hdmi2":
                 return sendMediaTekBroadcast("com.mediatek.select.HDMI2", "HDMI 2");
 
+            case "input_hdmi3":
+                return sendMediaTekBroadcast("com.mediatek.select.HDMI3", "HDMI 3");
+
             case "input_source":
                 return sendMediaTekBroadcast("com.mediatek.select.source", "Selezione Ingressi");
 
             // App Launch Shortcuts
             case "app_youtube":
+            case "launch_youtube":
                 return launchAppPackage("com.google.android.youtube.tv", "YouTube TV");
 
             case "app_netflix":
+            case "launch_netflix":
                 return launchAppPackage("com.netflix.ninja", "Netflix");
 
             case "app_prime":
+            case "launch_prime":
                 return launchAppPackage("com.amazon.amazonvideo.livingroom", "Prime Video");
 
             case "app_playstore":
+            case "launch_playstore":
                 return launchAppPackage("com.android.vending", "Google Play Store");
+
+            case "app_raiplay":
+            case "launch_raiplay":
+                return launchAppPackage("it.rainet.android.tv", "RaiPlay");
+
+            case "app_mediaset":
+            case "launch_mediaset":
+                return launchAppPackage("it.mediaset.infinity.tv", "Mediaset Infinity");
+
+            case "app_browser":
+            case "launch_browser":
+                return launchAppPackage("com.phlox.tvwebbrowser", "TV Bro");
 
             case "diagnostics_sample":
                 LocalDiagnosticsManager.getInstance(context).triggerManualSample("user_command");
@@ -311,7 +337,7 @@ public class TvController {
                 switch (type) {
                     case "open_app":
                     case "launch_app": {
-                        String pkg = step.optString("pkg", "");
+                        String pkg = step.optString("pkg", step.optString("package", ""));
                         String name = step.optString("name", pkg);
                         CommandResult res = launchAppPackage(pkg, name);
                         if (!res.success) {

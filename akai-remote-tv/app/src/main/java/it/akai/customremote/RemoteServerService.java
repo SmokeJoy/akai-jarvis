@@ -121,6 +121,12 @@ public class RemoteServerService extends Service {
                 @Override public JSONArray getSupportedCatalog() {
                     return AkaiAiController.getSupportedCatalog();
                 }
+                @Override public boolean speak(String text, boolean interrupt) {
+                    return it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).speak(text, interrupt);
+                }
+                @Override public boolean previewVoice(String voice, String text) {
+                    return it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).previewVoice(voice, text);
+                }
             },
             getLocalIpAddress(),
             HTTP_PORT
@@ -612,6 +618,7 @@ public class RemoteServerService extends Service {
             out.put("success", queued);
             out.put("spoken", textToSpeak);
             out.put("voice", speech.getTtsVoice());
+            out.put("strict_local_only", it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly());
             sendJsonResponse(os, queued ? 200 : 500, out);
             return;
         }
@@ -655,6 +662,21 @@ public class RemoteServerService extends Service {
             }
 
             JSONObject req = new JSONObject(body);
+
+            // Rigoroso blocco cloud in profilo STRICT_LOCAL_ONLY
+            if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly()) {
+                boolean settingAzureKey = req.has("azure_key") && !req.optString("azure_key", "").isEmpty();
+                boolean settingAzureRegion = req.has("azure_region");
+                boolean settingCloudVoice = req.has("voice") && !it.akai.customremote.ai.CloudSpeechAdapter.VOICE_OFFLINE.equals(req.optString("voice", ""));
+                if (settingAzureKey || settingAzureRegion || settingCloudVoice) {
+                    sendJsonResponse(os, 403, new JSONObject()
+                            .put("success", false)
+                            .put("error", "Modifica credenziali o attivazione voci cloud inibita nel profilo STRICT_LOCAL_ONLY")
+                            .put("strict_local_only", true));
+                    return;
+                }
+            }
+
             it.akai.customremote.ai.AkaiSpeechEngine speech = it.akai.customremote.ai.AkaiSpeechEngine.getInstance(this);
 
             if (req.has("voice")) {
@@ -689,6 +711,15 @@ public class RemoteServerService extends Service {
             JSONObject req = new JSONObject(body);
             String voice = req.optString("voice", it.akai.customremote.ai.CloudSpeechAdapter.VOICE_DIEGO);
             String sample = req.optString("text", "Ciao, questa è la voce naturale dell'assistente per la tua televisione AKAI.");
+
+            // Rigoroso blocco anteprima cloud in profilo STRICT_LOCAL_ONLY
+            if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly() && !it.akai.customremote.ai.CloudSpeechAdapter.VOICE_OFFLINE.equals(voice)) {
+                sendJsonResponse(os, 403, new JSONObject()
+                        .put("success", false)
+                        .put("error", "Anteprima voci neurali cloud inibita nel profilo STRICT_LOCAL_ONLY (zero leak verso server esterni)")
+                        .put("strict_local_only", true));
+                return;
+            }
 
             it.akai.customremote.ai.AkaiSpeechEngine speech = it.akai.customremote.ai.AkaiSpeechEngine.getInstance(this);
             boolean started = speech.previewVoice(voice, sample);
@@ -760,6 +791,21 @@ public class RemoteServerService extends Service {
             }
 
             JSONObject req = new JSONObject(body);
+
+            // Rigoroso blocco cloud in profilo STRICT_LOCAL_ONLY
+            if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly()) {
+                boolean settingDeepSeek = req.has("deepseek_key") && !req.optString("deepseek_key", "").isEmpty();
+                boolean settingKimi = req.has("kimi_key") && !req.optString("kimi_key", "").isEmpty();
+                boolean settingCloudProvider = req.has("provider") && !it.akai.customremote.ai.AiProviderAdapter.PROVIDER_LOCAL.equals(req.optString("provider", ""));
+                if (settingDeepSeek || settingKimi || settingCloudProvider) {
+                    sendJsonResponse(os, 403, new JSONObject()
+                            .put("success", false)
+                            .put("error", "Configurazione provider cloud inibita nel profilo STRICT_LOCAL_ONLY")
+                            .put("strict_local_only", true));
+                    return;
+                }
+            }
+
             AkaiAiController ai = AkaiAiController.getInstance(this, tvController);
             AiProviderAdapter adapter = ai.getAiAdapter();
             AkaiMemoryEngine mem = ai.getMemoryEngine();

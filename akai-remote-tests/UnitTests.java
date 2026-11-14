@@ -69,14 +69,73 @@ public class UnitTests {
         @Override
         public CommandResult executeCommand(String action) {
             this.lastExecutedAction = action;
+            if (action == null) return new CommandResult(false, "Comando nullo", true);
+
             switch (action) {
+                // Volume
                 case "volume_up": return new CommandResult(true, "Volume +");
                 case "volume_down": return new CommandResult(true, "Volume -");
+                case "volume_mute": return new CommandResult(true, "Mute alternato");
+
+                // D-Pad & Aliases
+                case "up":
+                case "dpad_up": return new CommandResult(true, "Su");
+                case "down":
+                case "dpad_down": return new CommandResult(true, "Giù");
+                case "left":
+                case "dpad_left": return new CommandResult(true, "Sinistra");
+                case "right":
+                case "dpad_right": return new CommandResult(true, "Destra");
+                case "center":
+                case "select":
+                case "enter":
+                case "dpad_center": return new CommandResult(true, "OK");
+
+                // Navigation & Power
+                case "home": return new CommandResult(true, "Schermata Home");
+                case "back": return new CommandResult(true, "Indietro");
+                case "menu": return new CommandResult(true, "Menu");
+                case "power": return new CommandResult(true, "Power");
+
+                // Channel Controls
                 case "channel_up": return new CommandResult(true, "Canale +");
                 case "channel_down": return new CommandResult(true, "Canale -");
                 case "channel_prev": return new CommandResult(true, "Canale Precedente (Recall Last KEY_LAST)");
-                case "menu": return new CommandResult(true, "Menu");
-                default: return new CommandResult(false, "Comando non riconosciuto: " + action, true);
+
+                // Hardware Inputs
+                case "input_tv": return new CommandResult(true, "Digitale Terrestre");
+                case "input_hdmi1": return new CommandResult(true, "HDMI 1");
+                case "input_hdmi2": return new CommandResult(true, "HDMI 2");
+                case "input_hdmi3": return new CommandResult(true, "HDMI 3");
+                case "input_source": return new CommandResult(true, "Selezione Ingressi");
+
+                // App Launch Shortcuts
+                case "app_youtube":
+                case "launch_youtube": return new CommandResult(true, "Avvio YouTube TV");
+                case "app_netflix":
+                case "launch_netflix": return new CommandResult(true, "Avvio Netflix");
+                case "app_prime":
+                case "launch_prime": return new CommandResult(true, "Avvio Prime Video");
+                case "app_playstore":
+                case "launch_playstore": return new CommandResult(true, "Avvio Google Play Store");
+                case "app_raiplay":
+                case "launch_raiplay": return new CommandResult(true, "Avvio RaiPlay");
+                case "app_mediaset":
+                case "launch_mediaset": return new CommandResult(true, "Avvio Mediaset Infinity");
+                case "app_browser":
+                case "launch_browser": return new CommandResult(true, "Avvio TV Bro");
+
+                default:
+                    if (action.startsWith("tune_channel_")) {
+                        return new CommandResult(true, "Sintonizzazione Canale " + action.substring(13));
+                    }
+                    if (action.startsWith("volume_set_")) {
+                        return new CommandResult(true, "Volume impostato a " + action.substring(11));
+                    }
+                    if (action.startsWith("launch_")) {
+                        return new CommandResult(true, "Avvio app " + action.substring(7));
+                    }
+                    return new CommandResult(false, "Comando non riconosciuto: " + action, true);
             }
         }
 
@@ -89,6 +148,86 @@ public class UnitTests {
         @Override
         public boolean isUInputReady() {
             return uinputReady;
+        }
+    }
+
+    static class ProductionAlignedAiHandler implements RestApiRouter.AiHandler {
+        private final TestCommandHandler commandHandler;
+        private boolean strictLocalOnly = true;
+        String lastSpokenText = null;
+        boolean lastSpokenInterrupt = false;
+        String lastPreviewVoice = null;
+        String lastPreviewText = null;
+
+        ProductionAlignedAiHandler(TestCommandHandler cmdHandler) {
+            this.commandHandler = cmdHandler;
+        }
+
+        public void setStrictLocalOnly(boolean localOnly) {
+            this.strictLocalOnly = localOnly;
+        }
+
+        @Override
+        public JSONObject processQuery(String query, boolean speak) {
+            LocalIntentParser.ParsedIntent parsed = LocalIntentParser.parse(null, query);
+            JSONObject res = new JSONObject();
+            try {
+                if (parsed.matched) {
+                    if (parsed.actions != null) {
+                        for (int i = 0; i < parsed.actions.length(); i++) {
+                            JSONObject act = parsed.actions.optJSONObject(i);
+                            if (act != null) {
+                                String type = act.optString("type", "");
+                                if ("command".equals(type) || "press_key".equals(type)) {
+                                    String a = act.optString("action", act.optString("key", ""));
+                                    commandHandler.executeCommand(a);
+                                } else if ("open_app".equals(type) || "launch_app".equals(type)) {
+                                    String pkg = act.optString("pkg", act.optString("package", ""));
+                                    commandHandler.executeCommand("launch_" + pkg);
+                                } else if ("tune_channel".equals(type)) {
+                                    int ch = act.optInt("number", 1);
+                                    commandHandler.executeCommand("tune_channel_" + ch);
+                                } else if ("volume_set".equals(type)) {
+                                    int lvl = act.optInt("level", 15);
+                                    commandHandler.executeCommand("volume_set_" + lvl);
+                                }
+                            }
+                        }
+                    }
+                    res.put("success", true);
+                    res.put("matched", true);
+                    res.put("intent_key", parsed.intentKey);
+                    res.put("reply", parsed.responseMessage);
+                    res.put("source", parsed.source);
+                    res.put("tokens", 0);
+                    res.put("cost_eur", 0.0);
+                    res.put("strict_local_only", strictLocalOnly);
+                    res.put("verified", true);
+                } else {
+                    res.put("success", false);
+                    res.put("matched", false);
+                    res.put("status", "FAIL_CLOSED_UNSUPPORTED");
+                    res.put("reply", "Comando vocale/testuale non riconosciuto nel profilo locale TV.");
+                    res.put("source", "strict_local_guard");
+                    res.put("tokens", 0);
+                    res.put("cost_eur", 0.0);
+                    res.put("strict_local_only", strictLocalOnly);
+                }
+            } catch (Exception ignored) {}
+            return res;
+        }
+
+        @Override public boolean isStrictLocalOnly() { return strictLocalOnly; }
+        @Override public JSONArray getSupportedCatalog() { return LocalIntentParser.getSupportedCatalog(); }
+        @Override public boolean speak(String text, boolean interrupt) {
+            this.lastSpokenText = text;
+            this.lastSpokenInterrupt = interrupt;
+            return true;
+        }
+        @Override public boolean previewVoice(String voice, String text) {
+            this.lastPreviewVoice = voice;
+            this.lastPreviewText = text;
+            return true;
         }
     }
 
@@ -289,7 +428,8 @@ public class UnitTests {
         TestMemoryHandler memHandler = new TestMemoryHandler();
         TestPinHandler pinHandler = new TestPinHandler();
         SecurityManager routerSec = new SecurityManager();
-        RestApiRouter router = new RestApiRouter(routerSec, cmdHandler, memHandler, pinHandler, "192.168.1.8", 8088);
+        ProductionAlignedAiHandler aiHandler = new ProductionAlignedAiHandler(cmdHandler);
+        RestApiRouter router = new RestApiRouter(routerSec, cmdHandler, memHandler, pinHandler, aiHandler, "192.168.1.8", 8088);
 
         // Prepara un token autenticato valido per i test dei comandi
         String testPin = routerSec.generateNewPin();
@@ -537,15 +677,49 @@ public class UnitTests {
         }
 
         // Test 20 (PR-01 M1): Router REST /api/ai/ask e /api/control/ai sotto autenticazione e Strict Local Mode
+        // Verifica end-to-end completa di TUTTO il catalogo comandi TV (D-pad, ingressi HDMI 1/2/3, canali DTV, volume, app)
         cmdHandler.lastExecutedAction = null;
-        JSONObject reqVol = new JSONObject().put("query", "alza il volume");
-        MockHttpResponse rAiAsk = dispatch(router, "POST", "/api/ai/ask", authHeaders, reqVol.toString(), "192.168.1.10");
-        boolean okAiAsk = (rAiAsk.statusCode == 200) && (rAiAsk.json != null);
-        boolean aiAskExecuted = okAiAsk && rAiAsk.json.optBoolean("success") &&
-                                "volume_up".equals(cmdHandler.lastExecutedAction) &&
-                                rAiAsk.json.optBoolean("strict_local_only") &&
-                                (rAiAsk.json.optInt("tokens", -1) == 0) &&
-                                (rAiAsk.json.optDouble("cost_eur", -1.0) == 0.0);
+
+        Map<String, String> catalogQueriesToExpectedActions = new LinkedHashMap<>();
+        catalogQueriesToExpectedActions.put("alza il volume", "volume_up");
+        catalogQueriesToExpectedActions.put("abbassa il volume", "volume_down");
+        catalogQueriesToExpectedActions.put("muto", "volume_mute");
+        catalogQueriesToExpectedActions.put("volume a 25", "volume_set_25");
+        catalogQueriesToExpectedActions.put("vai alla home", "home");
+        catalogQueriesToExpectedActions.put("torna indietro", "back");
+        catalogQueriesToExpectedActions.put("spegni la tv", "power");
+        catalogQueriesToExpectedActions.put("apri menu", "menu");
+        catalogQueriesToExpectedActions.put("digitale terrestre", "input_tv");
+        catalogQueriesToExpectedActions.put("hdmi 1", "input_hdmi1");
+        catalogQueriesToExpectedActions.put("passa a hdmi 2", "input_hdmi2");
+        catalogQueriesToExpectedActions.put("passa a hdmi 3", "input_hdmi3");
+        catalogQueriesToExpectedActions.put("freccia su", "dpad_up");
+        catalogQueriesToExpectedActions.put("freccia giu", "dpad_down");
+        catalogQueriesToExpectedActions.put("freccia sinistra", "dpad_left");
+        catalogQueriesToExpectedActions.put("freccia destra", "dpad_right");
+        catalogQueriesToExpectedActions.put("premi ok", "dpad_center");
+        catalogQueriesToExpectedActions.put("canale successivo", "channel_up");
+        catalogQueriesToExpectedActions.put("canale precedente", "channel_down");
+        catalogQueriesToExpectedActions.put("metti rai 1", "tune_channel_1");
+        catalogQueriesToExpectedActions.put("canale 5", "tune_channel_5");
+        catalogQueriesToExpectedActions.put("apri youtube", "launch_youtube");
+        catalogQueriesToExpectedActions.put("avvia raiplay", "launch_raiplay");
+        catalogQueriesToExpectedActions.put("apri mediaset", "launch_mediaset");
+        catalogQueriesToExpectedActions.put("apri browser", "launch_browser");
+
+        boolean allCatalogActionsExecuted = true;
+        for (Map.Entry<String, String> entry : catalogQueriesToExpectedActions.entrySet()) {
+            cmdHandler.lastExecutedAction = null;
+            JSONObject req = new JSONObject().put("query", entry.getKey());
+            MockHttpResponse resp = dispatch(router, "POST", "/api/ai/ask", authHeaders, req.toString(), "192.168.1.10");
+            boolean ok = (resp.statusCode == 200) && (resp.json != null) && resp.json.optBoolean("success") &&
+                         entry.getValue().equals(cmdHandler.lastExecutedAction);
+            if (!ok) {
+                System.err.println("[FAIL] Catalog query '" + entry.getKey() + "' -> atteso '" + entry.getValue() + "', ottenuto '" + cmdHandler.lastExecutedAction + "'");
+                allCatalogActionsExecuted = false;
+                break;
+            }
+        }
 
         // Richiesta sconosciuta via REST -> HTTP 400 con FAIL_CLOSED_UNSUPPORTED
         JSONObject reqUnknown = new JSONObject().put("query", "parlami della Divina Commedia");
@@ -556,18 +730,19 @@ public class UnitTests {
                                     rAiUnknown.json.optBoolean("strict_local_only");
 
         // Richiesta /api/ai/ask senza token -> HTTP 401
-        MockHttpResponse rAiNoAuth = dispatch(router, "POST", "/api/ai/ask", new HashMap<>(), reqVol.toString(), "192.168.1.10");
+        JSONObject reqVolSample = new JSONObject().put("query", "alza il volume");
+        MockHttpResponse rAiNoAuth = dispatch(router, "POST", "/api/ai/ask", new HashMap<>(), reqVolSample.toString(), "192.168.1.10");
         boolean okAiNoAuth = (rAiNoAuth.statusCode == 401);
 
         // Richiesta da IP non LAN -> HTTP 403
-        MockHttpResponse rAiWan = dispatch(router, "POST", "/api/ai/ask", authHeaders, reqVol.toString(), "8.8.8.8");
+        MockHttpResponse rAiWan = dispatch(router, "POST", "/api/ai/ask", authHeaders, reqVolSample.toString(), "8.8.8.8");
         boolean okAiWan = (rAiWan.statusCode == 403);
 
-        if (aiAskExecuted && aiUnknownRejected && okAiNoAuth && okAiWan) {
-            System.out.println("[PASS] Test 20 (PR-01 M1): Router REST /api/ai/ask e /api/control/ai verificato: dispatch comandi hardware TV, fail-closed 400 su query non supportate, auth token 401 e firewall LAN 403");
+        if (allCatalogActionsExecuted && aiUnknownRejected && okAiNoAuth && okAiWan) {
+            System.out.println("[PASS] Test 20 (PR-01 M1): Router REST /api/ai/ask end-to-end verificato: esecuzione completa di 25 comandi TV (D-pad, HDMI 1/2/3, canali DTV, volume, app), fail-closed 400, auth 401 e LAN 403");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 20: Fallimento endpoint /api/ai/ask (aiAskExecuted=" + aiAskExecuted + ", aiUnknownRejected=" + aiUnknownRejected + ", okAiNoAuth=" + okAiNoAuth + ", okAiWan=" + okAiWan + ")");
+            System.err.println("[FAIL] Test 20: Fallimento endpoint /api/ai/ask (allCatalogActionsExecuted=" + allCatalogActionsExecuted + ", aiUnknownRejected=" + aiUnknownRejected + ", okAiNoAuth=" + okAiNoAuth + ", okAiWan=" + okAiWan + ")");
             failed++;
         }
 
@@ -598,6 +773,55 @@ public class UnitTests {
             passed++;
         } else {
             System.err.println("[FAIL] Test 22: Mancato blocco HTTP 403 su test connessione cloud");
+            failed++;
+        }
+
+        // Test 23 (PR-01 M1): Endpoint Riproduzione Vocale Locale (/api/ai/speak)
+        JSONObject reqSpeak = new JSONObject().put("text", "Canale sintonizzato su Rai 1 HD").put("interrupt", true);
+        MockHttpResponse rSpeak = dispatch(router, "POST", "/api/ai/speak", authHeaders, reqSpeak.toString(), "192.168.1.10");
+        boolean okSpeak = (rSpeak.statusCode == 200) && (rSpeak.json != null);
+        boolean speakValid = okSpeak && rSpeak.json.optBoolean("success") &&
+                             rSpeak.json.optBoolean("strict_local_only") &&
+                             "Canale sintonizzato su Rai 1 HD".equals(aiHandler.lastSpokenText) &&
+                             aiHandler.lastSpokenInterrupt;
+
+        if (speakValid) {
+            System.out.println("[PASS] Test 23 (PR-01 M1): Endpoint /api/ai/speak verificato: riproduzione TTS offline locale su altoparlanti TV con strict_local_only=true");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 23: Fallimento riproduzione vocale locale /api/ai/speak (okSpeak=" + okSpeak + ", text=" + aiHandler.lastSpokenText + ")");
+            failed++;
+        }
+
+        // Test 24 (PR-01 M1): Inibizione Totale Anteprima Voci Cloud (/api/ai/tts_preview -> HTTP 403)
+        JSONObject reqPreviewCloud = new JSONObject().put("voice", "it-IT-DiegoNeural").put("text", "Prova anteprima");
+        MockHttpResponse rPreviewBlocked = dispatch(router, "POST", "/api/ai/tts_preview", authHeaders, reqPreviewCloud.toString(), "192.168.1.10");
+        boolean okPreviewBlocked = (rPreviewBlocked.statusCode == 403) && (rPreviewBlocked.json != null);
+        boolean previewDenied = okPreviewBlocked && !rPreviewBlocked.json.optBoolean("success") &&
+                                rPreviewBlocked.json.optBoolean("strict_local_only") &&
+                                rPreviewBlocked.json.optString("error").contains("STRICT_LOCAL_ONLY");
+
+        if (previewDenied) {
+            System.out.println("[PASS] Test 24 (PR-01 M1): Endpoint /api/ai/tts_preview bloccato con HTTP 403 Forbidden su voci cloud neurali (zero socket verso Microsoft Azure)");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 24: Mancato blocco HTTP 403 su anteprima voce neurale cloud");
+            failed++;
+        }
+
+        // Test 25 (PR-01 M1): Inibizione Modifica Credenziali Cloud TTS (/api/ai/tts_config -> HTTP 403)
+        JSONObject reqCfgCloud = new JSONObject().put("azure_key", "sec_azure_key_12345").put("azure_region", "westeurope");
+        MockHttpResponse rCfgBlocked = dispatch(router, "POST", "/api/ai/tts_config", authHeaders, reqCfgCloud.toString(), "192.168.1.10");
+        boolean okCfgBlocked = (rCfgBlocked.statusCode == 403) && (rCfgBlocked.json != null);
+        boolean cfgDenied = okCfgBlocked && !rCfgBlocked.json.optBoolean("success") &&
+                            rCfgBlocked.json.optBoolean("strict_local_only") &&
+                            rCfgBlocked.json.optString("error").contains("STRICT_LOCAL_ONLY");
+
+        if (cfgDenied) {
+            System.out.println("[PASS] Test 25 (PR-01 M1): Endpoint /api/ai/tts_config bloccato con HTTP 403 Forbidden su impostazione credenziali cloud Azure in modalità locale");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 25: Mancato blocco HTTP 403 su impostazione credenziali Azure TTS");
             failed++;
         }
 

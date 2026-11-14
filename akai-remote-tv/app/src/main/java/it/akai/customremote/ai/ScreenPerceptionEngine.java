@@ -270,8 +270,25 @@ public class ScreenPerceptionEngine {
                 case "pkg_is": {
                     String val = cond.optString("value", "");
                     boolean res = snapshot.foregroundPackage.equals(val);
+                    if (!res && "it.akai.customhome".equals(val) && "it.akai.customhome.v8".equals(snapshot.foregroundPackage)) {
+                        res = true;
+                    }
                     Log.i(TAG, "evaluate pkg_is (\"" + val + "\", current=" + snapshot.foregroundPackage + ") -> " + res);
                     return res;
+                }
+                case "pkg_any_of":
+                case "any_of_pkgs": {
+                    JSONArray arr = cond.optJSONArray("values");
+                    if (arr != null) {
+                        for (int i = 0; i < arr.length(); i++) {
+                            String p = arr.optString(i, "");
+                            if (!p.isEmpty() && snapshot.foregroundPackage.equals(p)) {
+                                Log.i(TAG, "evaluate " + type + " matched: \"" + p + "\"");
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
                 }
                 case "focused_is": {
                     String val = cond.optString("value", "");

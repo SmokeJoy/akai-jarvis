@@ -86,6 +86,10 @@ public class CloudSpeechAdapter {
      * @return true se avviato con successo, false se fallito o fallback necessario
      */
     public synchronized boolean speakNeural(String text, String voice, String region, String apiKey, final Runnable onComplete) {
+        if (AkaiAiController.isStrictLocalOnly()) {
+            Log.w(TAG, "STRICT_LOCAL_ONLY active: Cloud speech strictly blocked (zero network requests).");
+            return false;
+        }
         if (text == null || text.trim().isEmpty()) return false;
         if (apiKey == null || apiKey.trim().isEmpty() || VOICE_OFFLINE.equals(voice)) return false;
 
@@ -118,6 +122,10 @@ public class CloudSpeechAdapter {
     }
 
     private File fetchFromAzure(String text, String voice, String region, String apiKey) {
+        if (AkaiAiController.isStrictLocalOnly()) {
+            Log.w(TAG, "STRICT_LOCAL_ONLY active: fetchFromAzure blocked (zero network requests).");
+            return null;
+        }
         HttpURLConnection conn = null;
         try {
             String endpoint = "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1";
