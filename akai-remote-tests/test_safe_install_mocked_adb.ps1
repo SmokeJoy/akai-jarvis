@@ -4276,6 +4276,119 @@ try {
     Remove-Item $testDir34 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ==============================================================================
+# TEST 35: [TEST NEGATIVO & AFFERMATIVO / GATE NEGATIVO ASSET TLS CANDIDATO FAIL-CLOSED]
+# L'APK candidato non deve contenere credenziali/certificati TLS preconfezionati
+# (*.p12, *.jks, *.key, *.der, *.crt, *.pass, server_keystore).
+# Sub-test 35a: APK con server_keystore.p12 bloccato categoricamente in Fail-Closed
+# Sub-test 35b: APK con AkaiRootCA.crt bloccato categoricamente in Fail-Closed
+# Sub-test 35c: APK pulito (solo DEX, JNI so, Web assets) approvato al 100%
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 35: Gate Negativo su APK Candidato con Materiale TLS Vietato ---" -ForegroundColor Yellow
+$testDir35 = Join-Path $tempDir "test35_tls_gate_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir35 | Out-Null
+
+try {
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    # Helper per creare zip di test
+    function New-TestApkArchive($targetFile, $entryPaths) {
+        if (Test-Path $targetFile) { Remove-Item $targetFile -Force }
+        $archive = [System.IO.Compression.ZipFile]::Open($targetFile, [System.IO.Compression.ZipArchiveMode]::Create)
+        foreach ($ep in $entryPaths) {
+            $e = $archive.CreateEntry($ep)
+            $w = New-Object System.IO.StreamWriter($e.Open())
+            $w.WriteLine("TEST_CONTENT")
+            $w.Dispose()
+        }
+        $archive.Dispose()
+    }
+
+    $apkForbiddenP12 = Join-Path $testDir35 "bad_p12.apk"
+    New-TestApkArchive $apkForbiddenP12 @("classes.dex", "assets/server_keystore.p12", "assets/www/index.html")
+
+    $apkForbiddenCrt = Join-Path $testDir35 "bad_crt.apk"
+    New-TestApkArchive $apkForbiddenCrt @("classes.dex", "assets/www/AkaiRootCA.crt", "assets/www/index.html")
+
+    $apkClean = Join-Path $testDir35 "clean.apk"
+    New-TestApkArchive $apkClean @("classes.dex", "lib/armeabi-v7a/libakai_uinput.so", "assets/www/index.html", "assets/www/app.js")
+
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $p12Escaped = $apkForbiddenP12.Replace('\', '/')
+    $crtEscaped = $apkForbiddenCrt.Replace('\', '/')
+    $cleanEscaped = $apkClean.Replace('\', '/')
+
+    # Sotto-test 35a: Blocco server_keystore.p12
+    $cmd35a = @"
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Assert-CandidateApkNoForbiddenTlsAssets '$p12Escaped'
+    Write-Host 'UNEXPECTED_PASS'
+} catch {
+    Write-Host `$_.Exception.Message
+}
+"@
+    $res35a = & $psExe -ExecutionPolicy Bypass -Command $cmd35a 2>&1 | Out-String
+    $p12Blocked = ($res35a -match "BLOCCO FAIL-CLOSED DI SICUREZZA" -and $res35a -match "server_keystore\.p12" -and $res35a -notmatch "UNEXPECTED_PASS")
+
+    if ($p12Blocked) {
+        Write-Host "   [PASS] Sotto-test 35a: APK con server_keystore.p12 bloccato categoricamente in Fail-Closed" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 35a: Mancato blocco server_keystore.p12: $res35a" -ForegroundColor Red
+    }
+
+    # Sotto-test 35b: Blocco AkaiRootCA.crt
+    $cmd35b = @"
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Assert-CandidateApkNoForbiddenTlsAssets '$crtEscaped'
+    Write-Host 'UNEXPECTED_PASS'
+} catch {
+    Write-Host `$_.Exception.Message
+}
+"@
+    $res35b = & $psExe -ExecutionPolicy Bypass -Command $cmd35b 2>&1 | Out-String
+    $crtBlocked = ($res35b -match "BLOCCO FAIL-CLOSED DI SICUREZZA" -and $res35b -match "AkaiRootCA\.crt" -and $res35b -notmatch "UNEXPECTED_PASS")
+
+    if ($crtBlocked) {
+        Write-Host "   [PASS] Sotto-test 35b: APK con AkaiRootCA.crt bloccato categoricamente in Fail-Closed" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 35b: Mancato blocco AkaiRootCA.crt: $res35b" -ForegroundColor Red
+    }
+
+    # Sotto-test 35c: APK pulito approvato
+    $cmd35c = @"
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Assert-CandidateApkNoForbiddenTlsAssets '$cleanEscaped'
+} catch {
+    Write-Host `$_.Exception.Message
+}
+"@
+    $res35c = & $psExe -ExecutionPolicy Bypass -Command $cmd35c 2>&1 | Out-String
+    $cleanOk = ($res35c -match "\[PASS\] Assenza credenziali TLS preconfezionate confermata" -and $res35c -notmatch "BLOCCO")
+
+    if ($cleanOk) {
+        Write-Host "   [PASS] Sotto-test 35c: APK pulito (solo DEX, JNI e Web) approvato al 100%" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 35c: APK pulito rifiutato: $res35c" -ForegroundColor Red
+    }
+
+    if ($p12Blocked -and $crtBlocked -and $cleanOk) {
+        Write-Host "[PASS] [TEST NEGATIVO & AFFERMATIVO / GATE NEGATIVO ASSET TLS CANDIDATO] Test 35: Gate Negativo su APK Candidato convalidato al 100% (3/3)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST NEGATIVO & AFFERMATIVO / GATE NEGATIVO ASSET TLS CANDIDATO] Test 35: Fallito" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST NEGATIVO & AFFERMATIVO / GATE NEGATIVO ASSET TLS CANDIDATO] Test 35: Eccezione imprevista: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    Remove-Item $testDir35 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 

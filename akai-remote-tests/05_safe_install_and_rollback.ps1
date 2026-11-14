@@ -1249,6 +1249,51 @@ function Get-ApkCertificateFingerprint($apkFile) {
     return $digest
 }
 
+function Assert-CandidateApkNoForbiddenTlsAssets($apkFile) {
+    if (-not (Test-Path $apkFile)) {
+        throw "ERRORE FAIL-CLOSED: File APK da ispezionare non trovato: $apkFile"
+    }
+
+    $item = Get-Item $apkFile
+    if ($item.Length -lt 256) {
+        $content = [System.IO.File]::ReadAllText($apkFile)
+        if ($content -match '(\.p12|\.jks|\.key|\.der|\.crt|\.pass|server_keystore|AkaiRootCA)') {
+            throw "BLOCCO FAIL-CLOSED DI SICUREZZA: L'APK candidato ('$apkFile') contiene asset/credenziali TLS vietati. I certificati e le chiavi devono essere generati unicamente on-device da TlsCertificateManager a runtime. Installazione categoricamente rifiutata."
+        }
+        return $true
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    try {
+        $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $apkFile))
+        $forbiddenFound = @()
+        try {
+            foreach ($entry in $zip.Entries) {
+                $name = $entry.FullName
+                if ($name -match '(\.p12|\.jks|\.key|\.der|\.crt|\.pass|server_keystore)' -or $name -eq 'assets/www/AkaiRootCA.crt') {
+                    $forbiddenFound += $name
+                }
+            }
+        } finally {
+            $zip.Dispose()
+        }
+
+        if ($forbiddenFound.Count -gt 0) {
+            $forbiddenList = $forbiddenFound -join ", "
+            throw "BLOCCO FAIL-CLOSED DI SICUREZZA: L'APK candidato ('$apkFile') contiene asset/credenziali TLS vietati: [$forbiddenList]. I certificati e le chiavi devono essere generati unicamente on-device da TlsCertificateManager a runtime. Installazione categoricamente rifiutata."
+        }
+    } catch [System.IO.InvalidDataException] {
+        $rawBytes = [System.IO.File]::ReadAllBytes($apkFile)
+        $rawText = [System.Text.Encoding]::ASCII.GetString($rawBytes)
+        if ($rawText -match '(\.p12|\.jks|\.key|\.der|\.crt|\.pass|server_keystore|AkaiRootCA)') {
+            throw "BLOCCO FAIL-CLOSED DI SICUREZZA: L'APK candidato ('$apkFile') contiene asset/credenziali TLS vietati. I certificati e le chiavi devono essere generati unicamente on-device da TlsCertificateManager a runtime. Installazione categoricamente rifiutata."
+        }
+    }
+
+    Write-Host "      [PASS] Assenza credenziali TLS preconfezionate confermata (zero *.p12, *.jks, *.key, *.der, *.crt, *.pass nell'APK candidato)." -ForegroundColor Green
+    return $true
+}
+
 function Verify-SQLiteIntegrityOffline($dbFile) {
     if (-not (Test-Path $dbFile)) {
         throw "ERRORE FAIL-CLOSED: File database per verifica integrita' non trovato: $dbFile"
@@ -1986,6 +2031,9 @@ switch ($Action) {
             Write-Host "      Parametro -GreenfieldStart attivo: autorizzata prima installazione pulita." -ForegroundColor Green
             Write-Host "      Home v8 (it.akai.customhome.v8) e Home v7 (it.akai.customhome) rimangono intatte al 100%." -ForegroundColor Green
         }
+
+        # 2b. Gate Negativo TLS: Verifica assoluta assenza segreti/chiavi/certificati TLS preconfezionati nell'APK
+        Assert-CandidateApkNoForbiddenTlsAssets $ApkPath | Out-Null
 
         # 3. Gate pre-install (applicationId + versionCode) e installazione conservativa (no -d su install)
         $upgradeGate = Test-PackageUpgradeGate -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -CandidateApkPath $ApkPath

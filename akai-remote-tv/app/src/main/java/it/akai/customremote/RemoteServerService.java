@@ -437,15 +437,10 @@ public class RemoteServerService extends Service {
                 }
                 is = new FileInputStream(localKeystore);
             } else {
-                // 2. Fallback su asset di test CI effimero (ammesso unicamente nell'ambiente isolato di CI)
-                try {
-                    is = getAssets().open("server_keystore.p12");
-                    keyPassword = "akai1234".toCharArray();
-                    Log.i(TAG, "Loading ephemeral CI test TLS fixture from assets (non-distributable).");
-                } catch (FileNotFoundException fnf) {
-                    Log.i(TAG, "No TLS keystore found in storage or assets. HTTPS disabled (safe release profile).");
-                    return null;
-                }
+                // Fail-closed: Nessun keystore TLS autorizzato (né generato on-device da TlsCertificateManager
+                // né provisionato in storage privato). Fallback statico da assets categoricamente vietato in release.
+                Log.e(TAG, "Fail-closed: Nessun materiale TLS autorizzato in storage privato locale. Fallback statico da assets vietato in release.");
+                return null;
             }
 
             try {

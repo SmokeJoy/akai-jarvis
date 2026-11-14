@@ -102,7 +102,7 @@ $d8Args = @("-cp", $d8Jar, "com.android.tools.r8.D8", "--min-api", "21", "--lib"
 & $java $d8Args
 
 # 7. Packaging completo (classes.dex + lib/armeabi-v7a + assets)
-Write-Host "[7/8] Assemblaggio pacchetto APK (dex, jniLibs, assets, keystore TLS)..."
+Write-Host "[7/8] Assemblaggio pacchetto APK (dex, jniLibs, assets web)..."
 # Aggiunta classes.dex
 Push-Location $dexDir
 & $jar uf $baseApk classes.dex
@@ -113,13 +113,23 @@ Push-Location $buildDir
 & $jar uf $baseApk lib/armeabi-v7a/libakai_uinput.so
 Pop-Location
 
-# Aggiunta assets web e TLS keystore
+# Aggiunta assets web con rimozione rigorosa ed esplicita di qualsiasi chiave/certificato TLS
 $webSrcDir = Join-Path $workspace "akai-remote-web"
 $webDstDir = Join-Path $assetsDir "www"
+
+# Pulizia preventiva totale di assets da chiavi e certificati pregressi (*.p12, *.jks, *.key, *.der, *.crt, *.pass)
+Get-ChildItem -Path $assetsDir -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -match '\.(p12|jks|key|der|crt|pass)$' -or $_.Name -match 'server_keystore' } |
+    Remove-Item -Force
+
 if (Test-Path $webSrcDir) {
     if (-not (Test-Path $webDstDir)) { New-Item -ItemType Directory -Force -Path $webDstDir | Out-Null }
-    Copy-Item (Join-Path $webSrcDir "*") $webDstDir -Force -Recurse
+    # Copia selettiva solo dei file web (html, css, js, json, svg), mai certificati o keystore
+    Get-ChildItem -Path $webSrcDir -File |
+        Where-Object { $_.Extension -match '\.(html|css|js|json|svg)$' } |
+        ForEach-Object { Copy-Item $_.FullName (Join-Path $webDstDir $_.Name) -Force }
 }
+
 if (Test-Path $assetsDir) {
     Push-Location $srcDir
     & $jar uf $baseApk assets/
@@ -165,6 +175,24 @@ if ((Test-Path $finalApk) -and (Test-Path $releaseApk)) {
     Write-Host "`nVerifica firma apksigner:"
     $verifyArgs = @("-jar", $apksignerJar, "verify", "--print-certs", $releaseApk)
     & $java $verifyArgs
+
+    Write-Host "`n[GATE NEGATIVO DI SICUREZZA] Verifica assenza credenziali/certificati TLS nell'APK release:"
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    $zipTest = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $releaseApk))
+    $foundForbidden = @()
+    foreach ($entry in $zipTest.Entries) {
+        if ($entry.FullName -match '\.(p12|jks|key|der|crt|pass)$' -or $entry.FullName -match 'server_keystore') {
+            $foundForbidden += $entry.FullName
+        }
+    }
+    $zipTest.Dispose()
+
+    if ($foundForbidden.Count -gt 0) {
+        Write-Host "FATAL FAIL-CLOSED: Trovati file TLS/certificati non autorizzati nell'APK di release: $($foundForbidden -join ', ')" -ForegroundColor Red
+        Remove-Item $releaseApk -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+    Write-Host "      [PASS] Nessun certificato o chiave privata/keystore incorporato nell'APK release!" -ForegroundColor Green
 } else {
     Write-Host "ERRORE: APK finale non generato." -ForegroundColor Red
     exit 1
