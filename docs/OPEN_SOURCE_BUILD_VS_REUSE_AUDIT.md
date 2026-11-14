@@ -48,13 +48,14 @@ Nel codice attuale di [`TvController.java`](file:///c:/Users/danie/OneDrive/Docu
 - Riga 108 (`right` / `dpad_right`): passa `AccessibilityNodeInfo.FOCUS_INPUT` anziché `View.FOCUS_RIGHT`.
 
 Finché `/dev/uinput` è operativo (`uinput_ready: true`) il driver hardware nasconde il problema, ma **in qualunque contesto in cui entra il fallback Accessibility** (es. nodi speciali o assenza temporanea di UInput), tutte e quattro le frecce cercano nella stessa direzione (`FOCUS_INPUT = 1`).  
-*Correzione pianificata (Fase 1.1)*: sostituire i quattro parametri in `executeDpad(...)` con `View.FOCUS_UP`, `View.FOCUS_DOWN`, `View.FOCUS_LEFT`, `View.FOCUS_RIGHT` (pattern confermato da `webmote/RemoteService.java`), verificabile tramite unit test Java puri senza toccare la TV.
+*Correzione pianificata (Fase 1.1, post-beta)*: sostituire i quattro parametri in `executeDpad(...)` con `View.FOCUS_UP`, `View.FOCUS_DOWN`, `View.FOCUS_LEFT`, `View.FOCUS_RIGHT` (pattern confermato da `webmote/RemoteService.java`), **mantenendo `AccessibilityNodeInfo.FOCUS_INPUT` esclusivamente per `root.findFocus(...)`**.  
+*Requisito di verifica unitaria*: simulare `uinputDriver.isAvailable() == false`, invocare ciascuno dei quattro comandi direzionali (`up`, `down`, `left`, `right`) e verificare che a `AkaiAccessibilityService.navigateFocus(int direction)` venga passata esattamente la costante attesa (`View.FOCUS_UP`, `View.FOCUS_DOWN`, `View.FOCUS_LEFT`, `View.FOCUS_RIGHT`), non soltanto che il metodo venga invocato.
 
 ### 3.2 Limiti di `clickFocusedNode()` e `navigateFocus()` in `AkaiAccessibilityService.java` (righe 183–223)
 Ispezionando [`AkaiAccessibilityService.java`](file:///c:/Users/danie/OneDrive/Documenti/Antygravity/Akay/akai-remote-tv/app/src/main/java/it/akai/customremote/AkaiAccessibilityService.java#L183-L223) rispetto a `webmote/RemoteService.java` emergono tre lacune tipiche di Android TV 9:
 
 1. **`clickFocusedNode()` (L183–200)**: invoca `focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)` direttamente sul nodo focalizzato. Su molte schermate Leanback/Android TV il focus appartiene a un elemento figlio non direttamente cliccabile, mentre il contenitore padre espone `isClickable()`.  
-   *Adattamento da `webmote`*: risalire gli antenati con `getParent().isClickable()` (riciclando correttamente ogni `AccessibilityNodeInfo` intermedio per evitare leak) finché `ACTION_CLICK` non trova il container cliccabile.
+   *Adattamento da `webmote` con guardia di sicurezza*: risalire gli antenati con `getParent().isClickable()` (riciclando correttamente ogni `AccessibilityNodeInfo` intermedio per evitare leak) finché `ACTION_CLICK` non trova il container cliccabile, **bloccando la risalita/click su schermate sensibili (`ScreenPerceptionEngine.hasSensitiveFields`) o su pulsanti distruttivi senza controllo esplicito**.
 2. **`navigateFocus(int direction)` (L202–223) con focus iniziale assente**: se sia `FOCUS_INPUT` sia `FOCUS_ACCESSIBILITY` sono `null`, il metodo restituisce subito `false`.  
    *Adattamento da `webmote`*: fallback tramite `firstFocusable()` per agganciare il primo elemento focusabile nella finestra attiva.
 3. **`navigateFocus(int direction)` ai bordi di una lista/griglia**: quando `focused.focusSearch(direction)` restituisce `null`, la navigazione si ferma.  
@@ -73,6 +74,13 @@ Ispezionando [`AkaiAccessibilityService.java`](file:///c:/Users/danie/OneDrive/D
 
 L'obiettivo dell'agente autonomo locale su **Android 9 (`~1.4 GB` RAM, ARMv7)** non richiede né un LLM pesante in memoria né modifiche privilegiate a runtime: la struttura già presente in JARVIS consente un **ciclo chiuso deterministico** appoggiato su SQLite (`procedures`).
 
+### Tassonomia Obbligatoria degli Esiti e Regola di Apprendimento (`#issuecomment-6881195749`)
+Inviare un comando non equivale a verificarne l'effetto reale sulla TV:
+- **`COMMAND_SENT`**: il comando o broadcast è stato inoltrato senza eccezioni locali — è ciò che attesta `CommandResult(true)` restituito da `TvController.sendMediaTekBroadcast()`, `context.startActivity(...)` o dai cambi canale/sorgente HDMI/DTV, e **non prova** che la sorgente HDMI/DTV o la schermata siano effettivamente cambiate.
+- **`STATE_VERIFIED`**: l'osservazione post-azione via `AkaiAccessibilityService` (`getCurrentForegroundPackage()`, `getScreenHierarchySummary()`) o segnale di stato confermato prova che la transizione attesa è realmente avvenuta. **Solo uno stato `STATE_VERIFIED` può incrementare `success_count` o promuovere una procedura nella tabella SQLite `procedures`.**
+- **`FAILED`**: il comando ha fallito l'invio oppure l'osservazione post-azione ha rilevato la mancata transizione entro la finestra attesa (`fail_count` incrementato e abbassamento priorità).
+- **`NOT_TESTED`**: ramo/funzione non ancora collaudata sull'hardware reale o sul flusso corrente (mai trattata come verificata).
+
 ```
   [Richiesta Utente via HTTPS 8443]
                  │
@@ -87,27 +95,27 @@ L'obiettivo dell'agente autonomo locale su **Android 9 (`~1.4 GB` RAM, ARMv7)** 
          - Fallback a strategia deterministica base (Leanback launch, focus search, deep-link)
                  │
                  ▼
-      3. AGISCI (`TvController.executeActionSequence`)
-         - Esecuzione passo-passo via `/dev/uinput` primario o Accessibility migliorata (Quick Win #1)
+      3. AGISCI (`TvController.executeActionSequence` / `sendMediaTekBroadcast`)
+         - Esito immediato classificato al massimo come `COMMAND_SENT` (mai `STATE_VERIFIED`)
                  │
                  ▼
       4. VERIFICA (Post-action Observation)
          - Rilettura `getCurrentForegroundPackage()` e `getScreenHierarchySummary()` dopo finestra attesa
-         - Conferma cambio stato atteso (es. ingresso nell'app target, apertura player/risultati)
+         - Classificazione esito reale in `STATE_VERIFIED` vs `FAILED`
                  │
                  ▼
       5. IMPARA (SQLite local memory, cap `15 MB`)
-         - Esito positivo -> incrementa `success_count` e consolida sequenza valida
-         - Esito negativo -> incrementa `fail_count`, abbassa priorità della sequenza fallita e seleziona fallback al tentativo successivo
+         - Solo se `STATE_VERIFIED` -> incrementa `success_count` e consolida sequenza valida
+         - Se `FAILED` (inclusi `COMMAND_SENT` senza cambio stato osservato) -> incrementa `fail_count`, NON promuove la sequenza e seleziona fallback
 ```
 
 ### Piano Operativo per Fasi (Nessuna Deviazione sulla Baseline Beta)
 
 | Fase | Obiettivo | Perimetro & Vincoli | Criterio di Uscita |
 | :--- | :--- | :--- | :--- |
-| **Fase 0 — Validazione Beta Reale (Immediata dopo sblocco freeze)** | Chiudere i 3 passaggi beta su TV `192.168.1.101` | Codice invariato rispetto a commit `4fbf370`; backup SQLite v5 + WAL via `adb root` -> backup -> `adb unroot`; test preflight HTTPS `8443`; telecomando Safari iPhone a PC spento | Rollback verificato, preflight `APPROVED`, telecomando funzionante TV/iPhone |
-| **Fase 1.1 — Quick Win #1 (Patch Java mirata post-beta)** | Risolvere D-Pad Accessibility fallback, click su antenato cliccabile, `firstFocusable()`, scroll fallback, Leanback launch & YouTube `SEARCH_LINKS` | Java puro compatibile `javac` + `d8`; nessuna lib esterna; nuovi unit test in `UnitTests`; zero modifiche a Home v8 e TLS `8443` | CI `34+` Java & `29/29` PowerShell verdi + verifica su TV |
-| **Fase 1.2 — Ciclo Autonomo Deterministico su SQLite `procedures`** | Chiudere il loop `Osserva -> Pianifica -> Agisci -> Verifica -> Impara` senza LLM su TV | Uso esclusivo di `ScreenPerceptionEngine`, `TvController.executeActionSequence` e tabella SQLite `procedures` entro il tetto `15 MB`; rispetto totale di `hasSensitiveFields` | Test ripetuto di almeno 2 sequenze multi-step con recupero automatico dopo errore e incremento `success_count` |
+| **Fase 0 — Backup Reale (A) e Beta Gate (B)** | Eseguire prima **Autorizzazione (A)** (solo backup reale v5 + prova offline + riavvio immediato v5) e poi **Autorizzazione (B)** (deploy v6, HTTPS `8443` SAN `192.168.1.101`, iPhone Safari) | Procedura dettagliata in [`REAL_TV_V5_BACKUP_OPERATIONAL_PLAN.md`](file:///c:/Users/danie/OneDrive/Documenti/Antygravity/Akay/docs/REAL_TV_V5_BACKUP_OPERATIONAL_PLAN.md); codice invariato rispetto alla baseline CI verde | Fase A: backup v5/WAL consolidato SHA-256 + `adb unroot` -> `uid=2000` + v5 riavviato.<br>Fase B: preflight `APPROVED` e telecomando iPhone operativo |
+| **Fase 1.1 — Quick Win #1 (Patch Java mirata post-beta)** | Risolvere D-Pad Accessibility (`View.FOCUS_*`), antenato `isClickable()` con guardia sensibile/distruttiva, `firstFocusable()`, scroll fallback, `getLeanbackLaunchIntentForPackage` & YouTube `SEARCH_LINKS` | Java puro compatibile `javac` + `d8`; nessuna lib esterna; test unitari con `uinput` disabilitato che verificano la costante esatta passata a `navigateFocus` | CI `34+` Java & `29/29` PowerShell verdi + verifica su TV |
+| **Fase 1.2 — Ciclo Autonomo Deterministico su SQLite `procedures`** | Chiudere il loop `Osserva -> Pianifica -> Agisci -> Verifica -> Impara` con tassonomia `COMMAND_SENT` / `STATE_VERIFIED` / `FAILED` / `NOT_TESTED` senza LLM su TV | Uso esclusivo di `ScreenPerceptionEngine`, `TvController` e tabella SQLite `procedures` entro il tetto `15 MB`; promozione memoria consentita **solo** dopo `STATE_VERIFIED` | Test ripetuto di sequenze multi-step con verifica esplicita che `COMMAND_SENT` non verificato non incrementa `success_count` |
 | **Fase 2 — Espansioni Opzionali Misurate (Voce Offline & Dev Tooling)** | Valutare voce on-device TV (`vosk-model-small-it-0.22` o riserva `sherpa-onnx` `int8`/VAD) e consolidare debug PC con `mobile-mcp` | **Obbligatorio benchmark RAM reale su TV (~1.4 GB)** prima di includere AAR/JNI ~250-300 MB; la dettatura da iPhone Safari via HTTPS `8443` rimane attiva a **0 MB RAM TV**. `mobile-mcp` confinato al PC host con `MOBILEMCP_DISABLE_TELEMETRY=1` | Decisione go/no-go basata su `dumpsys meminfo` reale senza OOM/LMK su player e Home v8 |
 
 ---
