@@ -662,8 +662,11 @@ public class RemoteServerService extends Service {
             return;
         }
 
-        // P0: Se HTTP in chiaro, blocca qualsiasi endpoint sensibile legacy
-        if (!isHttps && !("/api/status".equals(path) && "GET".equals(method))) {
+        // P0: retain public static remote web assets on LAN HTTP for legacy fallback.
+        // RestApiRouter has already handled authenticated legacy command/PIN routes.
+        // Never serve AI, credentials, memory or diagnostics over HTTP.
+        if (!isHttps && !("/api/status".equals(path) && "GET".equals(method))
+                && !RestApiRouter.isPublicRemoteAssetRequest(method, path)) {
             JSONObject err = new JSONObject();
             err.put("error", "HTTPS_REQUIRED");
             err.put("status", "UPGRADE_REQUIRED");
