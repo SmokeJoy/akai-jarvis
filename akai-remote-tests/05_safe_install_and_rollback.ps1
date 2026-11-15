@@ -1453,8 +1453,11 @@ function Protect-TlsData {
     )
     $isWin = [System.Environment]::OSVersion.Platform -match "Win"
     if ($isWin) {
+        if ($env:MOCK_FAIL_DPAPI -eq 'true') {
+            throw "ERRORE FAIL-CLOSED: DPAPI CurrentUser simulata non disponibile per test negativo. Rifiuto categorico del fallback AES per proteggere le chiavi private."
+        }
         try {
-            Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+            Add-Type -AssemblyName System.Security -ErrorAction Stop
             $entropy = [System.Text.Encoding]::UTF8.GetBytes("AkaiTv_TLS_Identity_2026_DPAPI_Entropy")
             $cipher = [System.Security.Cryptography.ProtectedData]::Protect(
                 $PlainBytes, $entropy, [System.Security.Cryptography.DataProtectionScope]::CurrentUser
@@ -1463,10 +1466,12 @@ function Protect-TlsData {
                 CipherBytes = $cipher
                 Mechanism = "DPAPI_CURRENT_USER"
             }
-        } catch {}
+        } catch {
+            throw "ERRORE FAIL-CLOSED: DPAPI CurrentUser fallita su Windows ($($_.Exception.Message)). Rifiuto categorico del fallback AES per proteggere le chiavi private da memorizzazione non autorizzata."
+        }
     }
 
-    # Cross-platform AES-256-CBC con keyfile locale protetto da OS
+    # Cross-platform AES-256-CBC con keyfile locale protetto da OS (usato esclusivamente su Linux/macOS)
     $keyFile = Join-Path $VaultDir ".vault_master.key"
     if (-not (Test-Path $keyFile)) {
         $key = New-Object byte[] 32
@@ -1499,11 +1504,15 @@ function Unprotect-TlsData {
         [string]$VaultDir
     )
     if ($Mechanism -eq "DPAPI_CURRENT_USER") {
-        Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
-        $entropy = [System.Text.Encoding]::UTF8.GetBytes("AkaiTv_TLS_Identity_2026_DPAPI_Entropy")
-        return [System.Security.Cryptography.ProtectedData]::Unprotect(
-            $CipherBytes, $entropy, [System.Security.Cryptography.DataProtectionScope]::CurrentUser
-        )
+        try {
+            Add-Type -AssemblyName System.Security -ErrorAction Stop
+            $entropy = [System.Text.Encoding]::UTF8.GetBytes("AkaiTv_TLS_Identity_2026_DPAPI_Entropy")
+            return [System.Security.Cryptography.ProtectedData]::Unprotect(
+                $CipherBytes, $entropy, [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+            )
+        } catch {
+            throw "ERRORE FAIL-CLOSED: Decifratura DPAPI CurrentUser fallita: $($_.Exception.Message)"
+        }
     } elseif ($Mechanism -eq "AES_256_CBC") {
         $keyFile = Join-Path $VaultDir ".vault_master.key"
         if (-not (Test-Path $keyFile)) {
@@ -1528,44 +1537,72 @@ function Resolve-TlsVaultDir {
         [string]$PackageName
     )
     $sessionName = Split-Path $SessionDir -Leaf
-    $isCloudSynced = ($SessionDir -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") -or ($env:AKAI_FORCE_LOCAL_VAULT -eq 'true')
+    $isWin = [System.Environment]::OSVersion.Platform -match "Win"
     
+    # Risoluzione percorso assoluto SessionDir per evitare trappole di percorsi relativi (es. .\backup_tv)
+    $fullSessionDir = $null
+    try {
+        $fullSessionDir = [System.IO.Path]::GetFullPath($SessionDir)
+    } catch {
+        $fullSessionDir = $SessionDir
+    }
+
+    $isCloudSynced = ($fullSessionDir -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") -or ($env:AKAI_FORCE_LOCAL_VAULT -eq 'true')
+
     $vaultDir = $null
-    if ($isCloudSynced) {
-        $isWin = [System.Environment]::OSVersion.Platform -match "Win"
-        if ($isWin -and $env:LOCALAPPDATA) {
-            $vaultDir = Join-Path $env:LOCALAPPDATA "AkaiTvSecureVault\$PackageName\$sessionName\tls_identity"
-        } elseif ($env:HOME) {
-            $vaultDir = Join-Path $env:HOME ".local/share/akai_tv_secure_vault/$PackageName/$sessionName/tls_identity"
-        } else {
-            $vaultDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_tv_secure_vault/$PackageName/$sessionName/tls_identity"
+    if ($isWin) {
+        # REQUISITO SUPERVISORE P1: Su Windows, indipendentemente dal percorso di SessionDir (anche relativo o non rilevato),
+        # il vault delle credenziali TLS è SEMPRE e OBBLIGATORIAMENTE deviato in LOCALAPPDATA per garantire l'isolamento assoluto da cloud sync.
+        if (-not $env:LOCALAPPDATA) {
+            throw "ERRORE FAIL-CLOSED: Environment variable LOCALAPPDATA non definita o non accessibile su Windows. Impossibile garantire isolamento sicuro del vault TLS."
         }
+        $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "AkaiTvSecureVault\$PackageName\$sessionName\tls_identity"))
     } else {
-        $vaultDir = Join-Path $SessionDir "tls_identity"
+        # Su Linux / macOS (standard XDG data dir locale)
+        if ($isCloudSynced -or $env:AKAI_FORCE_LOCAL_VAULT -eq 'true' -or ($env:HOME -and (Test-Path (Join-Path $env:HOME ".local")))) {
+            if ($env:HOME) {
+                $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $env:HOME ".local/share/akai_tv_secure_vault/$PackageName/$sessionName/tls_identity"))
+            } else {
+                $vaultDir = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) "akai_tv_secure_vault/$PackageName/$sessionName/tls_identity"))
+            }
+        } else {
+            $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $fullSessionDir "tls_identity"))
+        }
     }
 
     if (-not (Test-Path $vaultDir)) {
         New-Item -ItemType Directory -Force -Path $vaultDir | Out-Null
     }
 
-    # Restringi permessi cartella OS solo all'utente corrente
-    try {
-        $isWin = [System.Environment]::OSVersion.Platform -match "Win"
-        if ($isWin) {
-            $acl = Get-Acl $vaultDir
+    # Restringi e verifica effettiva delle ACL / permessi cartella OS solo all'utente corrente
+    if ($isWin) {
+        try {
+            $acl = Get-Acl -Path $vaultDir
             $acl.SetAccessRuleProtection($true, $false)
             $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
             $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($currentUser, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
             $acl.AddAccessRule($rule)
             Set-Acl -Path $vaultDir -AclObject $acl
-        } else {
-            & chmod 700 $vaultDir 2>$null
+
+            # Verifica effettiva che l'ereditarietà sia disabilitata e che l'ACL sia protetta
+            $verifyAcl = Get-Acl -Path $vaultDir
+            if ($verifyAcl.AreAccessRulesProtected -ne $true) {
+                throw "Verifica ACL fallita: le regole di accesso non risultano protette (ereditarieta' ancora attiva)."
+            }
+        } catch {
+            throw "ERRORE FAIL-CLOSED: Impossibile impostare o verificare le ACL esclusive sul vault locale Windows ($vaultDir): $($_.Exception.Message)"
         }
-    } catch {}
+    } else {
+        try {
+            & chmod 700 $vaultDir 2>$null
+        } catch {
+            throw "ERRORE FAIL-CLOSED: Impossibile impostare i permessi 700 sul vault locale ($vaultDir): $($_.Exception.Message)"
+        }
+    }
 
     return @{
         VaultDir = $vaultDir
-        IsCloudSynced = $isCloudSynced
+        IsCloudSynced = if ($isWin) { $true } else { $isCloudSynced }
     }
 }
 
@@ -1724,7 +1761,7 @@ function Backup-DeviceTlsIdentity {
         [System.IO.File]::WriteAllText((Join-Path $sessionTlsDir "vault_pointer.json"), ($pointer | ConvertTo-Json), [System.Text.Encoding]::UTF8)
     }
 
-    Write-Host "      Snapshot identita' TLS CIFRATO e verificato con successo: tutti i 5 asset protetti nel vault ($vaultDir), ZERO segreti in chiaro." -ForegroundColor Green
+    Write-Host "      Snapshot identita' TLS CIFRATO e verificato con successo: tutti i 5 asset protetti nel vault ($vaultDir) in formato .enc (file temporanei effimeri isolati azzerati e rimossi), ZERO segreti in chiaro nel manifest." -ForegroundColor Green
     return $manifest
 }
 

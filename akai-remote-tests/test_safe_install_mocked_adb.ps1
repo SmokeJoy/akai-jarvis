@@ -4495,19 +4495,29 @@ try {
                        (Test-Path (Join-Path $vaultDir36 "ca.crt.enc")) -and
                        (Test-Path (Join-Path $vaultDir36 "ca_key.der.enc"))
 
-    # Verifica ASSENZA categorica di chiavi/password in chiaro su disco
+    # Verifica ASSENZA categorica di chiavi/password in chiaro su disco e assenza di master key AES su Windows
     $noPlainFilesOnDisk = (-not (Test-Path (Join-Path $tlsDir36 "server_keystore.pass"))) -and
                           (-not (Test-Path (Join-Path $tlsDir36 "ca_key.der"))) -and
                           (-not (Test-Path (Join-Path $vaultDir36 "server_keystore.pass"))) -and
                           (-not (Test-Path (Join-Path $vaultDir36 "ca_key.der")))
 
-    if ($encFilesPresent -and $noPlainFilesOnDisk) {
-        Write-Host "   [PASS] Sotto-test 36a: Tutti i 5 asset crittografici archiviati CIFRATI nel vault (.enc) e ZERO chiavi in chiaro su disco" -ForegroundColor Green
-    } else {
-        Write-Host "   [FAIL] Sotto-test 36a: Salvataggio cifrato incompleto o chiavi in chiaro presenti (enc=$encFilesPresent, noPlain=$noPlainFilesOnDisk)" -ForegroundColor Red
+    $winVaultStrict = $true
+    if ($isWin) {
+        # Su Windows: percorso assoluto obbligatorio sotto LOCALAPPDATA, mai .vault_master.key, ACL protetta
+        $isUnderLocalAppData = $vaultDir36.StartsWith($env:LOCALAPPDATA, [System.StringComparison]::OrdinalIgnoreCase)
+        $noMasterKeyOnWin = (-not (Test-Path (Join-Path $vaultDir36 ".vault_master.key"))) -and
+                            (-not (Test-Path (Join-Path $tlsDir36 ".vault_master.key")))
+        $aclProtected = (Get-Acl $vaultDir36).AreAccessRulesProtected -eq $true
+        $winVaultStrict = $isUnderLocalAppData -and $noMasterKeyOnWin -and $aclProtected
     }
 
-    # Sotto-test 36b: Validazione manifest.json con metadati completi dei 5 file e garanzia ZERO secrets leak
+    if ($encFilesPresent -and $noPlainFilesOnDisk -and $winVaultStrict) {
+        Write-Host "   [PASS] Sotto-test 36a: Tutti i 5 asset crittografici archiviati CIFRATI nel vault (.enc), LOCALAPPDATA garantita, ACL protetta e ZERO chiavi in chiaro su disco" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 36a: Salvataggio cifrato incompleto o non conforme (enc=$encFilesPresent, noPlain=$noPlainFilesOnDisk, winStrict=$winVaultStrict)" -ForegroundColor Red
+    }
+
+    # Sotto-test 36b: Validazione manifest.json con metadati completi dei 5 file, vault_pointer.json e garanzia ZERO secrets leak
     $manifestValid = $false
     if (Test-Path $manifestPath36) {
         $manText = Get-Content $manifestPath36 -Raw
@@ -4518,14 +4528,15 @@ try {
         $hasNoPlainKey = ($manText -notmatch "MOCK_RSA_KEY_DER_PRIVATE_BYTES")
         $hashMatches = ($manObj.KeystoreSha256 -eq $actualKsPlainHash)
         $has5FilesMeta = (($manObj.Files.psobject.properties | Measure-Object).Count -eq 5)
+        $pointerValid = (Test-Path (Join-Path $tlsDir36 "vault_pointer.json"))
 
-        $manifestValid = $hasNoPlainPass -and $hasNoPlainKey -and $hashMatches -and $has5FilesMeta
+        $manifestValid = $hasNoPlainPass -and $hasNoPlainKey -and $hashMatches -and $has5FilesMeta -and $pointerValid
     }
 
     if ($manifestValid) {
-        Write-Host "   [PASS] Sotto-test 36b: tls_manifest.json verificato al 100% con tutti i 5 file censiti, parità hash e ZERO secrets leak" -ForegroundColor Green
+        Write-Host "   [PASS] Sotto-test 36b: tls_manifest.json verificato al 100% con tutti i 5 file censiti, vault_pointer.json presente, parità hash e ZERO secrets leak" -ForegroundColor Green
     } else {
-        Write-Host "   [FAIL] Sotto-test 36b: tls_manifest.json non conforme o secrets leaked" -ForegroundColor Red
+        Write-Host "   [FAIL] Sotto-test 36b: tls_manifest.json o vault_pointer non conforme o secrets leaked" -ForegroundColor Red
     }
 
     # Sotto-test 36c: Test negativo FAIL-CLOSED su asset TLS obbligatorio mancante/fallito durante il backup
@@ -4552,7 +4563,36 @@ try {
         Write-Host "   [FAIL] Sotto-test 36c: Mancato blocco fail-closed su asset TLS incompleto: $res36Fail" -ForegroundColor Red
     }
 
-    # Sotto-test 36d: Release legacy v5 (server_keystore.p12 NOT_FOUND) -> restituisce HasTls=false senza errori
+    # Sotto-test 36d: Test negativo FAIL-CLOSED su DPAPI non disponibile su Windows (rifiuto categorico fallback AES)
+    $sessionDir36DpapiFail = Join-Path $testDir36 "session_36_dpapi_fail"
+    $sessionEsc36DpapiFail = $sessionDir36DpapiFail.Replace('\', '/')
+    $cmd36DpapiFail = @"
+`$env:NODE_EXE = '$nodeEscaped36'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc36'
+`$env:MOCK_MISSING_CA_KEY = 'false'
+`$env:MOCK_FAIL_DPAPI = 'true'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Backup-DeviceTlsIdentity -AdbExe '$mockAdbEsc36' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -SessionDir '$sessionEsc36DpapiFail' | Out-Null
+    Write-Host 'UNEXPECTED_PASS'
+} catch {
+    Write-Host (`$_.Exception.Message)
+}
+"@
+    $res36DpapiFail = & $psExe -ExecutionPolicy Bypass -Command $cmd36DpapiFail 2>&1 | Out-String
+    $dpapiFailBlocked = if ($isWin) {
+        ($res36DpapiFail -match "ERRORE FAIL-CLOSED" -and $res36DpapiFail -match "DPAPI" -and $res36DpapiFail -notmatch "UNEXPECTED_PASS")
+    } else {
+        $true # Su Linux DPAPI non è attiva per design
+    }
+
+    if ($dpapiFailBlocked) {
+        Write-Host "   [PASS] Sotto-test 36d: Fallimento DPAPI su Windows: blocco fail-closed categorico senza fallback silenzioso AES" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 36d: Mancato blocco fail-closed su fallimento DPAPI: $res36DpapiFail" -ForegroundColor Red
+    }
+
+    # Sotto-test 36e: Release legacy v5 (server_keystore.p12 NOT_FOUND) -> restituisce HasTls=false senza errori
     $sessionDir36Legacy = Join-Path $testDir36 "session_36_legacy"
     $sessionEsc36Legacy = $sessionDir36Legacy.Replace('\', '/')
     $res36dFile = Join-Path $testDir36 "res_36d.json"
@@ -4561,6 +4601,7 @@ try {
 `$env:NODE_EXE = '$nodeEscaped36'
 `$env:ADB_EXECUTABLE = '$mockAdbEsc36'
 `$env:MOCK_MISSING_CA_KEY = 'false'
+`$env:MOCK_FAIL_DPAPI = 'false'
 . '$scriptEscaped' -Action plan | Out-Null
 `$res = Backup-DeviceTlsIdentity -AdbExe '$mockAdbEsc36' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote_legacy' -SessionDir '$sessionEsc36Legacy'
 `$res | ConvertTo-Json | Set-Content -Path '$res36dEsc' -Encoding utf8
@@ -4570,13 +4611,13 @@ try {
     $legacyOk = ($backupResultLegacy.HasTls -eq $false)
 
     if ($legacyOk) {
-        Write-Host "   [PASS] Sotto-test 36d: Release legacy senza TLS gestita correttamente con HasTls=false" -ForegroundColor Green
+        Write-Host "   [PASS] Sotto-test 36e: Release legacy senza TLS gestita correttamente con HasTls=false" -ForegroundColor Green
     } else {
-        Write-Host "   [FAIL] Sotto-test 36d: Release legacy fallita: $res36dJson" -ForegroundColor Red
+        Write-Host "   [FAIL] Sotto-test 36e: Release legacy fallita: $res36dJson" -ForegroundColor Red
     }
 
-    if ($encFilesPresent -and $noPlainFilesOnDisk -and $manifestValid -and $missingKeyBlocked -and $legacyOk) {
-        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY BACKUP GATE] Test 36: Snapshot identità TLS, cifratura vault e protezione segreti convalidati al 100% (4/4)" -ForegroundColor Green
+    if ($encFilesPresent -and $noPlainFilesOnDisk -and $winVaultStrict -and $manifestValid -and $missingKeyBlocked -and $dpapiFailBlocked -and $legacyOk) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY BACKUP GATE] Test 36: Snapshot identità TLS, cifratura vault e protezione segreti convalidati al 100% (5/5)" -ForegroundColor Green
         $passed++
     } else {
         Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY BACKUP GATE] Test 36: Fallito" -ForegroundColor Red
