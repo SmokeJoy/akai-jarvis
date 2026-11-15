@@ -300,6 +300,7 @@
             if (elements.voiceFootnote) {
                 elements.voiceFootnote.textContent = 'Microfono disabilitato su HTTP non protetto. Digita da tastiera o usa HTTPS.';
             }
+            return;
         } else if (!SpeechRec) {
             console.warn('SpeechRecognition API not available in this browser environment.');
             if (elements.voiceEnvNotice) {
@@ -397,7 +398,11 @@
                 }
             } else if (event.error !== 'aborted') {
                 setJarvisState(JarvisConvoState.ERROR, 'Errore microfono', 'error');
-                showToast(`Microfono: ${event.error}`, true);
+                if (event.error === 'not-allowed') {
+                    showToast('Microfono: not-allowed (Accesso negato. Su iOS: verifica permessi sito e abilita la Root CA in Generali > Info > Attendibilità certificati)', true);
+                } else {
+                    showToast(`Microfono: ${event.error}`, true);
+                }
                 stopConversation();
             }
         };

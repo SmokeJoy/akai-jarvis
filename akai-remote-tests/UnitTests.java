@@ -9,9 +9,11 @@ import it.akai.customremote.ai.LocalIntentParser;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.text.Normalizer;
@@ -994,11 +996,28 @@ public class UnitTests {
         javax.net.ssl.SSLContext sslCtx = tlsMgr.createSSLContext(null, "192.168.1.8");
         boolean okSslContext = (sslCtx != null);
 
-        if (tlsGeneratedOk && caPemValid && sanComplete && okCaCert && okTlsInfo && okPinWithFingerprint && okSslContext) {
-            System.out.println("[PASS] Test 27 (PR-01 M2): Root CA locale e certificato SAN emessi on-device con X.509 v3 (SHA-256 with RSA 2048), SAN completi (DNS: akai-tv.local, IP: 192.168.1.8), endpoint /api/auth/ca.crt e /api/auth/tls_info verificati, e impronta anti-MITM proiettata a schermo per trust iOS/Android");
+        // Verifica conformità Apple iOS 13+ / RFC 5280: ExtendedKeyUsage (serverAuth) e KeyUsage
+        boolean okAppleCompliance = false;
+        try {
+            KeyStore testKs = KeyStore.getInstance("PKCS12");
+            try (FileInputStream fis = new FileInputStream(tlsInfo.keystoreFile)) {
+                testKs.load(fis, tlsInfo.keyPassword);
+            }
+            X509Certificate sCert = (X509Certificate) testKs.getCertificate("akai_server");
+            X509Certificate cCert = (X509Certificate) testKs.getCertificate("akai_ca");
+            boolean okServerEku = (sCert != null) && (sCert.getExtendedKeyUsage() != null) && sCert.getExtendedKeyUsage().contains("1.3.6.1.5.5.7.3.1");
+            boolean okServerKu = (sCert != null) && (sCert.getKeyUsage() != null) && sCert.getKeyUsage()[0] && sCert.getKeyUsage()[2];
+            boolean okCaKu = (cCert != null) && (cCert.getKeyUsage() != null) && cCert.getKeyUsage()[5] && cCert.getKeyUsage()[6];
+            okAppleCompliance = okServerEku && okServerKu && okCaKu;
+        } catch (Exception e) {
+            System.err.println("Errore verifica estensioni conformita Apple: " + e.getMessage());
+        }
+
+        if (tlsGeneratedOk && caPemValid && sanComplete && okCaCert && okTlsInfo && okPinWithFingerprint && okSslContext && okAppleCompliance) {
+            System.out.println("[PASS] Test 27 (PR-01 M2): Root CA locale e certificato SAN emessi on-device con X.509 v3 (SHA-256 with RSA 2048), conformità Apple iOS 13+ (serverAuth EKU 1.3.6.1.5.5.7.3.1, KeyUsage digitalSignature/keyEncipherment, CA keyCertSign/cRLSign), SAN completi (DNS: akai-tv.local, IP: 192.168.1.8), endpoint /api/auth/ca.crt e /api/auth/tls_info verificati, e impronta anti-MITM proiettata a schermo per trust iOS/Android");
             passed++;
         } else {
-            System.err.println("[FAIL] Test 27: Fallimento verifica TLS M2 (tlsGeneratedOk=" + tlsGeneratedOk + ", caPemValid=" + caPemValid + ", sanComplete=" + sanComplete + ", okCaCert=" + okCaCert + ", okTlsInfo=" + okTlsInfo + ", okPinWithFingerprint=" + okPinWithFingerprint + ", okSslContext=" + okSslContext + ")");
+            System.err.println("[FAIL] Test 27: Fallimento verifica TLS M2 (tlsGeneratedOk=" + tlsGeneratedOk + ", caPemValid=" + caPemValid + ", sanComplete=" + sanComplete + ", okCaCert=" + okCaCert + ", okTlsInfo=" + okTlsInfo + ", okPinWithFingerprint=" + okPinWithFingerprint + ", okSslContext=" + okSslContext + ", okAppleCompliance=" + okAppleCompliance + ")");
             failed++;
         }
 

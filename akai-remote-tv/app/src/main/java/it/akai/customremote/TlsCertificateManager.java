@@ -153,14 +153,15 @@ public class TlsCertificateManager {
                         if (System.currentTimeMillis() < (serverX509.getNotAfter().getTime() - (7L * 24 * 3600 * 1000))) {
                             List<String> sans = extractSanStrings(serverX509);
                             boolean ipValid = (localIp == null || localIp.trim().isEmpty() || "127.0.0.1".equals(localIp.trim()) || sans.contains(localIp.trim()));
-                            if (ipValid) {
+                            boolean ekuValid = (serverX509.getExtendedKeyUsage() != null && serverX509.getExtendedKeyUsage().contains("1.3.6.1.5.5.7.3.1"));
+                            if (ipValid && ekuValid) {
                                 String caFp = computeSha256Fingerprint(caX509);
                                 String caPem = readStringFromFile(caPemFile);
                                 cachedTlsInfo = new TlsInfo(caFp, caPem, sans, serverX509.getNotAfter().getTime(), ksFile, password);
                                 Log.i(TAG, "Keystore TLS caricato con successo. CA Fingerprint: " + caFp);
                                 return cachedTlsInfo;
                             } else {
-                                Log.i(TAG, "IP LAN TV mutato (" + localIp + " non presente in SAN). Rinnovo certificato Server con Root CA esistente...");
+                                Log.i(TAG, "IP LAN TV mutato (" + localIp + ") o estensioni EKU serverAuth mancanti. Rinnovo certificato Server con Root CA esistente...");
                                 if (caKeyFile.exists() && caKeyFile.length() > 0) {
                                     try {
                                         byte[] keyBytes = new byte[(int) caKeyFile.length()];
@@ -586,6 +587,29 @@ public class TlsCertificateManager {
         return derSequence(extOid, derOctetString(valSeq));
     }
 
+    private static byte[] buildKeyUsage(boolean isCa) throws IOException {
+        byte[] extOid = new byte[]{0x06, 0x03, 0x55, 0x1D, 0x0F}; // 2.5.29.15
+        if (isCa) {
+            // keyCertSign (5), cRLSign (6) -> 00000110 in byte 0 = 0x06 con 1 bit inutilizzato (critical=true RFC 5280)
+            byte[] bitString = new byte[]{0x03, 0x02, 0x01, 0x06};
+            return derSequence(extOid, new byte[]{0x01, 0x01, (byte) 0xFF}, derOctetString(bitString));
+        } else {
+            // digitalSignature (0), keyEncipherment (2) -> 10100000 = 0xA0 con 5 bit inutilizzati
+            byte[] bitString = new byte[]{0x03, 0x02, 0x05, (byte) 0xA0};
+            return derSequence(extOid, new byte[]{0x01, 0x01, (byte) 0xFF}, derOctetString(bitString));
+        }
+    }
+
+    private static byte[] buildExtendedKeyUsage() throws IOException {
+        byte[] extOid = new byte[]{0x06, 0x03, 0x55, 0x1D, 0x25}; // 2.5.29.37
+        // id-kp-serverAuth (1.3.6.1.5.5.7.3.1) obbligatorio per conformità Apple iOS 13+ / RFC 5280
+        byte[] serverAuthOid = new byte[]{0x06, 0x08, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01};
+        // id-kp-clientAuth (1.3.6.1.5.5.7.3.2)
+        byte[] clientAuthOid = new byte[]{0x06, 0x08, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02};
+        byte[] ekuSeq = derSequence(serverAuthOid, clientAuthOid);
+        return derSequence(extOid, derOctetString(ekuSeq));
+    }
+
     public static X509Certificate generateCertificate(
             String subjectCn, String subjectOrg, String subjectCountry,
             PublicKey subjectPub,
@@ -606,8 +630,12 @@ public class TlsCertificateManager {
 
         List<byte[]> extList = new ArrayList<>();
         extList.add(buildBasicConstraints(isCa));
-        if (!isCa && (dnsNames != null || ipAddresses != null)) {
-            extList.add(buildSanExtension(dnsNames, ipAddresses));
+        extList.add(buildKeyUsage(isCa));
+        if (!isCa) {
+            extList.add(buildExtendedKeyUsage());
+            if (dnsNames != null || ipAddresses != null) {
+                extList.add(buildSanExtension(dnsNames, ipAddresses));
+            }
         }
         byte[] extsSeq = derSequence(extList.toArray(new byte[0][]));
         ByteArrayOutputStream extsTagOut = new ByteArrayOutputStream();
