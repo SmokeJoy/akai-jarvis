@@ -674,14 +674,21 @@ function Send-FileViaAdbExecIn {
     param(
         [string]$AdbExe,
         [string]$TargetAdb,
-        [string]$LocalFilePath,
+        [string]$LocalFilePath = $null,
+        [byte[]]$RawBytes = $null,
         [string]$RemoteCommand
     )
-    if (-not (Test-Path $LocalFilePath)) {
-        throw "ERRORE: File locale non trovato: $LocalFilePath"
+    $bytes = $null
+    if ($RawBytes -ne $null) {
+        $bytes = $RawBytes
+    } elseif (-not [string]::IsNullOrEmpty($LocalFilePath)) {
+        if (-not (Test-Path $LocalFilePath)) {
+            throw "ERRORE: File locale non trovato: $LocalFilePath"
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($LocalFilePath)
+    } else {
+        throw "ERRORE: Nessun payload specificato per Send-FileViaAdbExecIn"
     }
-
-    $bytes = [System.IO.File]::ReadAllBytes($LocalFilePath)
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $AdbExe
@@ -1439,6 +1446,129 @@ except Exception as e:
     return $true
 }
 
+function Protect-TlsData {
+    param(
+        [byte[]]$PlainBytes,
+        [string]$VaultDir
+    )
+    $isWin = [System.Environment]::OSVersion.Platform -match "Win"
+    if ($isWin) {
+        try {
+            Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+            $entropy = [System.Text.Encoding]::UTF8.GetBytes("AkaiTv_TLS_Identity_2026_DPAPI_Entropy")
+            $cipher = [System.Security.Cryptography.ProtectedData]::Protect(
+                $PlainBytes, $entropy, [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+            )
+            return @{
+                CipherBytes = $cipher
+                Mechanism = "DPAPI_CURRENT_USER"
+            }
+        } catch {}
+    }
+
+    # Cross-platform AES-256-CBC con keyfile locale protetto da OS
+    $keyFile = Join-Path $VaultDir ".vault_master.key"
+    if (-not (Test-Path $keyFile)) {
+        $key = New-Object byte[] 32
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        $rng.GetBytes($key)
+        [System.IO.File]::WriteAllBytes($keyFile, $key)
+        if (-not $isWin) {
+            & chmod 600 $keyFile 2>$null
+        }
+    }
+    $aesKey = [System.IO.File]::ReadAllBytes($keyFile)
+    $aes = [System.Security.Cryptography.Aes]::Create()
+    $aes.Key = $aesKey
+    $aes.GenerateIV()
+    $encryptor = $aes.CreateEncryptor()
+    $encData = $encryptor.TransformFinalBlock($PlainBytes, 0, $PlainBytes.Length)
+    $combined = New-Object byte[] ($aes.IV.Length + $encData.Length)
+    [System.Buffer]::BlockCopy($aes.IV, 0, $combined, 0, $aes.IV.Length)
+    [System.Buffer]::BlockCopy($encData, 0, $combined, $aes.IV.Length, $encData.Length)
+    return @{
+        CipherBytes = $combined
+        Mechanism = "AES_256_CBC"
+    }
+}
+
+function Unprotect-TlsData {
+    param(
+        [byte[]]$CipherBytes,
+        [string]$Mechanism,
+        [string]$VaultDir
+    )
+    if ($Mechanism -eq "DPAPI_CURRENT_USER") {
+        Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+        $entropy = [System.Text.Encoding]::UTF8.GetBytes("AkaiTv_TLS_Identity_2026_DPAPI_Entropy")
+        return [System.Security.Cryptography.ProtectedData]::Unprotect(
+            $CipherBytes, $entropy, [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+        )
+    } elseif ($Mechanism -eq "AES_256_CBC") {
+        $keyFile = Join-Path $VaultDir ".vault_master.key"
+        if (-not (Test-Path $keyFile)) {
+            throw "ERRORE FAIL-CLOSED: Master key del vault crittografico non trovata: $keyFile"
+        }
+        $aesKey = [System.IO.File]::ReadAllBytes($keyFile)
+        $aes = [System.Security.Cryptography.Aes]::Create()
+        $aes.Key = $aesKey
+        $iv = New-Object byte[] 16
+        [System.Buffer]::BlockCopy($CipherBytes, 0, $iv, 0, 16)
+        $aes.IV = $iv
+        $decryptor = $aes.CreateDecryptor()
+        return $decryptor.TransformFinalBlock($CipherBytes, 16, $CipherBytes.Length - 16)
+    } else {
+        throw "ERRORE FAIL-CLOSED: Meccanismo di cifratura non riconosciuto: $Mechanism"
+    }
+}
+
+function Resolve-TlsVaultDir {
+    param(
+        [string]$SessionDir,
+        [string]$PackageName
+    )
+    $sessionName = Split-Path $SessionDir -Leaf
+    $isCloudSynced = ($SessionDir -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") -or ($env:AKAI_FORCE_LOCAL_VAULT -eq 'true')
+    
+    $vaultDir = $null
+    if ($isCloudSynced) {
+        $isWin = [System.Environment]::OSVersion.Platform -match "Win"
+        if ($isWin -and $env:LOCALAPPDATA) {
+            $vaultDir = Join-Path $env:LOCALAPPDATA "AkaiTvSecureVault\$PackageName\$sessionName\tls_identity"
+        } elseif ($env:HOME) {
+            $vaultDir = Join-Path $env:HOME ".local/share/akai_tv_secure_vault/$PackageName/$sessionName/tls_identity"
+        } else {
+            $vaultDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_tv_secure_vault/$PackageName/$sessionName/tls_identity"
+        }
+    } else {
+        $vaultDir = Join-Path $SessionDir "tls_identity"
+    }
+
+    if (-not (Test-Path $vaultDir)) {
+        New-Item -ItemType Directory -Force -Path $vaultDir | Out-Null
+    }
+
+    # Restringi permessi cartella OS solo all'utente corrente
+    try {
+        $isWin = [System.Environment]::OSVersion.Platform -match "Win"
+        if ($isWin) {
+            $acl = Get-Acl $vaultDir
+            $acl.SetAccessRuleProtection($true, $false)
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($currentUser, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+            $acl.AddAccessRule($rule)
+            Set-Acl -Path $vaultDir -AclObject $acl
+        } else {
+            & chmod 700 $vaultDir 2>$null
+        }
+    } catch {}
+
+    return @{
+        VaultDir = $vaultDir
+        IsCloudSynced = $isCloudSynced
+    }
+}
+
 function Backup-DeviceTlsIdentity {
     param(
         [string]$AdbExe,
@@ -1446,7 +1576,9 @@ function Backup-DeviceTlsIdentity {
         [string]$PackageName,
         [string]$SessionDir
     )
-    $tlsDir = Join-Path $SessionDir "tls_identity"
+    $sessionTlsDir = Join-Path $SessionDir "tls_identity"
+    New-Item -ItemType Directory -Force -Path $sessionTlsDir | Out-Null
+
     $probeKs = $null
     try {
         $probeKs = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/server_keystore.p12" -Channel "any"
@@ -1465,77 +1597,135 @@ function Backup-DeviceTlsIdentity {
             throw $_
         }
     }
+
     if ($probeKs -eq "NOT_FOUND") {
         Write-Host "      Snapshot identita' TLS: ASSENTE sul device (release legacy HTTP-only v5). Nessun backup TLS richiesto." -ForegroundColor Green
-        return @{ HasTls = $false }
+        $manifest = @{
+            HasTls = $false
+            Reason = "LEGACY_NO_TLS"
+        }
+        [System.IO.File]::WriteAllText((Join-Path $sessionTlsDir "tls_manifest.json"), ($manifest | ConvertTo-Json -Depth 5), [System.Text.Encoding]::UTF8)
+        return $manifest
     } elseif ($probeKs -ne "EXISTS") {
         Write-Host "      Probe server_keystore.p12: stato $probeKs (permessi negati o storage non accessibile)." -ForegroundColor Yellow
+        throw "ERRORE FAIL-CLOSED: Impossibile accertare con sicurezza lo stato del keystore TLS sul dispositivo."
     }
 
-    New-Item -ItemType Directory -Force -Path $tlsDir | Out-Null
+    # Risoluzione vault protetto non sincronizzato
+    $vaultInfo = Resolve-TlsVaultDir -SessionDir $SessionDir -PackageName $PackageName
+    $vaultDir = $vaultInfo.VaultDir
+    $isCloudSynced = $vaultInfo.IsCloudSynced
+
+    # Creazione cartella temporanea locale effimera isolata per ricezione
+    $ephemeralDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_tls_rx_$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $ephemeralDir | Out-Null
+
     $filesToBackup = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
-    $extractedCount = 0
+    $manifestFiles = @{}
 
-    foreach ($f in $filesToBackup) {
-        $destPath = Join-Path $tlsDir $f
-        $extracted = $false
+    try {
+        foreach ($f in $filesToBackup) {
+            $rxTempPath = Join-Path $ephemeralDir $f
+            $extracted = $false
 
-        # Tentativo 1: run-as
-        $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/$f" -LocalFilePath $destPath -MinBytes 1
-        if ($rx.Success -and (Test-Path $destPath) -and (Get-Item $destPath).Length -gt 0) {
-            $extracted = $true
-        }
-
-        # Tentativo 2: su
-        if (-not $extracted) {
-            $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/$f'" -LocalFilePath $destPath -MinBytes 1
-            if ($rx.Success -and (Test-Path $destPath) -and (Get-Item $destPath).Length -gt 0) {
+            # Tentativo 1: run-as
+            $minB = if ($f -eq "server_keystore.p12") { 512 } else { 1 }
+            $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/$f" -LocalFilePath $rxTempPath -MinBytes $minB
+            if ($rx.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB) {
                 $extracted = $true
             }
-        }
 
-        # Tentativo 3: root adbd
-        if (-not $extracted) {
-            $script:elevRx = $false
-            try {
-                Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
-                    $rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$f" -LocalFilePath $destPath -MinBytes 1
-                    if ($rxElev.Success -and (Test-Path $destPath) -and (Get-Item $destPath).Length -gt 0) {
-                        $script:elevRx = $true
-                    }
+            # Tentativo 2: su
+            if (-not $extracted) {
+                $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/$f'" -LocalFilePath $rxTempPath -MinBytes $minB
+                if ($rx.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB) {
+                    $extracted = $true
                 }
-            } catch {}
-            if ($script:elevRx) {
-                $extracted = $true
+            }
+
+            # Tentativo 3: root adbd
+            if (-not $extracted) {
                 $script:elevRx = $false
+                try {
+                    Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                        $rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$f" -LocalFilePath $rxTempPath -MinBytes $minB
+                        if ($rxElev.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB) {
+                            $script:elevRx = $true
+                        }
+                    }
+                } catch {}
+                if ($script:elevRx) {
+                    $extracted = $true
+                    $script:elevRx = $false
+                }
+            }
+
+            # REQUISITO P1-2: Su versione con TLS, se anche un solo file manca o non e' leggibile -> FAIL-CLOSED!
+            if (-not $extracted -or -not (Test-Path $rxTempPath) -or (Get-Item $rxTempPath).Length -lt $minB) {
+                throw "ERRORE FAIL-CLOSED (P1 Gate): Estrazione asset TLS obbligatorio ($f) fallita o dimensione insufficiente. Tutti i 5 file sono obbligatori su installazione TLS."
+            }
+
+            # Lettura byte in chiaro, computo hash e dimensioni
+            $plainBytes = [System.IO.File]::ReadAllBytes($rxTempPath)
+            $plainHash = Get-Sha256Hex $rxTempPath
+            $plainLen = $plainBytes.Length
+
+            # REQUISITO P1-1: Cifratura a riposo nel vault con protezione OS (DPAPI / AES-256)
+            $protectRes = Protect-TlsData -PlainBytes $plainBytes -VaultDir $vaultDir
+            $encDestPath = Join-Path $vaultDir "$f.enc"
+            [System.IO.File]::WriteAllBytes($encDestPath, $protectRes.CipherBytes)
+
+            # Cancellazione sicura immediata del file in chiaro effimero
+            $zeroBuf = New-Object byte[] $plainLen
+            [System.IO.File]::WriteAllBytes($rxTempPath, $zeroBuf)
+            Remove-Item $rxTempPath -Force -ErrorAction SilentlyContinue
+
+            # REQUISITO P1-1: Verifica di recuperabilita' (roundtrip test)
+            $unprotectTest = Unprotect-TlsData -CipherBytes $protectRes.CipherBytes -Mechanism $protectRes.Mechanism -VaultDir $vaultDir
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $testDecHash = -join ($sha.ComputeHash($unprotectTest) | ForEach-Object { "{0:x2}" -f $_ })
+            if ($testDecHash -ne $plainHash) {
+                throw "ERRORE FAIL-CLOSED: Test di recuperabilita'/decifratura per $f fallito prima del salvataggio. Hash non corrispondente!"
+            }
+
+            $cipherHash = -join ($sha.ComputeHash($protectRes.CipherBytes) | ForEach-Object { "{0:x2}" -f $_ })
+
+            $manifestFiles[$f] = @{
+                Sha256 = $plainHash
+                SizeBytes = $plainLen
+                Encrypted = $true
+                CipherSha256 = $cipherHash
+                Mechanism = $protectRes.Mechanism
             }
         }
-
-        if ($extracted) {
-            $extractedCount++
-        } else {
-            if (Test-Path $destPath) { Remove-Item $destPath -Force -ErrorAction SilentlyContinue }
-        }
+    } finally {
+        Remove-Item $ephemeralDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    $localKs = Join-Path $tlsDir "server_keystore.p12"
-    if ((Test-Path $localKs) -and (Get-Item $localKs).Length -ge 512) {
-        $ksHash = Get-Sha256Hex $localKs
-        $manifest = @{
-            HasTls = $true
-            KeystoreSha256 = $ksHash
-            KeystoreBytes = (Get-Item $localKs).Length
-            Files = (Get-ChildItem $tlsDir | Select-Object -ExpandProperty Name)
+    # Creazione del manifest (zero segreti in chiaro)
+    $manifest = @{
+        HasTls = $true
+        SessionDir = $SessionDir
+        VaultDir = $vaultDir
+        IsCloudSynced = $isCloudSynced
+        Files = $manifestFiles
+        KeystoreSha256 = $manifestFiles["server_keystore.p12"].Sha256
+        KeystoreBytes = $manifestFiles["server_keystore.p12"].SizeBytes
+    }
+    $manifestJson = $manifest | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText((Join-Path $sessionTlsDir "tls_manifest.json"), $manifestJson, [System.Text.Encoding]::UTF8)
+
+    # Se vault separato da cloud sync, scrivi pointer
+    if ($vaultDir -ne $sessionTlsDir) {
+        $pointer = @{
+            VaultDir = $vaultDir
+            CreatedAt = (Get-Date -Format "o")
         }
-        $manifestJson = $manifest | ConvertTo-Json -Depth 5
-        [System.IO.File]::WriteAllText((Join-Path $tlsDir "tls_manifest.json"), $manifestJson, [System.Text.Encoding]::UTF8)
-        Write-Host "      Snapshot identita' TLS protetto completato: server_keystore.p12 (SHA-256=$ksHash, $($manifest.Files.Count) asset archiviati)" -ForegroundColor Green
-        return $manifest
-    } elseif ($probeKs -eq "EXISTS") {
-        throw "ERRORE FAIL-CLOSED: Keystore TLS presente su storage TV ma estrazione fallita o file non leggibile. Impossibile procedere senza backup TLS."
+        [System.IO.File]::WriteAllText((Join-Path $sessionTlsDir "vault_pointer.json"), ($pointer | ConvertTo-Json), [System.Text.Encoding]::UTF8)
     }
 
-    return @{ HasTls = $false }
+    Write-Host "      Snapshot identita' TLS CIFRATO e verificato con successo: tutti i 5 asset protetti nel vault ($vaultDir), ZERO segreti in chiaro." -ForegroundColor Green
+    return $manifest
 }
 
 function Restore-DeviceTlsIdentity {
@@ -1546,39 +1736,81 @@ function Restore-DeviceTlsIdentity {
         [string]$SessionDir,
         [string]$ChownTarget
     )
-    $tlsDir = Join-Path $SessionDir "tls_identity"
-    $localKs = Join-Path $tlsDir "server_keystore.p12"
-    if (-not (Test-Path $localKs) -or (Get-Item $localKs).Length -lt 512) {
-        Write-Host "      Ripristino TLS: nessun keystore TLS nel backup di sessione (release v5 HTTP legacy). Salto ripristino TLS." -ForegroundColor Cyan
+    $sessionTlsDir = Join-Path $SessionDir "tls_identity"
+    $manifestPath = Join-Path $sessionTlsDir "tls_manifest.json"
+
+    if (-not (Test-Path $manifestPath)) {
+        Write-Host "      Ripristino TLS: nessun manifesto TLS nel backup di sessione (release v5 HTTP legacy). Salto ripristino TLS." -ForegroundColor Cyan
         return @{ Restored = $false; Reason = "NO_TLS_BACKUP" }
     }
 
-    $manifestFile = Join-Path $tlsDir "tls_manifest.json"
-    $expectedKsHash = $null
-    if (Test-Path $manifestFile) {
-        try {
-            $man = Get-Content $manifestFile -Raw | ConvertFrom-Json
-            $expectedKsHash = $man.KeystoreSha256
-        } catch {}
+    $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.HasTls -ne $true) {
+        Write-Host "      Ripristino TLS: sessione contrassegnata come priva di TLS (HasTls=false). Salto ripristino TLS." -ForegroundColor Cyan
+        return @{ Restored = $false; Reason = "NO_TLS_BACKUP" }
     }
 
-    Write-Host "[ROLLBACK TLS] Ripristino identita' TLS precedente (server_keystore.p12, pass, certificati)..." -ForegroundColor Yellow
-    $tlsFiles = Get-ChildItem -Path $tlsDir -File | Where-Object { $_.Name -ne "tls_manifest.json" }
+    # Risolvi la cartella del vault
+    $vaultDir = $manifest.VaultDir
+    $pointerPath = Join-Path $sessionTlsDir "vault_pointer.json"
+    if (Test-Path $pointerPath) {
+        try {
+            $ptr = Get-Content $pointerPath -Raw | ConvertFrom-Json
+            if ($ptr.VaultDir -and (Test-Path $ptr.VaultDir)) {
+                $vaultDir = $ptr.VaultDir
+            }
+        } catch {}
+    }
+    if (-not $vaultDir -or -not (Test-Path $vaultDir)) {
+        $vaultDir = $sessionTlsDir
+    }
 
-    foreach ($fileItem in $tlsFiles) {
-        $fName = $fileItem.Name
-        $fPath = $fileItem.FullName
+    Write-Host "[ROLLBACK TLS] Ripristino identita' TLS da vault cifrato ($vaultDir)..." -ForegroundColor Yellow
+
+    $filesToRestore = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
+    $manifestFilesProp = $manifest.Files
+
+    # 1. Ripristino di ciascuno dei 5 file crittografici
+    foreach ($fName in $filesToRestore) {
+        $fileMeta = $manifestFilesProp.$fName
+        if (-not $fileMeta) {
+            throw "ERRORE FAIL-CLOSED: File obbligatorio $fName assente nel manifesto di rollback."
+        }
+
+        $encPath = Join-Path $vaultDir "$fName.enc"
+        $decryptedBytes = $null
+        if (-not (Test-Path $encPath)) {
+            # Supporto per file legacy non cifrati se presenti
+            $legacyPlain = Join-Path $vaultDir $fName
+            if (Test-Path $legacyPlain) {
+                $decryptedBytes = [System.IO.File]::ReadAllBytes($legacyPlain)
+            } else {
+                throw "ERRORE FAIL-CLOSED: File cifrato $fName.enc assente nel vault crittografico: $vaultDir"
+            }
+        } else {
+            $cipherBytes = [System.IO.File]::ReadAllBytes($encPath)
+            $mechanism = $fileMeta.Mechanism
+            $decryptedBytes = Unprotect-TlsData -CipherBytes $cipherBytes -Mechanism $mechanism -VaultDir $vaultDir
+        }
+
+        # Verifica preliminare parita' hash SHA-256 pre-invio
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $preSendHash = -join ($sha.ComputeHash($decryptedBytes) | ForEach-Object { "{0:x2}" -f $_ })
+        if ($preSendHash -ne $fileMeta.Sha256) {
+            throw "ERRORE FAIL-CLOSED: Corruzione rilevata durante la decifratura di $fName! Hash non corrisponde al manifesto pre-invio."
+        }
+
         $restored = $false
 
-        # Tentativo 1: run-as
+        # Tentativo 1: run-as (streaming diretto da memoria con zero plaintext su disco PC)
         $cmd = "run-as $PackageName sh -c 'mkdir -p files; cat > files/$fName; chmod 600 files/$fName'"
-        $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -LocalFilePath $fPath -RemoteCommand $cmd
+        $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $decryptedBytes -RemoteCommand $cmd
         if ($res.Success) { $restored = $true }
 
         # Tentativo 2: su
         if (-not $restored) {
             $cmd = "su -c 'mkdir -p /data/data/$PackageName/files; cat > /data/data/$PackageName/files/$fName; chown $ChownTarget /data/data/$PackageName/files/$fName; chmod 600 /data/data/$PackageName/files/$fName'"
-            $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -LocalFilePath $fPath -RemoteCommand $cmd
+            $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $decryptedBytes -RemoteCommand $cmd
             if ($res.Success) { $restored = $true }
         }
 
@@ -1588,7 +1820,7 @@ function Restore-DeviceTlsIdentity {
             try {
                 Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
                     $cmd = "sh -c 'mkdir -p /data/data/$PackageName/files; cat > /data/data/$PackageName/files/$fName; chown $ChownTarget /data/data/$PackageName/files/$fName; chmod 600 /data/data/$PackageName/files/$fName'"
-                    $sRes = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -LocalFilePath $fPath -RemoteCommand $cmd
+                    $sRes = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $decryptedBytes -RemoteCommand $cmd
                     if ($sRes.Success) { $script:elevRest = $true }
                 }
             } catch {}
@@ -1599,39 +1831,53 @@ function Restore-DeviceTlsIdentity {
         }
 
         if (-not $restored) {
-            throw "ERRORE FAIL-CLOSED: Ripristino file TLS ($fName) fallito sul dispositivo."
+            throw "ERRORE FAIL-CLOSED: Invio file TLS ($fName) fallito sul dispositivo."
         }
     }
 
-    # Verifica parità hash SHA-256 del keystore ripristinato
-    $verifyKs = Join-Path $SessionDir "verify_restore_keystore.p12"
-    $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/server_keystore.p12" -LocalFilePath $verifyKs
-    if (-not $rx.Success) {
-        $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/server_keystore.p12'" -LocalFilePath $verifyKs
-    }
-    if (-not $rx.Success) {
-        $script:rxElev = $null
-        try {
-            Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
-                $script:rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/server_keystore.p12" -LocalFilePath $verifyKs
+    # 2. REQUISITO P1-2: Verifica di parita' hash SHA-256 su TUTTI e 5 i file post-ripristino dal device
+    $verifyDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_verify_restore_$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $verifyDir | Out-Null
+
+    try {
+        foreach ($fName in $filesToRestore) {
+            $expectedHash = $manifestFilesProp.$fName.Sha256
+            $verifyFilePath = Join-Path $verifyDir $fName
+            $minB = if ($fName -eq "server_keystore.p12") { 512 } else { 1 }
+
+            $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/$fName" -LocalFilePath $verifyFilePath -MinBytes $minB
+            if (-not $rx.Success) {
+                $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/$fName'" -LocalFilePath $verifyFilePath -MinBytes $minB
             }
-        } catch {}
-        if ($script:rxElev -and $script:rxElev.Success) {
-            $rx = $script:rxElev
-            $script:rxElev = $null
+            if (-not $rx.Success) {
+                $script:rxElev = $null
+                try {
+                    Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                        $script:rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$fName" -LocalFilePath $verifyFilePath -MinBytes $minB
+                    }
+                } catch {}
+                if ($script:rxElev -and $script:rxElev.Success) {
+                    $rx = $script:rxElev
+                    $script:rxElev = $null
+                }
+            }
+
+            if (-not (Test-Path $verifyFilePath) -or (Get-Item $verifyFilePath).Length -lt $minB) {
+                throw "ERRORE FAIL-CLOSED: Impossibile rileggere $fName ripristinato sul dispositivo per verifica integrita'."
+            }
+
+            $actualHash = Get-Sha256Hex $verifyFilePath
+            if ($actualHash -ne $expectedHash) {
+                throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 del file TLS ($fName) post-ripristino! Atteso: $expectedHash, Attuale: $actualHash"
+            }
         }
+    } finally {
+        Remove-Item $verifyDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    if (-not (Test-Path $verifyKs) -or (Get-Item $verifyKs).Length -lt 512) {
-        throw "ERRORE FAIL-CLOSED: Impossibile rileggere server_keystore.p12 ripristinato sul dispositivo per verifica integrita'."
-    }
-    $actualHash = Get-Sha256Hex $verifyKs
-    if ($expectedKsHash -and ($actualHash -ne $expectedKsHash)) {
-        throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 del keystore TLS post-ripristino! Atteso: $expectedKsHash, Attuale: $actualHash"
-    }
-
-    Write-Host "      Parita' hash SHA-256 ($actualHash) keystore TLS post-rollback verificata con successo." -ForegroundColor Green
-    return @{ Restored = $true; KeystoreSha256 = $actualHash }
+    $ksHash = $manifestFilesProp."server_keystore.p12".Sha256
+    Write-Host "      Parita' hash SHA-256 verificata con successo per TUTTI i 5 file TLS post-rollback (keystore SHA-256: $ksHash)." -ForegroundColor Green
+    return @{ Restored = $true; KeystoreSha256 = $ksHash; All5FilesVerified = $true }
 }
 
 switch ($Action) {

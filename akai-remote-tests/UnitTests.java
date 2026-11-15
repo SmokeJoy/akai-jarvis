@@ -3313,6 +3313,25 @@ public class UnitTests {
             }
             boolean okMainUntouched = (mainKs.length() == ksLenBeforeCorrupt) && !tmpKs.exists();
 
+            // 3b. Simulazione fallimento backup .bak prima dello swap:
+            // Creiamo bakKs come cartella non vuota in modo che Files.copy fallisca categoricamente
+            bakKs.delete();
+            bakKs.mkdir();
+            File lockedInBak = new File(bakKs, "lock.bin");
+            lockedInBak.createNewFile();
+            boolean threwOnBakFailure = false;
+            long ksLenBeforeBakFail = mainKs.length();
+            try {
+                // ksBakVerify è un keystore valido, ma il backup .bak non può essere creato
+                TlsCertificateManager.saveKeystoreSafely(ksBakVerify, mainKs, infoRenew.keyPassword);
+            } catch (IOException bakFailEx) {
+                threwOnBakFailure = bakFailEx.getMessage().contains("backup .bak");
+            } finally {
+                lockedInBak.delete();
+                bakKs.delete();
+            }
+            boolean okTargetPreservedOnBakFail = (mainKs.length() == ksLenBeforeBakFail) && !tmpKs.exists();
+
             // 4. Simulazione crash / troncamento I/O del keystore primario:
             // Tronchiamo server_keystore.p12 a byte spazzatura per simulare crash a metà scrittura
             try (FileOutputStream fos = new FileOutputStream(mainKs)) {
@@ -3338,6 +3357,7 @@ public class UnitTests {
 
             test40Passed = okInitCreated && okBakExists && okTmpCleaned && okFpPreservedRenew &&
                            okBakHasCerts && threwOnCorruptSave && okMainUntouched &&
+                           threwOnBakFailure && okTargetPreservedOnBakFail &&
                            okSelfHealed && okKsRestoredOnDisk && okHealedValid && okHealedSslContext;
 
             if (!test40Passed) {
@@ -3345,6 +3365,7 @@ public class UnitTests {
                     "init=" + okInitCreated + ", bak=" + okBakExists + ", tmpClean=" + okTmpCleaned +
                     ", fpPreserved=" + okFpPreservedRenew + ", bakValid=" + okBakHasCerts +
                     ", threwCorrupt=" + threwOnCorruptSave + ", mainUntouched=" + okMainUntouched +
+                    ", threwBakFail=" + threwOnBakFailure + ", targetPreservedOnBakFail=" + okTargetPreservedOnBakFail +
                     ", healed=" + okSelfHealed + ", ksRestored=" + okKsRestoredOnDisk +
                     ", healedValid=" + okHealedValid + ", sslOk=" + okHealedSslContext + ")");
             }

@@ -476,13 +476,11 @@ public class TlsCertificateManager {
             tmpFile.delete();
         }
 
-        // 1. Scrittura su file temporaneo nello stesso filesystem privato con flush ed fsync
+        // 1. Scrittura su file temporaneo nello stesso filesystem privato con flush ed fsync obbligatorio
         try (FileOutputStream fos = new FileOutputStream(tmpFile)) {
             ks.store(fos, password);
             fos.flush();
-            try {
-                fos.getFD().sync();
-            } catch (Exception ignored) {}
+            fos.getFD().sync();
         }
         tmpFile.setReadable(false, false);
         tmpFile.setReadable(true, true);
@@ -504,6 +502,7 @@ public class TlsCertificateManager {
         }
 
         // 3. Conservazione copia di backup della versione precedente verificata (.bak)
+        // BLOCCO FAIL-CLOSED: se la copia .bak fallisce, interrompi categoricamente prima dello swap!
         if (targetFile.exists() && targetFile.length() > 0) {
             try {
                 Files.copy(targetFile.toPath(), bakFile.toPath(),
@@ -513,18 +512,28 @@ public class TlsCertificateManager {
                 bakFile.setWritable(false, false);
                 bakFile.setWritable(true, true);
             } catch (Exception bakEx) {
-                Log.w(TAG, "Impossibile creare backup .bak: " + bakEx.getMessage());
+                tmpFile.delete();
+                throw new IOException("Creazione backup .bak fallita prima dello swap atomico: " + bakEx.getMessage(), bakEx);
+            }
+            if (!bakFile.exists() || bakFile.length() != targetFile.length()) {
+                tmpFile.delete();
+                throw new IOException("Verifica integrità backup .bak fallita: dimensione non corrispondente prima dello swap atomico.");
             }
         }
 
-        // 4. Sostituzione atomica del file di destinazione (ATOMIC_MOVE con fallback REPLACE_EXISTING)
+        // 4. Sostituzione atomica del file di destinazione (ATOMIC_MOVE con fallback verificato)
         try {
             Files.move(tmpFile.toPath(), targetFile.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING);
+                StandardCopyOption.ATOMIC_MOVE);
         } catch (Exception atomicEx) {
             Files.move(tmpFile.toPath(), targetFile.toPath(),
                 StandardCopyOption.REPLACE_EXISTING);
+        }
+        if (!targetFile.exists() || targetFile.length() == 0) {
+            if (bakFile.exists() && bakFile.length() > 0) {
+                Files.copy(bakFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+            throw new IOException("Sostituzione keystore fallita: targetFile non presente o vuoto post-move.");
         }
         targetFile.setReadable(false, false);
         targetFile.setReadable(true, true);
