@@ -9,14 +9,25 @@ import it.akai.customremote.ai.LocalIntentParser;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.security.Signature;
 import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.text.Normalizer;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -45,6 +56,193 @@ public class UnitTests {
         Map<String, String> headers = new HashMap<>();
         String rawBody;
         JSONObject json;
+    }
+
+    private static void writeTestFile(File file, String content) throws IOException {
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            fos.write(content.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private static byte[] derLength(int length) {
+        if (length < 128) {
+            return new byte[]{(byte) length};
+        } else if (length < 256) {
+            return new byte[]{(byte) 0x81, (byte) length};
+        } else {
+            return new byte[]{(byte) 0x82, (byte) (length >> 8), (byte) (length & 0xFF)};
+        }
+    }
+
+    private static byte[] derSeq(byte[]... items) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        for (byte[] b : items) {
+            if (b != null) baos.write(b);
+        }
+        byte[] payload = baos.toByteArray();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0x30);
+        out.write(derLength(payload.length));
+        out.write(payload);
+        return out.toByteArray();
+    }
+
+    private static byte[] derSetObj(byte[]... items) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        for (byte[] b : items) {
+            if (b != null) baos.write(b);
+        }
+        byte[] payload = baos.toByteArray();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0x31);
+        out.write(derLength(payload.length));
+        out.write(payload);
+        return out.toByteArray();
+    }
+
+    private static byte[] derInt(BigInteger val) throws IOException {
+        byte[] bytes = val.toByteArray();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0x02);
+        out.write(derLength(bytes.length));
+        out.write(bytes);
+        return out.toByteArray();
+    }
+
+    private static byte[] derOctets(byte[] bytes) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0x04);
+        out.write(derLength(bytes.length));
+        out.write(bytes);
+        return out.toByteArray();
+    }
+
+    private static byte[] derBits(byte[] bytes) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0x03);
+        out.write(derLength(bytes.length + 1));
+        out.write(0x00);
+        out.write(bytes);
+        return out.toByteArray();
+    }
+
+    private static byte[] derUtc(Date date) throws IOException {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyMMddHHmmss'Z'", Locale.US);
+        sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+        byte[] bytes = sdf.format(date).getBytes(StandardCharsets.US_ASCII);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0x17);
+        out.write(derLength(bytes.length));
+        out.write(bytes);
+        return out.toByteArray();
+    }
+
+    private static byte[] derNameHelper(String cn, String org, String country) throws IOException {
+        List<byte[]> rdns = new ArrayList<>();
+        if (country != null) {
+            byte[] cBytes = country.getBytes(StandardCharsets.UTF_8);
+            ByteArrayOutputStream sOut = new ByteArrayOutputStream();
+            sOut.write(0x13);
+            sOut.write(derLength(cBytes.length));
+            sOut.write(cBytes);
+            byte[] attr = derSeq(new byte[]{0x06, 0x03, 0x55, 0x04, 0x06}, sOut.toByteArray());
+            rdns.add(derSetObj(attr));
+        }
+        if (org != null) {
+            byte[] oBytes = org.getBytes(StandardCharsets.UTF_8);
+            ByteArrayOutputStream sOut = new ByteArrayOutputStream();
+            sOut.write(0x0C);
+            sOut.write(derLength(oBytes.length));
+            sOut.write(oBytes);
+            byte[] attr = derSeq(new byte[]{0x06, 0x03, 0x55, 0x04, 0x0A}, sOut.toByteArray());
+            rdns.add(derSetObj(attr));
+        }
+        if (cn != null) {
+            byte[] cnBytes = cn.getBytes(StandardCharsets.UTF_8);
+            ByteArrayOutputStream sOut = new ByteArrayOutputStream();
+            sOut.write(0x0C);
+            sOut.write(derLength(cnBytes.length));
+            sOut.write(cnBytes);
+            byte[] attr = derSeq(new byte[]{0x06, 0x03, 0x55, 0x04, 0x03}, sOut.toByteArray());
+            rdns.add(derSetObj(attr));
+        }
+        return derSeq(rdns.toArray(new byte[0][]));
+    }
+
+    private static X509Certificate generateSyntheticLegacyCert(
+            String subjectCn, String subjectOrg, String subjectCountry,
+            PublicKey subjectPub,
+            String issuerCn, String issuerOrg, String issuerCountry,
+            PrivateKey issuerPriv,
+            Date notBefore, Date notAfter,
+            BigInteger serial,
+            boolean isCa,
+            List<String> dnsNames, List<String> ipAddresses) throws Exception {
+
+        byte[] version = new byte[]{(byte) 0xA0, 0x03, 0x02, 0x01, 0x02};
+        byte[] serialDer = derInt(serial);
+        byte[] algId = new byte[]{
+            0x30, 0x0D,
+            0x06, 0x09, 0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x0D, 0x01, 0x01, 0x0B,
+            0x05, 0x00
+        };
+        byte[] issuer = derNameHelper(issuerCn, issuerOrg, issuerCountry);
+        byte[] validity = derSeq(derUtc(notBefore), derUtc(notAfter));
+        byte[] subject = derNameHelper(subjectCn, subjectOrg, subjectCountry);
+        byte[] spki = subjectPub.getEncoded();
+
+        List<byte[]> extList = new ArrayList<>();
+        byte[] bcOid = new byte[]{0x06, 0x03, 0x55, 0x1D, 0x13};
+        byte[] bcVal = isCa ? derSeq(new byte[]{0x01, 0x01, (byte) 0xFF}) : derSeq();
+        if (isCa) {
+            extList.add(derSeq(bcOid, new byte[]{0x01, 0x01, (byte) 0xFF}, derOctets(bcVal)));
+        } else {
+            extList.add(derSeq(bcOid, derOctets(bcVal)));
+            if (dnsNames != null || ipAddresses != null) {
+                ByteArrayOutputStream names = new ByteArrayOutputStream();
+                if (dnsNames != null) {
+                    for (String dns : dnsNames) {
+                        byte[] b = dns.getBytes(StandardCharsets.US_ASCII);
+                        names.write((byte) 0x82);
+                        names.write(derLength(b.length));
+                        names.write(b);
+                    }
+                }
+                if (ipAddresses != null) {
+                    for (String ip : ipAddresses) {
+                        try {
+                            byte[] b = java.net.InetAddress.getByName(ip).getAddress();
+                            names.write((byte) 0x87);
+                            names.write(derLength(b.length));
+                            names.write(b);
+                        } catch (Exception ignored) {}
+                    }
+                }
+                byte[] sanSeq = derSeq(names.toByteArray());
+                byte[] sanOid = new byte[]{0x06, 0x03, 0x55, 0x1D, 0x11};
+                extList.add(derSeq(sanOid, derOctets(sanSeq)));
+            }
+        }
+
+        byte[] extsSeq = derSeq(extList.toArray(new byte[0][]));
+        ByteArrayOutputStream extsTagOut = new ByteArrayOutputStream();
+        extsTagOut.write((byte) 0xA3);
+        extsTagOut.write(derLength(extsSeq.length));
+        extsTagOut.write(extsSeq);
+        byte[] extsExplicit = extsTagOut.toByteArray();
+
+        byte[] tbs = derSeq(version, serialDer, algId, issuer, validity, subject, spki, extsExplicit);
+
+        Signature sig = Signature.getInstance("SHA256withRSA");
+        sig.initSign(issuerPriv);
+        sig.update(tbs);
+        byte[] signatureBytes = sig.sign();
+        byte[] sigBitString = derBits(signatureBytes);
+
+        byte[] certDer = derSeq(tbs, algId, sigBitString);
+
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        return (X509Certificate) cf.generateCertificate(new java.io.ByteArrayInputStream(certDer));
     }
 
     static MockHttpResponse dispatch(RestApiRouter router, String method, String path, Map<String, String> headers, String body, String clientIp) throws Exception {
@@ -2804,6 +3002,253 @@ public class UnitTests {
             passed++;
         } else {
             System.err.println("[FAIL] Test 38: Fallimento collaudo E2E closed-loop JARVIS");
+            failed++;
+        }
+
+        // =========================================================================
+        // Test 39 (PR-01 Supervisor P1 Gate): Migrazione On-Device TLS da Release Preesistente a Nuova Versione Conforme Apple iOS 13+
+        //          Simulazione completa stato legacy reale (Root CA preesistente priva di KeyUsage, certificato server privo di serverAuth EKU e KeyUsage).
+        //          Verifiche tassative:
+        //          (1) Invarianza assoluta impronta SHA-256 e byte PEM della Root CA preesistente (nessuna sostituzione CA o reset identità)
+        //          (2) Aggiornamento atomico certificato foglia: presenza di id-kp-serverAuth (1.3.6.1.5.5.7.3.1), rimozione clientAuth,
+        //              KeyUsage (digitalSignature, keyEncipherment) e SAN IP 192.168.1.8 / DNS akai-tv.local
+        //          (3) Catena X.509 e verifica crittografica della firma del nuovo certificato foglia tramite chiave pubblica della Root CA preesistente
+        //          (4) Real Wire TLS Handshake in-process con client SSL che si fida ESCLUSIVAMENTE della Root CA legacy preesistente
+        //          (5) Idempotenza al riavvio/reboot: nessuna rigenerazione se il certificato su disco è già conforme (serial number identico)
+        //          (6) Fail-closed: assenza di ca_key.der mantiene identità e Root CA senza eccezioni né reset distruttivo
+        //          (7) Resilienza telecomando HTTP LAN 8088 (/api/command) preservata al 100% prima, durante e dopo la migrazione
+        // =========================================================================
+        boolean test39Passed = false;
+        try {
+            // 0. Pulizia preliminare assoluta dei file TLS
+            for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der")) {
+                try { new File(testFile).delete(); } catch (Exception ignored) {}
+            }
+            TlsCertificateManager.resetInstanceForTesting();
+
+            // 1. Creazione chiavi sintetiche RSA 2048 per simulazione release legacy pre-aggiornamento
+            KeyPairGenerator kpg39 = KeyPairGenerator.getInstance("RSA");
+            kpg39.initialize(2048, new SecureRandom());
+            KeyPair legacyCaPair = kpg39.generateKeyPair();
+            KeyPair legacyServerPair = kpg39.generateKeyPair();
+
+            long now39 = System.currentTimeMillis();
+            Date notBefore39 = new Date(now39 - 3600000L);
+            Date notAfterCa39 = new Date(now39 + 1000L * 60 * 60 * 24 * 3650); // 10 anni
+            Date notAfterServer39 = new Date(now39 + 1000L * 60 * 60 * 24 * 365); // 1 anno
+
+            // 1.1 Root CA legacy: autofirmata, basicConstraints isCa=true, priva di KeyUsage
+            X509Certificate legacyCaCert = generateSyntheticLegacyCert(
+                TlsCertificateManager.CA_COMMON_NAME, TlsCertificateManager.CA_ORGANIZATION, TlsCertificateManager.CA_COUNTRY,
+                legacyCaPair.getPublic(),
+                TlsCertificateManager.CA_COMMON_NAME, TlsCertificateManager.CA_ORGANIZATION, TlsCertificateManager.CA_COUNTRY,
+                legacyCaPair.getPrivate(),
+                notBefore39, notAfterCa39,
+                BigInteger.ONE,
+                true, null, null
+            );
+
+            // 1.2 Certificato Server legacy: emesso da legacy CA, basicConstraints isCa=false, SAN con IP 192.168.1.8,
+            //     ma PRIVO di ExtendedKeyUsage (zero serverAuth) e PRIVO di KeyUsage
+            X509Certificate legacyServerCert = generateSyntheticLegacyCert(
+                TlsCertificateManager.SERVER_COMMON_NAME, TlsCertificateManager.CA_ORGANIZATION, TlsCertificateManager.CA_COUNTRY,
+                legacyServerPair.getPublic(),
+                TlsCertificateManager.CA_COMMON_NAME, TlsCertificateManager.CA_ORGANIZATION, TlsCertificateManager.CA_COUNTRY,
+                legacyCaPair.getPrivate(),
+                notBefore39, notAfterServer39,
+                BigInteger.valueOf(1001L),
+                false,
+                Arrays.asList("akai-tv.local", "localhost", "akai.local", "akai-jarvis.lan"),
+                Arrays.asList("127.0.0.1", "192.168.1.8")
+            );
+
+            // Verifica che lo stato legacy sia fedele al bug segnalato su Safari iOS
+            String legacyCaFingerprint = TlsCertificateManager.computeSha256Fingerprint(legacyCaCert);
+            String legacyCaPem = TlsCertificateManager.toPem(legacyCaCert);
+            boolean legacyServerLacksEku = (legacyServerCert.getExtendedKeyUsage() == null || !legacyServerCert.getExtendedKeyUsage().contains("1.3.6.1.5.5.7.3.1"));
+            boolean legacyServerLacksKu = (legacyServerCert.getKeyUsage() == null);
+            boolean legacyCaLacksKu = (legacyCaCert.getKeyUsage() == null);
+
+            // 2. Scrittura su disco dello stato legacy simulando l'app prima dell'aggiornamento APK
+            writeTestFile(new File("ca.crt"), legacyCaPem);
+            writeTestFile(new File("ca.pem"), legacyCaPem);
+            try (FileOutputStream fos = new FileOutputStream("ca_key.der")) {
+                fos.write(legacyCaPair.getPrivate().getEncoded());
+            }
+            char[] legacyPass = "legacy_keystore_pass_123".toCharArray();
+            writeTestFile(new File("server_keystore.pass"), new String(legacyPass));
+
+            KeyStore legacyKs = KeyStore.getInstance("PKCS12");
+            legacyKs.load(null, legacyPass);
+            legacyKs.setCertificateEntry("akai_ca", legacyCaCert);
+            legacyKs.setKeyEntry("akai_server", legacyServerPair.getPrivate(), legacyPass, new Certificate[]{legacyServerCert, legacyCaCert});
+            try (FileOutputStream fos = new FileOutputStream("server_keystore.p12")) {
+                legacyKs.store(fos, legacyPass);
+            }
+
+            // 3. Esecuzione del manager della nuova versione: rileva EKU mancante e innesca la migrazione
+            TlsCertificateManager mgr39 = TlsCertificateManager.getInstance();
+            TlsCertificateManager.TlsInfo upgradedInfo = mgr39.getOrGenerateTlsInfo(null, "192.168.1.8");
+
+            // (1) Invarianza assoluta Root CA
+            boolean okCaFpPreserved = (upgradedInfo != null) && legacyCaFingerprint.equals(upgradedInfo.caFingerprintSha256);
+            boolean okCaPemPreserved = (upgradedInfo != null) && legacyCaPem.equals(upgradedInfo.caPem);
+
+            // Rilettura keystore aggiornato dal file system
+            KeyStore upgradedKs = KeyStore.getInstance("PKCS12");
+            try (FileInputStream fis = new FileInputStream("server_keystore.p12")) {
+                upgradedKs.load(fis, legacyPass);
+            }
+            X509Certificate diskCa = (X509Certificate) upgradedKs.getCertificate("akai_ca");
+            X509Certificate diskServer = (X509Certificate) upgradedKs.getCertificate("akai_server");
+            boolean okCaExactBytes = (diskCa != null) && Arrays.equals(diskCa.getEncoded(), legacyCaCert.getEncoded());
+
+            // (2) Aggiornamento certificato server: EKU serverAuth, no clientAuth, KeyUsage, SAN IP
+            List<String> upgradedEku = (diskServer != null) ? diskServer.getExtendedKeyUsage() : null;
+            boolean okHasServerAuth = (upgradedEku != null && upgradedEku.contains("1.3.6.1.5.5.7.3.1"));
+            boolean okNoClientAuth = (upgradedEku != null && !upgradedEku.contains("1.3.6.1.5.5.7.3.2"));
+            boolean[] upgradedKu = (diskServer != null) ? diskServer.getKeyUsage() : null;
+            // digitalSignature è bit 0, keyEncipherment è bit 2
+            boolean okHasKeyUsage = (upgradedKu != null && upgradedKu.length >= 3 && upgradedKu[0] && upgradedKu[2]);
+            boolean okSanIp = (upgradedInfo != null) && (upgradedInfo.serverSanList != null) && upgradedInfo.serverSanList.contains("192.168.1.8");
+            boolean okSanDns = (upgradedInfo != null) && (upgradedInfo.serverSanList != null) && upgradedInfo.serverSanList.contains("akai-tv.local");
+
+            // (3) Verifica validità crittografica della firma del nuovo certificato foglia con la chiave pubblica della Root CA preesistente
+            boolean okSignatureVerified = false;
+            try {
+                if (diskServer != null) {
+                    diskServer.verify(legacyCaCert.getPublicKey());
+                    okSignatureVerified = true;
+                }
+            } catch (Exception sigEx) {
+                System.err.println("Errore verifica firma certificato server rinnovato: " + sigEx.getMessage());
+            }
+
+            // (4) Real Wire TLS Handshake con client SSL configurato con TrustStore contenente ESCLUSIVAMENTE la Root CA preesistente
+            SSLContext serverSslContext39 = mgr39.createSSLContext(null, "192.168.1.8");
+            boolean okWireHandshake = false;
+            boolean okWirePeerHasServerAuth = false;
+
+            if (serverSslContext39 != null) {
+                // Client trust manager con solo la vecchia Root CA
+                KeyStore clientTrustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+                clientTrustStore.load(null, null);
+                clientTrustStore.setCertificateEntry("legacy_ca", legacyCaCert);
+                TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                tmf.init(clientTrustStore);
+
+                SSLContext clientSslContext = SSLContext.getInstance("TLS");
+                clientSslContext.init(null, tmf.getTrustManagers(), new SecureRandom());
+
+                SSLServerSocketFactory ssf = serverSslContext39.getServerSocketFactory();
+                try (SSLServerSocket serverSocket = (SSLServerSocket) ssf.createServerSocket(0, 5, java.net.InetAddress.getByName("127.0.0.1"))) {
+                    int assignedPort = serverSocket.getLocalPort();
+                    final CountDownLatch serverHandshakeDone = new CountDownLatch(1);
+
+                    Thread serverThread = new Thread(() -> {
+                        try (SSLSocket accepted = (SSLSocket) serverSocket.accept()) {
+                            accepted.startHandshake();
+                            accepted.getOutputStream().write("HTTP/1.1 200 OK\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+                            accepted.getOutputStream().flush();
+                        } catch (Exception ignored) {
+                        } finally {
+                            serverHandshakeDone.countDown();
+                        }
+                    });
+                    serverThread.start();
+
+                    SSLSocketFactory csf = clientSslContext.getSocketFactory();
+                    try (SSLSocket clientSocket = (SSLSocket) csf.createSocket("127.0.0.1", assignedPort)) {
+                        clientSocket.setSoTimeout(5000);
+                        clientSocket.startHandshake();
+                        SSLSession session = clientSocket.getSession();
+                        Certificate[] peers = session.getPeerCertificates();
+                        if (peers != null && peers.length >= 1 && peers[0] instanceof X509Certificate) {
+                            X509Certificate leaf = (X509Certificate) peers[0];
+                            okWireHandshake = true;
+                            okWirePeerHasServerAuth = (leaf.getExtendedKeyUsage() != null && leaf.getExtendedKeyUsage().contains("1.3.6.1.5.5.7.3.1"));
+                        }
+                    } catch (Exception hsEx) {
+                        System.err.println("Handshake TLS con Root CA legacy fallito: " + hsEx.getMessage());
+                    }
+                    serverHandshakeDone.await(3, TimeUnit.SECONDS);
+                    serverThread.join(2000L);
+                }
+            }
+
+            // (5) Idempotenza al riavvio/reboot: nessuna rigenerazione se il certificato su disco è già conforme
+            BigInteger serialBeforeReboot = (diskServer != null) ? diskServer.getSerialNumber() : null;
+            TlsCertificateManager.resetInstanceForTesting();
+            TlsCertificateManager mgrAfterReboot = TlsCertificateManager.getInstance();
+            TlsCertificateManager.TlsInfo rebootInfo = mgrAfterReboot.getOrGenerateTlsInfo(null, "192.168.1.8");
+
+            KeyStore ksAfterReboot = KeyStore.getInstance("PKCS12");
+            try (FileInputStream fis = new FileInputStream("server_keystore.p12")) {
+                ksAfterReboot.load(fis, legacyPass);
+            }
+            X509Certificate serverAfterReboot = (X509Certificate) ksAfterReboot.getCertificate("akai_server");
+            boolean okIdempotentSerial = (serialBeforeReboot != null) && (serverAfterReboot != null) &&
+                    serialBeforeReboot.equals(serverAfterReboot.getSerialNumber());
+            boolean okIdempotentCaFp = (rebootInfo != null) && legacyCaFingerprint.equals(rebootInfo.caFingerprintSha256);
+
+            // (6) Fail-closed: se ca_key.der è assente, nessuna rigenerazione distruttiva e Root CA preservata
+            new File("ca_key.der").delete();
+            TlsCertificateManager.resetInstanceForTesting();
+            TlsCertificateManager.TlsInfo failClosedInfo = TlsCertificateManager.getInstance().getOrGenerateTlsInfo(null, "192.168.1.99");
+            boolean okFailClosedPreserved = (failClosedInfo != null) && legacyCaFingerprint.equals(failClosedInfo.caFingerprintSha256);
+            boolean okKsStillPresent = new File("server_keystore.p12").exists();
+
+            // (7) Resilienza telecomando HTTP LAN 8088: comandi D-pad/OK/BACK sempre operativi
+            RestApiRouter.CommandHandler ch39 = new RestApiRouter.CommandHandler() {
+                @Override public CommandResult executeCommand(String action) { return new CommandResult(true, "OK"); }
+                @Override public CommandResult injectText(String text) { return new CommandResult(true, "OK"); }
+                @Override public boolean isUInputReady() { return true; }
+            };
+            SecurityManager sec39 = new SecurityManager(null);
+            String pin39 = sec39.generateNewPin();
+            String testToken39 = sec39.verifyPinAndCreateToken("192.168.1.55", pin39, "TestDev");
+            Map<String, String> auth39 = Collections.singletonMap("authorization", "Bearer " + testToken39);
+            RestApiRouter router39 = new RestApiRouter(sec39, ch39, null, null, null, "192.168.1.8", 8088);
+            MockHttpResponse rCmd39_1 = dispatch(router39, "POST", "/api/command", auth39, "{\"action\":\"dpad_up\"}", "192.168.1.55", false);
+            MockHttpResponse rCmd39_2 = dispatch(router39, "POST", "/api/command", auth39, "{\"action\":\"ok\"}", "192.168.1.55", false);
+            MockHttpResponse rCmd39_3 = dispatch(router39, "POST", "/api/command", auth39, "{\"action\":\"back\"}", "192.168.1.55", false);
+            boolean okHttpRemoteResilient = (rCmd39_1.statusCode == 200) && (rCmd39_2.statusCode == 200) && (rCmd39_3.statusCode == 200);
+
+            test39Passed = legacyServerLacksEku && legacyServerLacksKu && legacyCaLacksKu &&
+                           okCaFpPreserved && okCaPemPreserved && okCaExactBytes &&
+                           okHasServerAuth && okNoClientAuth && okHasKeyUsage && okSanIp && okSanDns &&
+                           okSignatureVerified &&
+                           okWireHandshake && okWirePeerHasServerAuth &&
+                           okIdempotentSerial && okIdempotentCaFp &&
+                           okFailClosedPreserved && okKsStillPresent &&
+                           okHttpRemoteResilient;
+
+            if (!test39Passed) {
+                System.err.println("[FAIL] Test 39: Fallimento verifica migrazione TLS (" +
+                    "legacyEku=" + legacyServerLacksEku + ", legacyKu=" + legacyServerLacksKu + ", legacyCaKu=" + legacyCaLacksKu +
+                    ", caFp=" + okCaFpPreserved + ", caPem=" + okCaPemPreserved + ", caBytes=" + okCaExactBytes +
+                    ", serverAuth=" + okHasServerAuth + ", noClientAuth=" + okNoClientAuth + ", ku=" + okHasKeyUsage +
+                    ", sanIp=" + okSanIp + ", sanDns=" + okSanDns +
+                    ", sig=" + okSignatureVerified + ", wire=" + okWireHandshake + ", wireEku=" + okWirePeerHasServerAuth +
+                    ", idemSerial=" + okIdempotentSerial + ", idemCa=" + okIdempotentCaFp +
+                    ", failClosed=" + okFailClosedPreserved + ", ksPresent=" + okKsStillPresent +
+                    ", httpRemote=" + okHttpRemoteResilient + ")");
+            }
+        } catch (Throwable t39) {
+            System.err.println("[FAIL] Test 39 eccezione: " + t39.getMessage());
+            t39.printStackTrace();
+        } finally {
+            TlsCertificateManager.resetInstanceForTesting();
+            for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der")) {
+                try { new File(testFile).delete(); } catch (Exception ignored) {}
+            }
+        }
+
+        if (test39Passed) {
+            System.out.println("[PASS] Test 39 (PR-01 Supervisor P1 Gate): Migrazione on-device TLS da release precedente verificata con successo al 100%: (1) impronta SHA-256 e byte PEM della Root CA preesistente rigorosamente invariati (zero sostituzione CA, zero trust leak); (2) certificato server aggiornato con estensione serverAuth EKU (1.3.6.1.5.5.7.3.1), rimozione clientAuth, KeyUsage (digitalSignature/keyEncipherment) e SAN IP 192.168.1.8 conformi Apple iOS 13+; (3) validazione crittografica della catena e della firma con chiave pubblica Root CA preesistente; (4) real wire TLS handshake completato con successo verso client SSL fidato esclusivamente della vecchia Root CA; (5) idempotenza al riavvio/reboot confermata (serial invariato, zero rigenerazioni ridondanti); (6) fail-closed confermato su ca_key.der assente; (7) piena operatività e resilienza telecomando classico HTTP LAN 8088 (/api/command) preservata");
+            passed++;
+        } else {
+            System.err.println("[FAIL] Test 39: Fallimento test migrazione e idempotenza TLS");
             failed++;
         }
 

@@ -110,6 +110,11 @@ public class TlsCertificateManager {
         return sInstance;
     }
 
+    public static synchronized void resetInstanceForTesting() {
+        sInstance = null;
+        sAppContext = null;
+    }
+
     /**
      * Carica o genera i certificati TLS a bordo TV garantendo SAN aggiornati.
      */
@@ -604,9 +609,7 @@ public class TlsCertificateManager {
         byte[] extOid = new byte[]{0x06, 0x03, 0x55, 0x1D, 0x25}; // 2.5.29.37
         // id-kp-serverAuth (1.3.6.1.5.5.7.3.1) obbligatorio per conformità Apple iOS 13+ / RFC 5280
         byte[] serverAuthOid = new byte[]{0x06, 0x08, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01};
-        // id-kp-clientAuth (1.3.6.1.5.5.7.3.2)
-        byte[] clientAuthOid = new byte[]{0x06, 0x08, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02};
-        byte[] ekuSeq = derSequence(serverAuthOid, clientAuthOid);
+        byte[] ekuSeq = derSequence(serverAuthOid);
         return derSequence(extOid, derOctetString(ekuSeq));
     }
 
