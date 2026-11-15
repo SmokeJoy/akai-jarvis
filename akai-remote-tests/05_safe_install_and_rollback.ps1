@@ -1577,16 +1577,17 @@ function Resolve-TlsVaultDir {
     # Restringi e verifica effettiva delle ACL / permessi cartella OS solo all'utente corrente
     if ($isWin) {
         try {
-            $acl = Get-Acl -Path $vaultDir
-            $acl.SetAccessRuleProtection($true, $false)
+            $dirInfo = New-Object System.IO.DirectoryInfo($vaultDir)
+            $dirSec = $dirInfo.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+            $dirSec.SetAccessRuleProtection($true, $false)
             $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
             $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($currentUser, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
-            $acl.AddAccessRule($rule)
-            Set-Acl -Path $vaultDir -AclObject $acl
+            $dirSec.AddAccessRule($rule)
+            $dirInfo.SetAccessControl($dirSec)
 
             # Verifica effettiva che l'ereditarietà sia disabilitata e che l'ACL sia protetta
-            $verifyAcl = Get-Acl -Path $vaultDir
-            if ($verifyAcl.AreAccessRulesProtected -ne $true) {
+            $verifySec = $dirInfo.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+            if ($verifySec.AreAccessRulesProtected -ne $true) {
                 throw "Verifica ACL fallita: le regole di accesso non risultano protette (ereditarieta' ancora attiva)."
             }
         } catch {

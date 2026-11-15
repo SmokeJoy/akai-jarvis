@@ -4507,7 +4507,8 @@ try {
         $isUnderLocalAppData = $vaultDir36.StartsWith($env:LOCALAPPDATA, [System.StringComparison]::OrdinalIgnoreCase)
         $noMasterKeyOnWin = (-not (Test-Path (Join-Path $vaultDir36 ".vault_master.key"))) -and
                             (-not (Test-Path (Join-Path $tlsDir36 ".vault_master.key")))
-        $aclProtected = (Get-Acl $vaultDir36).AreAccessRulesProtected -eq $true
+        $dirSec36 = (New-Object System.IO.DirectoryInfo($vaultDir36)).GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+        $aclProtected = $dirSec36.AreAccessRulesProtected -eq $true
         $winVaultStrict = $isUnderLocalAppData -and $noMasterKeyOnWin -and $aclProtected
     }
 
