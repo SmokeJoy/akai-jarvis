@@ -3248,7 +3248,7 @@ public class UnitTests {
             t39.printStackTrace();
         } finally {
             TlsCertificateManager.resetInstanceForTesting();
-            for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.p12.bak", "server_keystore.p12.tmp", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der")) {
+            for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.p12.bak", "server_keystore.p12.tmp", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der", "saved_backup_for_test.bak")) {
                 try { new File(testFile).delete(); } catch (Exception ignored) {}
             }
         }
@@ -3314,7 +3314,11 @@ public class UnitTests {
             boolean okMainUntouched = (mainKs.length() == ksLenBeforeCorrupt) && !tmpKs.exists();
 
             // 3b. Simulazione fallimento backup .bak prima dello swap:
-            // Creiamo bakKs come cartella non vuota in modo che Files.copy fallisca categoricamente
+            // Salviamo temporaneamente la copia .bak esistente per ripristinarla dopo il test negativo
+            File savedBak = new File("saved_backup_for_test.bak");
+            if (bakKs.exists()) {
+                Files.copy(bakKs.toPath(), savedBak.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
             bakKs.delete();
             bakKs.mkdir();
             File lockedInBak = new File(bakKs, "lock.bin");
@@ -3329,6 +3333,9 @@ public class UnitTests {
             } finally {
                 lockedInBak.delete();
                 bakKs.delete();
+                if (savedBak.exists()) {
+                    Files.move(savedBak.toPath(), bakKs.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
             }
             boolean okTargetPreservedOnBakFail = (mainKs.length() == ksLenBeforeBakFail) && !tmpKs.exists();
 
@@ -3374,7 +3381,7 @@ public class UnitTests {
             t40.printStackTrace();
         } finally {
             TlsCertificateManager.resetInstanceForTesting();
-            for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.p12.bak", "server_keystore.p12.tmp", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der")) {
+            for (String testFile : Arrays.asList("server_keystore.p12", "server_keystore.p12.bak", "server_keystore.p12.tmp", "server_keystore.pass", "ca.crt", "ca.pem", "ca_key.der", "saved_backup_for_test.bak")) {
                 try { new File(testFile).delete(); } catch (Exception ignored) {}
             }
         }
