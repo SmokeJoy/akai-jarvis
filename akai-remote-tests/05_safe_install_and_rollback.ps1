@@ -1611,7 +1611,8 @@ switch ($Action) {
             Write-Host "Pacchetto $PackageName : INSTALLATO" -ForegroundColor Green
             $pathLine = & $adb -s $TargetAdb shell "pm path $PackageName"
             Write-Host "Percorso APK su device  : $pathLine"
-            $pidVal = (& $adb -s $TargetAdb shell "pidof $PackageName").Trim()
+            $pidValRaw = & $adb -s $TargetAdb shell "pidof $PackageName" 2>$null
+            $pidVal = if ($pidValRaw) { $pidValRaw.ToString().Trim() } else { "" }
             Write-Host "Processo in esecuzione   : $(if ($pidVal) { "ATTIVO (PID $pidVal)" } else { "NON ATTIVO" })"
         } else {
             Write-Host "Pacchetto $PackageName : NON INSTALLATO" -ForegroundColor Yellow
@@ -2043,16 +2044,16 @@ switch ($Action) {
         Write-Host "[4/6] Installazione nuovo APK (adb install -r)..."
         $installRes = & $adb -s $TargetAdb install -r $ApkPath
         Write-Host "      Esito adb: $installRes"
-        if ($LASTEXITCODE -ne 0 -or $installRes -notmatch "Success") {
+        if ($LASTEXITCODE -ne 0 -or (($installRes -join "`n") -notmatch "Success")) {
             throw "ERRORE FAIL-CLOSED: Installazione fallita da adb (exit=$LASTEXITCODE): $installRes"
         }
 
         # 4. Avvio servizio compatibile Android 9 (.RemoteServerService / fallback .MainActivity)
         Write-Host "[5/6] Avvio servizio RemoteServerService..."
-        & $adb -s $TargetAdb shell "am startservice -n $PackageName/.RemoteServerService" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            & $adb -s $TargetAdb shell "cmd activity start-service $PackageName/.RemoteServerService" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
+        $startSvcOut = & $adb -s $TargetAdb shell "am startservice -n $PackageName/.RemoteServerService" 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $startSvcOut -match "Error:|Exception") {
+            $cmdSvcOut = & $adb -s $TargetAdb shell "cmd activity start-service $PackageName/.RemoteServerService" 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0 -or $cmdSvcOut -match "Error:|Exception") {
                 & $adb -s $TargetAdb shell "am start -n $PackageName/.MainActivity" 2>&1 | Out-Null
             }
         }
@@ -2164,7 +2165,7 @@ switch ($Action) {
                 Write-Host "[ROLLBACK 1/4] Reinstallazione APK precedente (adb install -r -d)..."
                 $rbRes = & $adb -s $TargetAdb install -r -d $backupApk
                 Write-Host "      Esito adb install rollback: $rbRes"
-                if ($LASTEXITCODE -ne 0 -or $rbRes -notmatch "Success") {
+                if ($LASTEXITCODE -ne 0 -or (($rbRes -join "`n") -notmatch "Success")) {
                     throw "FATALE: Reinstallazione rollback APK fallita!"
                 }
 
