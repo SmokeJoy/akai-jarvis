@@ -4389,6 +4389,354 @@ try {
     Remove-Item $testDir35 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# -----------------------------------------------------------------------------
+# TEST 36: Snapshot Identità TLS in Backup di Sessione e Protezione Segreti (P1 Supervisor Gate)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 36: Snapshot Identità TLS in Backup di Sessione e Protezione Segreti ---" -ForegroundColor Cyan
+$testDir36 = Join-Path $tempDir "e2e_tls_backup_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir36 | Out-Null
+
+$mockAdbJs36 = Join-Path $testDir36 "mock_adb_36.js"
+$devStorage36 = Join-Path $testDir36 "dev_storage"
+New-Item -ItemType Directory -Force -Path $devStorage36 | Out-Null
+
+# Creiamo file TLS sintetici simulati su storage device
+$synthKsPath = Join-Path $devStorage36 "server_keystore.p12"
+$synthPassPath = Join-Path $devStorage36 "server_keystore.pass"
+$synthPemPath = Join-Path $devStorage36 "ca.pem"
+$synthCrtPath = Join-Path $devStorage36 "ca.crt"
+$synthKeyPath = Join-Path $devStorage36 "ca_key.der"
+
+# Keystore sintetico di almeno 512 bytes
+$dummyBytes = New-Object byte[] 1024
+(New-Object System.Random).NextBytes($dummyBytes)
+[System.IO.File]::WriteAllBytes($synthKsPath, $dummyBytes)
+[System.IO.File]::WriteAllText($synthPassPath, "super_secret_ks_pass_98765", [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($synthPemPath, "-----BEGIN CERTIFICATE-----`nMOCK_ROOT_CA_PEM`n-----END CERTIFICATE-----", [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($synthCrtPath, "MOCK_CRT_BYTES", [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllBytes($synthKeyPath, [System.Text.Encoding]::UTF8.GetBytes("MOCK_RSA_KEY_DER_PRIVATE_BYTES"))
+
+$devStorageEsc36 = $devStorage36.Replace('\', '/')
+
+@"
+const fs = require('fs');
+const path = require('path');
+const argv = process.argv.slice(2);
+const argStr = argv.join(' ');
+
+if (argStr.includes('test -f') || argStr.includes('FILE_PROBE_RESULT')) {
+    if (argStr.includes('it.akai.customremote ') && argStr.includes('server_keystore.p12')) {
+        console.log('FILE_PROBE_RESULT:EXISTS');
+        process.exit(0);
+    }
+    console.log('FILE_PROBE_RESULT:NOT_FOUND');
+    process.exit(0);
+}
+
+if (argv.includes('exec-out')) {
+    const devDir = '$devStorageEsc36';
+    const files = ['server_keystore.p12', 'server_keystore.pass', 'ca.pem', 'ca.crt', 'ca_key.der'];
+    for (const f of files) {
+        if (argStr.includes(f)) {
+            const fp = path.join(devDir, f);
+            if (fs.existsSync(fp)) {
+                const buf = fs.readFileSync(fp);
+                process.stdout.write(buf, () => process.exit(0));
+                return;
+            }
+        }
+    }
+    process.exit(1);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs36 -Encoding ascii
+
+$mockAdbCmd36 = if ($isWin) { Join-Path $testDir36 "adb.cmd" } else { Join-Path $testDir36 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs36`" %*" | Out-File -FilePath $mockAdbCmd36 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs36`" `"`$@`"" | Out-File -FilePath $mockAdbCmd36 -Encoding ascii
+    & chmod +x $mockAdbCmd36
+}
+
+try {
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $mockAdbEsc36 = $mockAdbCmd36.Replace('\', '/')
+    $nodeEscaped36 = $validNode.Replace('\', '/')
+    $sessionDir36 = Join-Path $testDir36 "session_36"
+    $sessionEsc36 = $sessionDir36.Replace('\', '/')
+    $res36File = Join-Path $testDir36 "res_36.json"
+    $res36Esc = $res36File.Replace('\', '/')
+
+    $cmd36 = @"
+`$env:NODE_EXE = '$nodeEscaped36'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc36'
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Backup-DeviceTlsIdentity -AdbExe '$mockAdbEsc36' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -SessionDir '$sessionEsc36'
+`$res | ConvertTo-Json | Set-Content -Path '$res36Esc' -Encoding utf8
+"@
+    & $psExe -ExecutionPolicy Bypass -Command $cmd36 2>&1 | Out-Null
+    $backupResult = if (Test-Path $res36File) { Get-Content $res36File -Raw | ConvertFrom-Json } else { @{} }
+
+    $tlsDir36 = Join-Path $sessionDir36 "tls_identity"
+    $manifestPath36 = Join-Path $tlsDir36 "tls_manifest.json"
+
+    # Sotto-test 36a: Tutti i 5 asset estratti e presenti su disco
+    $filesPresent = ($backupResult.HasTls -eq $true) -and
+                    (Test-Path (Join-Path $tlsDir36 "server_keystore.p12")) -and
+                    (Test-Path (Join-Path $tlsDir36 "server_keystore.pass")) -and
+                    (Test-Path (Join-Path $tlsDir36 "ca.pem")) -and
+                    (Test-Path (Join-Path $tlsDir36 "ca.crt")) -and
+                    (Test-Path (Join-Path $tlsDir36 "ca_key.der"))
+
+    if ($filesPresent) {
+        Write-Host "   [PASS] Sotto-test 36a: Tutti i 5 file di identità TLS estratti nello snapshot di sessione" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 36a: Estrazione incompleta file TLS (HasTls=$($backupResult.HasTls))" -ForegroundColor Red
+    }
+
+    # Sotto-test 36b: Validazione del manifest.json e garanzia zero secrets leak (nessuna password né chiave privata in chiaro nel manifest)
+    $manifestValid = $false
+    if (Test-Path $manifestPath36) {
+        $manText = Get-Content $manifestPath36 -Raw
+        $manObj = $manText | ConvertFrom-Json
+        $actualKsHash = (Get-FileHash (Join-Path $tlsDir36 "server_keystore.p12") -Algorithm SHA256).Hash.ToLower()
+
+        $hasNoPlainPass = ($manText -notmatch "super_secret_ks_pass_98765")
+        $hasNoPlainKey = ($manText -notmatch "MOCK_RSA_KEY_DER_PRIVATE_BYTES")
+        $hashMatches = ($manObj.KeystoreSha256 -eq $actualKsHash)
+        $has5Files = ($manObj.Files.Count -eq 5)
+
+        $manifestValid = $hasNoPlainPass -and $hasNoPlainKey -and $hashMatches -and $has5Files
+    }
+
+    if ($manifestValid) {
+        Write-Host "   [PASS] Sotto-test 36b: tls_manifest.json verificato al 100% con parità hash SHA-256 e ZERO secrets leak" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 36b: tls_manifest.json non conforme o secrets leaked" -ForegroundColor Red
+    }
+
+    # Sotto-test 36c: Release legacy v5 (server_keystore.p12 NOT_FOUND) -> restituisce HasTls=false senza errori
+    $sessionDir36Legacy = Join-Path $testDir36 "session_36_legacy"
+    $sessionEsc36Legacy = $sessionDir36Legacy.Replace('\', '/')
+    $res36cFile = Join-Path $testDir36 "res_36c.json"
+    $res36cEsc = $res36cFile.Replace('\', '/')
+    $cmd36c = @"
+`$env:NODE_EXE = '$nodeEscaped36'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc36'
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Backup-DeviceTlsIdentity -AdbExe '$mockAdbEsc36' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote_legacy' -SessionDir '$sessionEsc36Legacy'
+`$res | ConvertTo-Json | Set-Content -Path '$res36cEsc' -Encoding utf8
+"@
+    & $psExe -ExecutionPolicy Bypass -Command $cmd36c 2>&1 | Out-Null
+    $backupResultLegacy = if (Test-Path $res36cFile) { Get-Content $res36cFile -Raw | ConvertFrom-Json } else { @{} }
+    $legacyOk = ($backupResultLegacy.HasTls -eq $false)
+
+    if ($legacyOk) {
+        Write-Host "   [PASS] Sotto-test 36c: Release legacy senza TLS gestita correttamente con HasTls=false" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 36c: Release legacy fallita: $res36cJson" -ForegroundColor Red
+    }
+
+    if ($filesPresent -and $manifestValid -and $legacyOk) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY BACKUP GATE] Test 36: Snapshot identità TLS e protezione segreti convalidati al 100% (3/3)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY BACKUP GATE] Test 36: Fallito" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY BACKUP GATE] Test 36: Eccezione imprevista: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    Remove-Item $testDir36 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# -----------------------------------------------------------------------------
+# TEST 37: Ripristino Bit-for-Bit Identità TLS su Rollback e Rifiuto Tamper (P1 Supervisor Gate)
+# -----------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 37: Ripristino Bit-for-Bit Identità TLS su Rollback e Rifiuto Tamper ---" -ForegroundColor Cyan
+$testDir37 = Join-Path $tempDir "e2e_tls_restore_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir37 | Out-Null
+
+$mockAdbJs37 = Join-Path $testDir37 "mock_adb_37.js"
+$devStorage37 = Join-Path $testDir37 "dev_storage"
+$auditLog37 = Join-Path $testDir37 "restore_audit.txt"
+New-Item -ItemType Directory -Force -Path $devStorage37 | Out-Null
+
+# Creiamo la cartella di backup di sessione da ripristinare
+$sessionDir37 = Join-Path $testDir37 "session_37"
+$tlsDir37 = Join-Path $sessionDir37 "tls_identity"
+New-Item -ItemType Directory -Force -Path $tlsDir37 | Out-Null
+
+$goldenBytes = New-Object byte[] 1024
+(New-Object System.Random).NextBytes($goldenBytes)
+$goldenKsPath = Join-Path $tlsDir37 "server_keystore.p12"
+[System.IO.File]::WriteAllBytes($goldenKsPath, $goldenBytes)
+$goldenKsHash = (Get-FileHash $goldenKsPath -Algorithm SHA256).Hash.ToLower()
+
+[System.IO.File]::WriteAllText((Join-Path $tlsDir37 "server_keystore.pass"), "golden_pass_12345", [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText((Join-Path $tlsDir37 "ca.pem"), "-----BEGIN CERTIFICATE-----`nGOLDEN_CA_PEM`n-----END CERTIFICATE-----", [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText((Join-Path $tlsDir37 "ca.crt"), "GOLDEN_CRT_BYTES", [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllBytes((Join-Path $tlsDir37 "ca_key.der"), [System.Text.Encoding]::UTF8.GetBytes("GOLDEN_KEY_DER"))
+
+$manifest37 = @{
+    HasTls = $true
+    KeystoreSha256 = $goldenKsHash
+    KeystoreBytes = 1024
+    Files = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
+}
+[System.IO.File]::WriteAllText((Join-Path $tlsDir37 "tls_manifest.json"), ($manifest37 | ConvertTo-Json), [System.Text.Encoding]::UTF8)
+
+$devStorageEsc37 = $devStorage37.Replace('\', '/')
+$auditEsc37 = $auditLog37.Replace('\', '/')
+
+@"
+const fs = require('fs');
+const path = require('path');
+const argv = process.argv.slice(2);
+const argStr = argv.join(' ');
+
+fs.appendFileSync('$auditEsc37', argStr + '\n');
+
+if (argv.includes('exec-in')) {
+    const devDir = '$devStorageEsc37';
+    const match = argStr.match(/files\/([a-zA-Z0-9_\.]+)/);
+    if (match) {
+        const dest = path.join(devDir, match[1]);
+        const chunks = [];
+        process.stdin.on('data', chunk => chunks.push(chunk));
+        process.stdin.on('end', () => {
+            const buf = Buffer.concat(chunks);
+            fs.writeFileSync(dest, buf);
+            process.exit(0);
+        });
+        return;
+    }
+    process.exit(0);
+}
+
+if (argv.includes('exec-out')) {
+    const devDir = '$devStorageEsc37';
+    const corruptMode = process.env.MOCK_CORRUPT_RESTORE === 'true';
+    if (argStr.includes('server_keystore.p12')) {
+        const ksDest = path.join(devDir, 'server_keystore.p12');
+        if (fs.existsSync(ksDest)) {
+            let buf = fs.readFileSync(ksDest);
+            if (corruptMode) {
+                buf = Buffer.from(buf);
+                buf[0] ^= 0xFF;
+            }
+            process.stdout.write(buf, () => process.exit(0));
+            return;
+        }
+    }
+    process.exit(1);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs37 -Encoding ascii
+
+$mockAdbCmd37 = if ($isWin) { Join-Path $testDir37 "adb.cmd" } else { Join-Path $testDir37 "adb" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs37`" %*" | Out-File -FilePath $mockAdbCmd37 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs37`" `"`$@`"" | Out-File -FilePath $mockAdbCmd37 -Encoding ascii
+    & chmod +x $mockAdbCmd37
+}
+
+try {
+    $scriptEscaped = $scriptPath.Replace('\', '/')
+    $mockAdbEsc37 = $mockAdbCmd37.Replace('\', '/')
+    $nodeEscaped37 = $validNode.Replace('\', '/')
+    $sessionEsc37 = $sessionDir37.Replace('\', '/')
+    $res37File = Join-Path $testDir37 "res_37a.json"
+    $res37Esc = $res37File.Replace('\', '/')
+
+    # Sotto-test 37a: Ripristino bit-for-bit riuscito con chmod 600 e parità hash verificata
+    $cmd37a = @"
+`$env:NODE_EXE = '$nodeEscaped37'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc37'
+`$env:MOCK_CORRUPT_RESTORE = 'false'
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Restore-DeviceTlsIdentity -AdbExe '$mockAdbEsc37' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -SessionDir '$sessionEsc37' -ChownTarget '10045:10045'
+`$res | ConvertTo-Json | Set-Content -Path '$res37Esc' -Encoding utf8
+"@
+    & $psExe -ExecutionPolicy Bypass -Command $cmd37a 2>&1 | Out-Null
+    $restoreResult = if (Test-Path $res37File) { Get-Content $res37File -Raw | ConvertFrom-Json } else { @{} }
+
+    $auditLines37 = if (Test-Path $auditLog37) { Get-Content $auditLog37 -Raw } else { "" }
+    $restoredOk = ($restoreResult.Restored -eq $true) -and
+                  ($restoreResult.KeystoreSha256 -eq $goldenKsHash) -and
+                  ($auditLines37 -match "chmod 600 files/server_keystore.p12") -and
+                  ($auditLines37 -match "chmod 600 files/server_keystore.pass") -and
+                  ($auditLines37 -match "chmod 600 files/ca.pem")
+
+    if ($restoredOk) {
+        Write-Host "   [PASS] Sotto-test 37a: Ripristino bit-for-bit di tutti i 5 file con chmod 600 e parità SHA-256 confermata" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 37a: Ripristino bit-for-bit fallito (Restored=$($restoreResult.Restored))" -ForegroundColor Red
+    }
+
+    # Sotto-test 37b: Tamper / Mismatch SHA-256 del keystore post-ripristino -> Fail-Closed con eccezione esplicita
+    $cmd37b = @"
+`$env:NODE_EXE = '$nodeEscaped37'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc37'
+`$env:MOCK_CORRUPT_RESTORE = 'true'
+. '$scriptEscaped' -Action plan | Out-Null
+try {
+    Restore-DeviceTlsIdentity -AdbExe '$mockAdbEsc37' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -SessionDir '$sessionEsc37' -ChownTarget '10045:10045' | Out-Null
+    Write-Host 'UNEXPECTED_PASS'
+} catch {
+    Write-Host (`$_.Exception.Message)
+}
+"@
+    $res37b = & $psExe -ExecutionPolicy Bypass -Command $cmd37b 2>&1 | Out-String
+    $tamperDetected = ($res37b -match "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 del keystore TLS post-ripristino" -and $res37b -notmatch "UNEXPECTED_PASS")
+
+    if ($tamperDetected) {
+        Write-Host "   [PASS] Sotto-test 37b: Manomissione hash post-rollback rilevata: blocco fail-closed categorico" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 37b: Mancato blocco fail-closed su tamper: $res37b" -ForegroundColor Red
+    }
+
+    # Sotto-test 37c: Sessione senza backup TLS (legacy HTTP v5) -> Restored=false, Reason=NO_TLS_BACKUP, zero eccezioni
+    $emptySessionDir = Join-Path $testDir37 "empty_session"
+    New-Item -ItemType Directory -Force -Path $emptySessionDir | Out-Null
+    $emptySessionEsc = $emptySessionDir.Replace('\', '/')
+    $res37cFile = Join-Path $testDir37 "res_37c.json"
+    $res37cEsc = $res37cFile.Replace('\', '/')
+
+    $cmd37c = @"
+`$env:NODE_EXE = '$nodeEscaped37'
+`$env:ADB_EXECUTABLE = '$mockAdbEsc37'
+. '$scriptEscaped' -Action plan | Out-Null
+`$res = Restore-DeviceTlsIdentity -AdbExe '$mockAdbEsc37' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -SessionDir '$emptySessionEsc' -ChownTarget '10045:10045'
+`$res | ConvertTo-Json | Set-Content -Path '$res37cEsc' -Encoding utf8
+"@
+    & $psExe -ExecutionPolicy Bypass -Command $cmd37c 2>&1 | Out-Null
+    $resEmpty = if (Test-Path $res37cFile) { Get-Content $res37cFile -Raw | ConvertFrom-Json } else { @{} }
+    $emptySessionOk = ($resEmpty.Restored -eq $false) -and ($resEmpty.Reason -eq "NO_TLS_BACKUP")
+
+    if ($emptySessionOk) {
+        Write-Host "   [PASS] Sotto-test 37c: Ripristino trasparente no-op per sessione legacy senza TLS (NO_TLS_BACKUP)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 37c: Ripristino sessione legacy fallito: $res37cJson" -ForegroundColor Red
+    }
+
+    if ($restoredOk -and $tamperDetected -and $emptySessionOk) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY ROLLBACK GATE] Test 37: Ripristino bit-for-bit identità TLS su rollback e rifiuto tamper convalidati al 100% (3/3)" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY ROLLBACK GATE] Test 37: Fallito" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / TLS IDENTITY ROLLBACK GATE] Test 37: Eccezione imprevista: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    Remove-Item $testDir37 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 

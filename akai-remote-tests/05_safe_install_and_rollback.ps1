@@ -1110,7 +1110,7 @@ function Probe-DeviceFileState {
         [string]$TargetAdb,
         [string]$PackageName,
         [string]$RelativePath,
-        [string]$Channel = "any" # "any", "run-as", "su", "root"
+        [string]$Channel = "any" # "any", "auto", "run-as", "su", "root"
     )
     $probeCmdRunAs = "run-as $PackageName sh -c 'test -f $RelativePath && echo FILE_PROBE_RESULT:EXISTS || echo FILE_PROBE_RESULT:NOT_FOUND'"
     $probeCmdSu = "su -c 'test -f /data/data/$PackageName/$RelativePath && echo FILE_PROBE_RESULT:EXISTS || echo FILE_PROBE_RESULT:NOT_FOUND'"
@@ -1119,7 +1119,7 @@ function Probe-DeviceFileState {
     $runAsAttempted = $false
     $runAsExit = -1
     $runAsOut = ""
-    if ($Channel -eq "any" -or $Channel -eq "run-as") {
+    if ($Channel -eq "any" -or $Channel -eq "auto" -or $Channel -eq "run-as") {
         $runAsAttempted = $true
         $outRunAs = & $AdbExe -s $TargetAdb shell $probeCmdRunAs 2>&1
         $runAsExit = $LASTEXITCODE
@@ -1132,7 +1132,7 @@ function Probe-DeviceFileState {
     $suAttempted = $false
     $suExit = -1
     $suOut = ""
-    if ($Channel -eq "any" -or $Channel -eq "su") {
+    if ($Channel -eq "any" -or $Channel -eq "auto" -or $Channel -eq "su") {
         $suAttempted = $true
         $outSu = & $AdbExe -s $TargetAdb shell $probeCmdSu 2>&1
         $suExit = $LASTEXITCODE
@@ -1437,6 +1437,201 @@ except Exception as e:
     }
 
     return $true
+}
+
+function Backup-DeviceTlsIdentity {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$SessionDir
+    )
+    $tlsDir = Join-Path $SessionDir "tls_identity"
+    $probeKs = $null
+    try {
+        $probeKs = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/server_keystore.p12" -Channel "any"
+    } catch {
+        # Se i canali unprivileged (run-as/su) sono negati, prova probe via root escalation
+        try {
+            $script:elevProbeKs = $null
+            Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                $script:elevProbeKs = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/server_keystore.p12" -Channel "root"
+            }
+            if ($script:elevProbeKs) {
+                $probeKs = $script:elevProbeKs
+                $script:elevProbeKs = $null
+            }
+        } catch {
+            throw $_
+        }
+    }
+    if ($probeKs -eq "NOT_FOUND") {
+        Write-Host "      Snapshot identita' TLS: ASSENTE sul device (release legacy HTTP-only v5). Nessun backup TLS richiesto." -ForegroundColor Green
+        return @{ HasTls = $false }
+    } elseif ($probeKs -ne "EXISTS") {
+        Write-Host "      Probe server_keystore.p12: stato $probeKs (permessi negati o storage non accessibile)." -ForegroundColor Yellow
+    }
+
+    New-Item -ItemType Directory -Force -Path $tlsDir | Out-Null
+    $filesToBackup = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
+    $extractedCount = 0
+
+    foreach ($f in $filesToBackup) {
+        $destPath = Join-Path $tlsDir $f
+        $extracted = $false
+
+        # Tentativo 1: run-as
+        $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/$f" -LocalFilePath $destPath -MinBytes 1
+        if ($rx.Success -and (Test-Path $destPath) -and (Get-Item $destPath).Length -gt 0) {
+            $extracted = $true
+        }
+
+        # Tentativo 2: su
+        if (-not $extracted) {
+            $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/$f'" -LocalFilePath $destPath -MinBytes 1
+            if ($rx.Success -and (Test-Path $destPath) -and (Get-Item $destPath).Length -gt 0) {
+                $extracted = $true
+            }
+        }
+
+        # Tentativo 3: root adbd
+        if (-not $extracted) {
+            $script:elevRx = $false
+            try {
+                Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                    $rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$f" -LocalFilePath $destPath -MinBytes 1
+                    if ($rxElev.Success -and (Test-Path $destPath) -and (Get-Item $destPath).Length -gt 0) {
+                        $script:elevRx = $true
+                    }
+                }
+            } catch {}
+            if ($script:elevRx) {
+                $extracted = $true
+                $script:elevRx = $false
+            }
+        }
+
+        if ($extracted) {
+            $extractedCount++
+        } else {
+            if (Test-Path $destPath) { Remove-Item $destPath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    $localKs = Join-Path $tlsDir "server_keystore.p12"
+    if ((Test-Path $localKs) -and (Get-Item $localKs).Length -ge 512) {
+        $ksHash = Get-Sha256Hex $localKs
+        $manifest = @{
+            HasTls = $true
+            KeystoreSha256 = $ksHash
+            KeystoreBytes = (Get-Item $localKs).Length
+            Files = (Get-ChildItem $tlsDir | Select-Object -ExpandProperty Name)
+        }
+        $manifestJson = $manifest | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText((Join-Path $tlsDir "tls_manifest.json"), $manifestJson, [System.Text.Encoding]::UTF8)
+        Write-Host "      Snapshot identita' TLS protetto completato: server_keystore.p12 (SHA-256=$ksHash, $($manifest.Files.Count) asset archiviati)" -ForegroundColor Green
+        return $manifest
+    } elseif ($probeKs -eq "EXISTS") {
+        throw "ERRORE FAIL-CLOSED: Keystore TLS presente su storage TV ma estrazione fallita o file non leggibile. Impossibile procedere senza backup TLS."
+    }
+
+    return @{ HasTls = $false }
+}
+
+function Restore-DeviceTlsIdentity {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$SessionDir,
+        [string]$ChownTarget
+    )
+    $tlsDir = Join-Path $SessionDir "tls_identity"
+    $localKs = Join-Path $tlsDir "server_keystore.p12"
+    if (-not (Test-Path $localKs) -or (Get-Item $localKs).Length -lt 512) {
+        Write-Host "      Ripristino TLS: nessun keystore TLS nel backup di sessione (release v5 HTTP legacy). Salto ripristino TLS." -ForegroundColor Cyan
+        return @{ Restored = $false; Reason = "NO_TLS_BACKUP" }
+    }
+
+    $manifestFile = Join-Path $tlsDir "tls_manifest.json"
+    $expectedKsHash = $null
+    if (Test-Path $manifestFile) {
+        try {
+            $man = Get-Content $manifestFile -Raw | ConvertFrom-Json
+            $expectedKsHash = $man.KeystoreSha256
+        } catch {}
+    }
+
+    Write-Host "[ROLLBACK TLS] Ripristino identita' TLS precedente (server_keystore.p12, pass, certificati)..." -ForegroundColor Yellow
+    $tlsFiles = Get-ChildItem -Path $tlsDir -File | Where-Object { $_.Name -ne "tls_manifest.json" }
+
+    foreach ($fileItem in $tlsFiles) {
+        $fName = $fileItem.Name
+        $fPath = $fileItem.FullName
+        $restored = $false
+
+        # Tentativo 1: run-as
+        $cmd = "run-as $PackageName sh -c 'mkdir -p files; cat > files/$fName; chmod 600 files/$fName'"
+        $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -LocalFilePath $fPath -RemoteCommand $cmd
+        if ($res.Success) { $restored = $true }
+
+        # Tentativo 2: su
+        if (-not $restored) {
+            $cmd = "su -c 'mkdir -p /data/data/$PackageName/files; cat > /data/data/$PackageName/files/$fName; chown $ChownTarget /data/data/$PackageName/files/$fName; chmod 600 /data/data/$PackageName/files/$fName'"
+            $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -LocalFilePath $fPath -RemoteCommand $cmd
+            if ($res.Success) { $restored = $true }
+        }
+
+        # Tentativo 3: root adbd
+        if (-not $restored) {
+            $script:elevRest = $false
+            try {
+                Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                    $cmd = "sh -c 'mkdir -p /data/data/$PackageName/files; cat > /data/data/$PackageName/files/$fName; chown $ChownTarget /data/data/$PackageName/files/$fName; chmod 600 /data/data/$PackageName/files/$fName'"
+                    $sRes = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -LocalFilePath $fPath -RemoteCommand $cmd
+                    if ($sRes.Success) { $script:elevRest = $true }
+                }
+            } catch {}
+            if ($script:elevRest) {
+                $restored = $true
+                $script:elevRest = $false
+            }
+        }
+
+        if (-not $restored) {
+            throw "ERRORE FAIL-CLOSED: Ripristino file TLS ($fName) fallito sul dispositivo."
+        }
+    }
+
+    # Verifica parità hash SHA-256 del keystore ripristinato
+    $verifyKs = Join-Path $SessionDir "verify_restore_keystore.p12"
+    $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/server_keystore.p12" -LocalFilePath $verifyKs
+    if (-not $rx.Success) {
+        $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/server_keystore.p12'" -LocalFilePath $verifyKs
+    }
+    if (-not $rx.Success) {
+        $script:rxElev = $null
+        try {
+            Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                $script:rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/server_keystore.p12" -LocalFilePath $verifyKs
+            }
+        } catch {}
+        if ($script:rxElev -and $script:rxElev.Success) {
+            $rx = $script:rxElev
+            $script:rxElev = $null
+        }
+    }
+
+    if (-not (Test-Path $verifyKs) -or (Get-Item $verifyKs).Length -lt 512) {
+        throw "ERRORE FAIL-CLOSED: Impossibile rileggere server_keystore.p12 ripristinato sul dispositivo per verifica integrita'."
+    }
+    $actualHash = Get-Sha256Hex $verifyKs
+    if ($expectedKsHash -and ($actualHash -ne $expectedKsHash)) {
+        throw "ERRORE FAIL-CLOSED: Mismatch hash SHA-256 del keystore TLS post-ripristino! Atteso: $expectedKsHash, Attuale: $actualHash"
+    }
+
+    Write-Host "      Parita' hash SHA-256 ($actualHash) keystore TLS post-rollback verificata con successo." -ForegroundColor Green
+    return @{ Restored = $true; KeystoreSha256 = $actualHash }
 }
 
 switch ($Action) {
@@ -1823,6 +2018,9 @@ switch ($Action) {
             Verify-SQLiteIntegrityOffline $backupDb | Out-Null
             $dbHash = Get-Sha256Hex $backupDb
             Write-Host "      Database SQLite consolidato e verificato integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$dbHash)" -ForegroundColor Green
+
+            # Snapshot identita' TLS protetto (server_keystore.p12, pass, ca.pem, ca.crt, ca_key.der)
+            Backup-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir | Out-Null
         } catch {
             $backupException = $_
         } finally {
@@ -2005,6 +2203,9 @@ switch ($Action) {
                 Verify-SQLiteIntegrityOffline $backupDb | Out-Null
                 $backupDbHash = Get-Sha256Hex $backupDb
                 Write-Host "      Database SQLite consolidato e integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$backupDbHash)" -ForegroundColor Green
+
+                # Snapshot identita' TLS protetto (server_keystore.p12, pass, ca.pem, ca.crt, ca_key.der)
+                Backup-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir | Out-Null
             }
 
             # 2. Verifica compatibilità firme FAIL-CLOSED
@@ -2254,6 +2455,9 @@ $chownTarget = "${appUid}:${appUid}"
 
                 Write-Host "      Database SQLite v5 ripristinato con successo." -ForegroundColor Green
 
+                # Ripristino snapshot identita' TLS se presente
+                Restore-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir -ChownTarget $chownTarget | Out-Null
+
                 Write-Host "[ROLLBACK 3/4] Riavvio servizio RemoteServerService..."
                 & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
 
@@ -2398,6 +2602,9 @@ $chownTarget = "${appUid}:${appUid}"
         Write-Host "      Parita' hash SHA-256 ($backupDbHash) e integrita' SQLite verificate con successo." -ForegroundColor Green
 
         Write-Host "      Database SQLite ripristinato." -ForegroundColor Green
+
+        # Ripristino snapshot identita' TLS se presente
+        Restore-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $latestSession.FullName -ChownTarget $chownTarget | Out-Null
 
         Write-Host "[3/4] Riavvio servizio RemoteServerService..."
         & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null

@@ -18,6 +18,8 @@ import java.io.InputStreamReader;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -60,6 +62,7 @@ public class TlsCertificateManager {
     private static final String TAG = "AKAI_TlsCertMgr";
 
     public static final String KEYSTORE_FILE_NAME = "server_keystore.p12";
+    public static final String KEYSTORE_BAK_FILE_NAME = "server_keystore.p12.bak";
     public static final String PASSWORD_FILE_NAME = "server_keystore.pass";
     public static final String CA_CERT_FILE_NAME = "ca.crt";
     public static final String CA_PEM_FILE_NAME = "ca.pem";
@@ -135,11 +138,35 @@ public class TlsCertificateManager {
 
         File filesDir = (effectiveCtx != null) ? effectiveCtx.getFilesDir() : new File(".");
         File ksFile = new File(filesDir, KEYSTORE_FILE_NAME);
+        File ksBakFile = new File(filesDir, KEYSTORE_BAK_FILE_NAME);
         File passFile = new File(filesDir, PASSWORD_FILE_NAME);
         File caPemFile = new File(filesDir, CA_PEM_FILE_NAME);
         File caKeyFile = new File(filesDir, CA_KEY_FILE_NAME);
 
-        boolean identityFilesExist = (ksFile.exists() || passFile.exists() || caPemFile.exists() || caKeyFile.exists());
+        boolean identityFilesExist = (ksFile.exists() || ksBakFile.exists() || passFile.exists() || caPemFile.exists() || caKeyFile.exists());
+
+        // Auto-Recovery preventivo: se ksFile è assente o vuoto ma esiste ksBakFile valido, ripristina da .bak
+        if ((!ksFile.exists() || ksFile.length() == 0) && ksBakFile.exists() && ksBakFile.length() > 0 && passFile.exists() && passFile.length() > 0) {
+            try {
+                char[] password = readPasswordFromFile(passFile);
+                if (password != null && password.length > 0) {
+                    KeyStore testKs = KeyStore.getInstance("PKCS12");
+                    try (FileInputStream fisBak = new FileInputStream(ksBakFile)) {
+                        testKs.load(fisBak, password);
+                    }
+                    if (testKs.getCertificate("akai_ca") != null && testKs.getCertificate("akai_server") != null) {
+                        Log.w(TAG, "Keystore primario assente o vuoto: ripristino automatico preventivo da backup .bak...");
+                        Files.copy(ksBakFile.toPath(), ksFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                        ksFile.setReadable(false, false);
+                        ksFile.setReadable(true, true);
+                        ksFile.setWritable(false, false);
+                        ksFile.setWritable(true, true);
+                    }
+                }
+            } catch (Exception bakRecoveryEx) {
+                Log.w(TAG, "Auto-recovery preventivo da .bak fallito: " + bakRecoveryEx.getMessage());
+            }
+        }
 
         // Se già presenti e validi, carica dallo storage privato
         if (ksFile.exists() && passFile.exists() && caPemFile.exists() && ksFile.length() > 0 && passFile.length() > 0) {
@@ -149,6 +176,22 @@ public class TlsCertificateManager {
                     KeyStore ks = KeyStore.getInstance("PKCS12");
                     try (FileInputStream fis = new FileInputStream(ksFile)) {
                         ks.load(fis, password);
+                    } catch (Exception loadEx) {
+                        // Se ksFile è corrotto (es. crash o scrittura interrotta), tenta ripristino trasparente da .bak
+                        if (ksBakFile.exists() && ksBakFile.length() > 0) {
+                            Log.w(TAG, "Keystore primario non leggibile (" + loadEx.getMessage() + "), ripristino trasparente da backup .bak...");
+                            try (FileInputStream fisBak = new FileInputStream(ksBakFile)) {
+                                ks = KeyStore.getInstance("PKCS12");
+                                ks.load(fisBak, password);
+                            }
+                            Files.copy(ksBakFile.toPath(), ksFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                            ksFile.setReadable(false, false);
+                            ksFile.setReadable(true, true);
+                            ksFile.setWritable(false, false);
+                            ksFile.setWritable(true, true);
+                        } else {
+                            throw loadEx;
+                        }
                     }
                     Certificate sCert = ks.getCertificate("akai_server");
                     Certificate cCert = ks.getCertificate("akai_ca");
@@ -204,9 +247,7 @@ public class TlsCertificateManager {
                                         ks.setCertificateEntry("akai_ca", caX509);
                                         ks.setKeyEntry("akai_server", serverPair.getPrivate(), password, new Certificate[]{serverCert, caX509});
 
-                                        try (FileOutputStream fos = new FileOutputStream(ksFile)) {
-                                            ks.store(fos, password);
-                                        }
+                                        saveKeystoreSafely(ks, ksFile, password);
 
                                         List<String> allSans = new ArrayList<>();
                                         allSans.addAll(dnsList);
@@ -302,19 +343,13 @@ public class TlsCertificateManager {
             for (byte b : pwdBytes) pwdSb.append(String.format("%02x", b));
             char[] password = pwdSb.toString().toCharArray();
 
-            // Salvataggio nel Keystore PKCS#12
+            // Salvataggio sicuro nel Keystore PKCS#12
             KeyStore ks = KeyStore.getInstance("PKCS12");
             ks.load(null, password);
             ks.setCertificateEntry("akai_ca", caCert);
             ks.setKeyEntry("akai_server", serverPair.getPrivate(), password, new Certificate[]{serverCert, caCert});
 
-            try (FileOutputStream fos = new FileOutputStream(ksFile)) {
-                ks.store(fos, password);
-            }
-            ksFile.setReadable(false, false);
-            ksFile.setReadable(true, true);
-            ksFile.setWritable(false, false);
-            ksFile.setWritable(true, true);
+            saveKeystoreSafely(ks, ksFile, password);
 
             writeStringToFile(passFile, new String(password));
             passFile.setReadable(false, false);
@@ -429,6 +464,72 @@ public class TlsCertificateManager {
             }
             return sb.toString();
         }
+    }
+
+    public static void saveKeystoreSafely(KeyStore ks, File targetFile, char[] password) throws Exception {
+        File parentDir = targetFile.getParentFile();
+        if (parentDir == null) parentDir = new File(".");
+        File tmpFile = new File(parentDir, targetFile.getName() + ".tmp");
+        File bakFile = new File(parentDir, targetFile.getName() + ".bak");
+
+        if (tmpFile.exists()) {
+            tmpFile.delete();
+        }
+
+        // 1. Scrittura su file temporaneo nello stesso filesystem privato con flush ed fsync
+        try (FileOutputStream fos = new FileOutputStream(tmpFile)) {
+            ks.store(fos, password);
+            fos.flush();
+            try {
+                fos.getFD().sync();
+            } catch (Exception ignored) {}
+        }
+        tmpFile.setReadable(false, false);
+        tmpFile.setReadable(true, true);
+        tmpFile.setWritable(false, false);
+        tmpFile.setWritable(true, true);
+
+        // 2. Riapertura e verifica rigorosa dell'integrità crittografica del keystore temporaneo
+        KeyStore verifyKs = KeyStore.getInstance("PKCS12");
+        try (FileInputStream fis = new FileInputStream(tmpFile)) {
+            verifyKs.load(fis, password);
+        }
+        if (verifyKs.getCertificate("akai_ca") == null || verifyKs.getCertificate("akai_server") == null) {
+            tmpFile.delete();
+            throw new IOException("Verifica fallita: certificati mancanti nel keystore PKCS12 temporaneo.");
+        }
+        if (!verifyKs.isKeyEntry("akai_server")) {
+            tmpFile.delete();
+            throw new IOException("Verifica fallita: chiave privata akai_server assente nel keystore PKCS12 temporaneo.");
+        }
+
+        // 3. Conservazione copia di backup della versione precedente verificata (.bak)
+        if (targetFile.exists() && targetFile.length() > 0) {
+            try {
+                Files.copy(targetFile.toPath(), bakFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
+                bakFile.setReadable(false, false);
+                bakFile.setReadable(true, true);
+                bakFile.setWritable(false, false);
+                bakFile.setWritable(true, true);
+            } catch (Exception bakEx) {
+                Log.w(TAG, "Impossibile creare backup .bak: " + bakEx.getMessage());
+            }
+        }
+
+        // 4. Sostituzione atomica del file di destinazione (ATOMIC_MOVE con fallback REPLACE_EXISTING)
+        try {
+            Files.move(tmpFile.toPath(), targetFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception atomicEx) {
+            Files.move(tmpFile.toPath(), targetFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING);
+        }
+        targetFile.setReadable(false, false);
+        targetFile.setReadable(true, true);
+        targetFile.setWritable(false, false);
+        targetFile.setWritable(true, true);
     }
 
     private static void writeStringToFile(File file, String content) throws IOException {
