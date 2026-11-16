@@ -27,6 +27,7 @@ import android.widget.TextView;
 
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.VisionCapturePolicy;
+import it.akai.customremote.ai.RgbaFramePacker;
 
 import java.nio.ByteBuffer;
 
@@ -241,29 +242,10 @@ public final class LocalVisualCaptureActivity extends Activity {
             }
 
             Image.Plane plane = frame.getPlanes()[0];
-            int stride = plane.getRowStride();
-            int pixelStride = plane.getPixelStride();
-            if (pixelStride != 4 || stride < frameWidth * 4) return;
             if (!frameQueued.compareAndSet(false, true)) return;
-            // Android ImageReader may omit padding bytes at the end of the last
-            // row. Copying directly into a padded bitmap can underflow/crash.
-            // Pack only visible RGBA rows, within the 960x540 memory budget.
-            int rowBytes = frameWidth * 4;
-            int imageBytes = rowBytes * frameHeight;
-            ByteBuffer source = plane.getBuffer().duplicate();
-            int sourceLimit = source.limit();
-            ByteBuffer packed = ByteBuffer.allocateDirect(imageBytes);
-            for (int y = 0; y < frameHeight; y++) {
-                long start = (long) y * stride;
-                if (start + rowBytes > sourceLimit) {
-                    throw new IllegalArgumentException("Image row truncated");
-                }
-                source.position((int) start);
-                source.limit((int) (start + rowBytes));
-                packed.put(source);
-                source.limit(sourceLimit);
-            }
-            packed.flip();
+            ByteBuffer packed = RgbaFramePacker.pack(
+                    plane.getBuffer(), frameWidth, frameHeight,
+                    plane.getRowStride(), plane.getPixelStride());
             full = Bitmap.createBitmap(frameWidth, frameHeight, Bitmap.Config.ARGB_8888);
             full.copyPixelsFromBuffer(packed);
             final Bitmap result = full;
