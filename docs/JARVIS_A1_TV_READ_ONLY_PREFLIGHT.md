@@ -109,3 +109,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\09_build_jarv
 ```
 
 La build non installa l'APK. Se script fallisce, fermarsi e raccogliere output, **non eseguire** vecchio `08_compile` come fallback, non usare `adb install` senza piano distinto e consenso esplicito. Il backup di APK + SQLite consolidato + TLS DPAPI di sessione `backup_20261116_110423` è stato già verificato.
+
+## Acceleration gate: Windows NDK assente, fallback driver nativo esistente (16/11/2026)
+
+Sul PC laboratorio il controllo proprietario ha trovato **7/8 strumenti**, manca `tools\\ndk\\21.4.7075529\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\armv7a-linux-androideabi21-clang.cmd`. La PR #8 e la PR #1 hanno l'**identico Git blob SHA** del sorgente `akai-remote-tv/app/src/main/jni/uinput_jni.c`: `ffe04f6b6861cf1e253bbfbf113cbb8364c22f9b`. Pertanto il builder Windows `scripts/09_build_jarvis_a1_candidate.ps1` supporta una **via alternativa senza installare NDK**:
+
+1. Se Clang NDK locale è presente, compilare JNI normalmente. Se è assente, verificare che il file sorgente JNI locale abbia esattamente SHA Git blob `ffe04f6b6861cf1e253bbfbf113cbb8364c22f9b`, altrimenti FAIL-CLOSED.
+2. Leggere `%USERPROFILE%\\JARVIS-backup-TV\\jarvis-originale.apk`, già copiato dalla TV beta dal proprietario. Verificare con `apksigner verify --print-certs` il certificato originale `21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed`, controllare package `it.akai.customremote` e versionCode=1 con aapt.
+3. Estrarre **solo** `lib/armeabi-v7a/libakai_uinput.so` dal ZIP APK firmato nella nuova cartella di staging privata e utilizzarla nel nuovo APK A1. Se entry assente/dimensione anomala: interrompere, **non scaricare** driver a caso e **non bypassare** le verifiche.
+4. La CI controlla sintassi PowerShell e presenza guardrail su script, mentre Android CI continua a compilare autonomamente JNI da sorgente su Linux. **Non dichiarare fallback provato sul Windows dell'utente prima della vera esecuzione**.
+
+Non modificare APK originale, database SQLite o vault TLS. Nessuna scrittura TV e nessuna installazione APK.
