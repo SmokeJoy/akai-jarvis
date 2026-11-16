@@ -214,7 +214,7 @@ public class AiProviderAdapter {
                 String pkg = app.packageName;
                 if (!PKG_PATTERN.matcher(pkg).matches() || "it.akai.customhome".equals(pkg)) continue;
                 try {
-                    if (pm.getLaunchIntentForPackage(pkg) != null) allowed.add(pkg);
+                    if (pm.getLeanbackLaunchIntentForPackage(pkg) != null || pm.getLaunchIntentForPackage(pkg) != null) allowed.add(pkg);
                 } catch (RuntimeException ignored) {
                     // Invalid metadata must never enlarge the authorized set.
                 }
