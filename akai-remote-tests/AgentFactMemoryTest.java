@@ -5,6 +5,12 @@ import android.util.Log;
 import it.akai.customremote.ai.AgentFactMemory;
 import it.akai.customremote.ai.AkaiMemoryEngine;
 import it.akai.customremote.ai.LocalIntentParser;
+import it.akai.customremote.ai.AkaiAiController;
+import it.akai.customremote.ai.AiProviderAdapter;
+import it.akai.customremote.ai.ScreenPerceptionEngine;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.util.Collections;
 
 /** Offline host tests for explicit long-lived facts and Guest Mode isolation. */
 public final class AgentFactMemoryTest {
@@ -47,7 +53,50 @@ public final class AgentFactMemoryTest {
             LocalIntentParser.parse(context, "dimentica che mi piace la voce italiana");
         expect(speechDelete.matched && speechDelete.responseMessage.contains("eliminato"), "voice forget command");
 
+        // The agent itself must answer no-action memory requests successfully,
+        // without executing a remote-control action or keeping private copies.
+        m.resetForTest();
+        final int[] tvActions = {0};
+        final int[] snapshots = {0};
+        AkaiAiController.PerceptionAndExecutionBridge bridge = new AkaiAiController.PerceptionAndExecutionBridge() {
+            @Override public ScreenPerceptionEngine.PerceptionSnapshot capture(Context ctx) {
+                snapshots[0]++;
+                return new ScreenPerceptionEngine.PerceptionSnapshot(
+                        "it.akai.customhome.v8", Collections.emptyList(),
+                        Collections.emptyList(), null, false, false, false);
+            }
+            @Override public TvController.CommandResult executeActions(JSONArray actions) {
+                tvActions[0]++;
+                return new TvController.CommandResult(true, "ok");
+            }
+            @Override public void sleepMs(long ms) {}
+        };
+        AkaiAiController controller = AkaiAiController.createForTest(context,
+                new TvController(), m, new AiProviderAdapter(context), bridge);
+        JSONObject handled = controller.processQuery("Jarvis, ricorda che uso la voce italiana", false);
+        expect(handled.optBoolean("success") && "MEMORY_HANDLED".equals(handled.optString("status")),
+                "controller handles memory without hardware execution");
+        expect("local_memory".equals(handled.optString("source"))
+                && handled.optInt("actions_count", -1) == 0
+                && handled.optInt("tokens", -1) == 0, "memory reply uses zero tokens");
+        expect(tvActions[0] == 0 && snapshots[0] == 0, "no hardware actions or snapshots");
+        expect(m.getRecentConversations(5).length() == 0, "private memory request not duplicated in conversation log");
+        expect(AgentFactMemory.recall(m).contains("uso la voce italiana"),
+                "controller persisted fact in memory");
+        JSONObject deleted = controller.processQuery("Jarvis, dimentica che uso la voce italiana", false);
+        expect(deleted.optBoolean("success") && !AgentFactMemory.recall(m).contains("uso la voce italiana"),
+                "agent forget command clears the only personal copy");
+
+        AgentFactMemory.remember(m, "Preferisco notizie di tecnologia");
+        AgentFactMemory.remember(m, "Guardo cartoni animati");
+        JSONArray relevant = AgentFactMemory.relevantFacts(m, "preferisco tecnologia", 3);
+        expect(relevant.length() == 1 && relevant.optString(0).contains("tecnologia"),
+                "only query-relevant fact retrieved");
+        expect(AgentFactMemory.relevantFacts(m, "come stai oggi", 3).length() == 0,
+                "unrelated queries do not upload personal facts");
         m.setGuestMode(true);
+        expect(AgentFactMemory.relevantFacts(m, "tecnologia", 3).length() == 0,
+                "guest mode blocks relevant fact retrieval");
         expect(AgentFactMemory.remember(m, "Non archiviare questo dato").contains("Ospite"), "guest write blocked");
         expect(AgentFactMemory.recall(m).contains("Ospite"), "guest read blocked");
         expect(AgentFactMemory.forget(m, "Non archiviare questo dato").contains("Ospite"), "guest delete blocked");
