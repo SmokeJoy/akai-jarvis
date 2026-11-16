@@ -129,13 +129,21 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $dexDir "classes.dex"))) 
 Write-Host "[7/8] Assemblaggio pacchetto APK (dex, jniLibs, assets web)..."
 # Aggiunta classes.dex
 Push-Location $dexDir
-& $jar uf $baseApk classes.dex
-Pop-Location
+try {
+    & $jar uf $baseApk classes.dex
+    if ($LASTEXITCODE -ne 0) { throw "Packaging classes.dex fallito" }
+} finally {
+    Pop-Location
+}
 
 # Aggiunta librerie native lib/armeabi-v7a/libakai_uinput.so
 Push-Location $buildDir
-& $jar uf $baseApk lib/armeabi-v7a/libakai_uinput.so
-Pop-Location
+try {
+    & $jar uf $baseApk lib/armeabi-v7a/libakai_uinput.so
+    if ($LASTEXITCODE -ne 0) { throw "Packaging driver JNI fallito" }
+} finally {
+    Pop-Location
+}
 
 # Stage degli assets senza modificare file Git o sorgenti locali.
 $webSrcDir = Join-Path $workspace "akai-remote-web"
