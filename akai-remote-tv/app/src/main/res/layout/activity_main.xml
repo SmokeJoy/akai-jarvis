@@ -292,5 +292,24 @@
                 android:focusable="true" />
         </LinearLayout>
 
+        <!-- A2 Vision: explicit local-only capture; no remote/API permission toggle -->
+        <Button
+            android:id="@+id/btn_vision_local_test"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="16dp"
+            android:text="JARVIS A2 - Prova lettura schermo (solo locale)"
+            android:textSize="13sp"
+            android:textColor="#FFFFFF"
+            android:background="#334155"
+            android:focusable="true" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Solo dopo il consenso Android: un fotogramma in RAM, senza invii cloud e senza salvataggi."
+            android:textColor="#94A3B8"
+            android:textSize="11sp"
+            android:layout_marginTop="6dp" />
+
     </LinearLayout>
 </ScrollView>

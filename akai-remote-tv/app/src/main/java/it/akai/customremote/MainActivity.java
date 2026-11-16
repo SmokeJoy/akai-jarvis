@@ -73,6 +73,7 @@ public class MainActivity extends Activity {
     private Button btnShowPin;
     private Button btnRevokeAll;
     private Button btnMinimize;
+    private Button btnVisionLocalTest;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -94,6 +95,7 @@ public class MainActivity extends Activity {
         btnShowPin = findViewById(R.id.btn_show_pin);
         btnRevokeAll = findViewById(R.id.btn_revoke_all);
         btnMinimize = findViewById(R.id.btn_minimize);
+        btnVisionLocalTest = findViewById(R.id.btn_vision_local_test);
 
         // Avvio del servizio autonomo in foreground
         Intent serviceIntent = new Intent(this, RemoteServerService.class);
@@ -255,6 +257,14 @@ public class MainActivity extends Activity {
                     updateUI();
                     Toast.makeText(MainActivity.this, "Tutte le sessioni smartphone sono state revocate", Toast.LENGTH_SHORT).show();
                 }
+            }
+        });
+
+        // A2 local vision diagnostic is launched exclusively by a physical
+        // TV UI click. It cannot be triggered by the LAN remote.
+        btnVisionLocalTest.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, LocalVisualCaptureActivity.class));
             }
         });
 

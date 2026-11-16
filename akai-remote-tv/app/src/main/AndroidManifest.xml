@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="it.akai.customremote">
+    package="it.akai.customremote"
+    android:versionCode="3"
+    android:versionName="1.2.0-a2-preview">
 
     <!-- Explicit SDK and Screen Support: Guarantees full native 1080p display (no compat scaling) -->
     <uses-sdk
@@ -47,6 +49,12 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Optional on-device one-shot screen capture; never remotely exported. -->
+        <activity
+            android:name=".LocalVisualCaptureActivity"
+            android:exported="false"
+            android:excludeFromRecents="true" />
 
         <!-- Internal Protected PIN Display Activity (exported=false to prevent third-party spoofing) -->
         <activity
