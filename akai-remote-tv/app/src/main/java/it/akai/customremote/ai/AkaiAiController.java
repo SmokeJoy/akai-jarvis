@@ -914,18 +914,24 @@ public class AkaiAiController {
 
                 // Caso A: Domanda puramente conversazionale -> 0 azioni hardware richieste
                 if (planRes.actions == null || planRes.actions.length() == 0) {
-                    Log.i(TAG, "Conversational dialog response received (content redacted)");
+                    // A cloud model cannot claim to have changed the TV by
+                    // returning a reassuring sentence with zero actions.
+                    final boolean actionRequested = GoalEvidenceVerifier.looksActionable(query);
+                    Log.i(TAG, actionRequested
+                            ? "Action request returned a dialog-only plan; refusing fake completion."
+                            : "Conversational dialog response received (content redacted)");
                     memoryEngine.incrementStat("cloud_ai_calls", 1);
                     memoryEngine.incrementStat("prompt_tokens", promptTokens);
                     memoryEngine.incrementStat("completion_tokens", compTokens);
 
                     try {
-                        result.put("success", true);
+                        result.put("success", !actionRequested);
                         result.put("source", provider);
                         result.put("tokens", totalTokens);
                         result.put("cost_eur", costEur);
                         result.put("verified", false);
-                        result.put("execution_outcome", OUTCOME_NOT_TESTED);
+                        result.put("execution_outcome", actionRequested ? OUTCOME_FAILED : OUTCOME_NOT_TESTED);
+                        result.put("verification_reason", actionRequested ? "NO_ACTION_PLAN" : "DIALOG_ONLY");
                         result.put("cloud_calls", cloudCalls);
                         result.put("snapshot_count", snapshotCount);
                         result.put("execution_mode", getExecutionMode());
@@ -934,7 +940,12 @@ public class AkaiAiController {
                         result.put("actions_count", 0);
                     } catch (Exception ignored) {}
 
-                    return completeAndSpeak(result, query, planReply, "ANSWERED_DIALOG", "dialog", totalTokens, costEur, speak, startTime);
+                    String safeReply = actionRequested
+                            ? "Non ho eseguito il compito: il modello ha restituito una risposta senza alcuna azione verificabile."
+                            : planReply;
+                    return completeAndSpeak(result, query, safeReply,
+                            actionRequested ? "NO_ACTION_PLAN" : "ANSWERED_DIALOG",
+                            "dialog", totalTokens, costEur, speak, startTime);
                 }
 
                 // Caso B: Richiesta operativa TV con sequenza azioni validata
