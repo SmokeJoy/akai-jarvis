@@ -56,6 +56,33 @@ public final class GoalEvidenceVerifier {
         return new Verdict(true, kind, reason);
     }
 
+    /**
+     * Enforce the final request on top of the LLM-proposed condition.
+     * A compound request cannot be considered complete merely because the
+     * first application launched; that is only an intermediate state.
+     */
+    public static Verdict verify(String goal, String successCondition,
+                                 ScreenPerceptionEngine.PerceptionSnapshot snapshot) {
+        Verdict observed = verify(goal, snapshot);
+        if (!observed.satisfied) return observed;
+        String q = normalize(goal);
+        boolean compound = has(q, "poi") || (has(q, " e ")
+                && (has(q, "apri") || has(q, "avvia") || has(q, "vai su")));
+        if (compound && successCondition != null) {
+            try {
+                org.json.JSONObject condition = new org.json.JSONObject(successCondition);
+                String type = condition.optString("type", "");
+                if ("pkg_is".equals(type) || "pkg_any_of".equals(type)
+                        || "any_of_pkgs".equals(type)) {
+                    return denied("multi_step", "L'apertura dell'app e' soltanto uno step intermedio del compito");
+                }
+            } catch (Exception e) {
+                return denied("multi_step", "Condizione finale malformata");
+            }
+        }
+        return observed;
+    }
+
     public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot) {
         if (snapshot == null || snapshot.hasSensitiveFields) {
             return denied("unknown", "Schermata non osservabile o protetta");
