@@ -363,7 +363,7 @@ public class LocalIntentParser {
                 String initState = proc.optString("initial_state", null);
                 int successes = proc.optInt("success_count", 1);
 
-                Log.i(TAG, "Procedural memory matched dynamically from SQLite: " + intentKey + " (" + successes + " previous successes)");
+                Log.i(TAG, "Procedural memory matched (key redacted; success_count=" + successes + ")");
 
                 return new ParsedIntent(true, intentKey, desc, actions,
                         "Esecuzione procedura memorizzata: " + desc, "procedural_memory", succCond, initState);
