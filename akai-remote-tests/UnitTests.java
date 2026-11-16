@@ -2499,7 +2499,9 @@ public class UnitTests {
             JSONObject r4c = ctrl37.processQuery("sequenza p1 launch wait click ok", false);
             boolean sc4cOk = r4c.optBoolean("success") && "STATE_VERIFIED".equals(r4c.optString("execution_outcome")) &&
                     clickTextInvoked37.get() && r4c.optInt("snapshot_count", 0) >= 3 &&
-                    r4c.optLong("wait_elapsed_ms", 9999L) < 500L;
+                    r4c.optLong("wait_elapsed_ms", 9999L) < 500L &&
+                    // Planner omitted learn_procedure: do not persist this skill.
+                    mem37.getSavedProceduresCount() == 2;
 
             // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
             ctrlScenario[0] = "CANCEL_MULTI";
