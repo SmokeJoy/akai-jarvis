@@ -2343,9 +2343,10 @@ public class UnitTests {
             AkaiAiController ctrl37 = AkaiAiController.createForTest(ctx37, new TvController(), mem37, adapter37, bridge);
             ctrlHolder[0] = ctrl37;
 
-            // Scenario 1a: fast-path "apri YouTube" (0 tokens, 0 HTTP)
+            // Scenario 1a: app launch is STATE_VERIFIED only after observable foreground transition.
             snapQueue.clear();
             snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.emptyList(), Collections.emptyList(), null, false, false, false));
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("com.google.android.youtube.tv", Collections.singletonList("YouTube"), Collections.emptyList(), null, false, false, false));
             JSONObject r1a = ctrl37.processQuery("apri YouTube", false);
             boolean sc1aOk = r1a.optBoolean("success") && r1a.optInt("tokens", -1) == 0 &&
                     "STATE_VERIFIED".equals(r1a.optString("execution_outcome")) && ctrlHttpCalls.get() == 0;
@@ -2940,9 +2941,13 @@ public class UnitTests {
             int cloudCallsBeforeP2 = e2eCloudCalls.get();
             MockHttpResponse rKnownAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"alza il volume\"}", "192.168.1.55", true);
 
-            boolean part2Ok = (rKnownAi.statusCode == 200) &&
+            // A volume key dispatch has no observed volume readback.
+            // HTTP 400 / COMMAND_SENT is truthful; 0 tokens and 0 cloud calls.
+            boolean part2Ok = (rKnownAi.statusCode == 400) &&
                               rKnownAi.json != null &&
-                              rKnownAi.json.optBoolean("success") &&
+                              !rKnownAi.json.optBoolean("success") &&
+                              "COMMAND_SENT".equals(rKnownAi.json.optString("execution_outcome")) &&
+                              "COMPLETED_UNVERIFIED".equals(rKnownAi.json.optString("status")) &&
                               rKnownAi.json.optInt("tokens", -1) == 0 &&
                               rKnownAi.json.optInt("cloud_calls", -1) == 0 &&
                               rKnownAi.json.optString("source", "").contains("local") &&
