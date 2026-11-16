@@ -2,18 +2,38 @@
 <resources>
     <string name="app_name">AKAI Custom Home</string>
     <string name="brand_akai">AKAI</string>
-    <string name="brand_custom_tv">CUSTOM HOME v7</string>
-    <string name="section_inputs">INGRESSI HARDWARE</string>
-    <string name="section_favorites">APP PREFERITE</string>
-    <string name="section_all_apps">TUTTE LE APPLICAZIONI</string>
-    <string name="src_dtv">📺 TV Digitale</string>
-    <string name="src_hdmi1">🎮 Fire TV (HDMI 1)</string>
-    <string name="src_hdmi2">🎬 HDMI 2</string>
-    <string name="src_hdmi3">💻 HDMI 3</string>
-    <string name="src_all">🔌 Menu Ingressi</string>
+    <string name="brand_custom_tv">CUSTOM HOME v8</string>
+    <string name="section_inputs">Ingressi Hardware</string>
+    <string name="section_favorites">App Preferite</string>
+    <string name="section_streaming">Streaming &amp; Cinema</string>
+    <string name="section_all_apps">Tutte le Applicazioni</string>
+
+    <!-- Sidebar Labels -->
+    <string name="sidebar_home">Home</string>
+    <string name="sidebar_movies">Film &amp; Serie</string>
+    <string name="sidebar_apps">App</string>
+    <string name="sidebar_livetv">Live TV</string>
+    <string name="sidebar_settings">Impostazioni</string>
+
+    <!-- Hardware Source Labels -->
+    <string name="src_dtv">📺  TV Digitale</string>
+    <string name="src_hdmi1">🔥  Fire TV (HDMI 1)</string>
+    <string name="src_hdmi2">🔌  HDMI 2</string>
+    <string name="src_hdmi3">💻  HDMI 3</string>
+    <string name="src_all">⇄  Menu Ingressi</string>
+
+    <!-- Top Bar Controls -->
+    <string name="btn_wifi">📶 Wi-Fi Connesso</string>
     <string name="btn_remote">📱 Associa iPhone</string>
     <string name="btn_theme">🎨 Tema</string>
-    <string name="btn_settings">⚙️ Impostazioni TV</string>
+    <string name="btn_settings">🖥️ Impostazioni TV</string>
     <string name="btn_edit_favs">✏️ Riordina</string>
-    <string name="hint_fav_help">Tieni premuto OK su un\'app per riordinarla o rimuoverla</string>
+
+    <string name="hint_fav_help">(Tieni premuto OK per riordinare o rimuovere)</string>
+    <string name="hint_streaming_help">(Tieni premuto OK per gestire preferiti)</string>
+    <string name="hint_all_apps_help">(Tieni premuto OK per aggiungere ai preferiti)</string>
+
+    <!-- Accessibility Service Strings -->
+    <string name="accessibility_service_label">AKAI Tasto MENU Home</string>
+    <string name="accessibility_service_description">Consente di utilizzare il tasto MENU del telecomando originale per tornare alla Home da qualsiasi app di streaming. Mantiene inalterati i menu nativi della TV digitale.</string>
 </resources>

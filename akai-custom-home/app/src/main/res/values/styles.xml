@@ -1,10 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.AkaiCustomHome" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
-        <item name="android:windowBackground">@color/bg_main</item>
+        <item name="android:windowBackground">@drawable/bg_cinematic_gradient</item>
         <item name="android:colorBackground">@color/bg_main</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowContentOverlay">@null</item>
+        <item name="android:alertDialogTheme">@style/Theme.Akai.Dialog</item>
+    </style>
+
+    <!-- Sleek Dark Glassmorphic Dialog Theme (Eliminates default gray Android menus) -->
+    <style name="Theme.Akai.Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/dialog_dark_glass_bg</item>
+        <item name="android:colorBackground">@color/bg_surface</item>
+        <item name="android:textColorPrimary">@color/text_white</item>
+        <item name="android:textColorSecondary">@color/text_gray</item>
+        <item name="android:colorAccent">@color/focus_gold</item>
     </style>
 </resources>

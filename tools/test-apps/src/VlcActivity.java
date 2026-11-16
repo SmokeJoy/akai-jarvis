@@ -1,0 +1,1 @@
+package test.tv.streaming; import android.app.Activity; public class VlcActivity extends Activity {}

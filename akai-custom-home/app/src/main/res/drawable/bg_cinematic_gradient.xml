@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Base Deep Obsidian / Dark Navy -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:startColor="#070B16"
+                android:centerColor="#0A1020"
+                android:endColor="#110C14"
+                android:type="linear" />
+        </shape>
+    </item>
+
+    <!-- Top-right subtle warm amber glow wave -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="520dp"
+                android:centerX="0.88"
+                android:centerY="0.12"
+                android:startColor="#38B44210"
+                android:centerColor="#1A6E230B"
+                android:endColor="#00070B16" />
+        </shape>
+    </item>
+
+    <!-- Bottom-left/right subtle cinematic bronze halo -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="560dp"
+                android:centerX="0.72"
+                android:centerY="0.95"
+                android:startColor="#30C2410C"
+                android:centerColor="#147C2D12"
+                android:endColor="#00070B16" />
+        </shape>
+    </item>
+</layer-list>

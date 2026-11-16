@@ -2,11 +2,14 @@ package it.akai.customhome;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
@@ -22,12 +25,12 @@ import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.AdapterView;
-import android.widget.BaseAdapter;
 import android.widget.Button;
-import android.widget.GridView;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -39,6 +42,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public class MainActivity extends Activity {
@@ -48,16 +52,33 @@ public class MainActivity extends Activity {
         public final String packageName;
         public final String activityName;
         public final Drawable icon;
+        public final Drawable banner;
+        public final int versionCode;
+        public final long lastUpdateTime;
 
         public AppItem(String label, String packageName, String activityName, Drawable icon) {
+            this(label, packageName, activityName, icon, null, 0, 0L);
+        }
+
+        public AppItem(String label, String packageName, String activityName, Drawable icon, int versionCode, long lastUpdateTime) {
+            this(label, packageName, activityName, icon, null, versionCode, lastUpdateTime);
+        }
+
+        public AppItem(String label, String packageName, String activityName, Drawable icon, Drawable banner, int versionCode, long lastUpdateTime) {
             this.label = label;
             this.packageName = packageName;
             this.activityName = activityName;
             this.icon = icon;
+            this.banner = banner;
+            this.versionCode = versionCode;
+            this.lastUpdateTime = lastUpdateTime;
         }
 
         @Override
         public int compareTo(AppItem other) {
+            if (this.label == null && other.label == null) return 0;
+            if (this.label == null) return -1;
+            if (other.label == null) return 1;
             return this.label.compareToIgnoreCase(other.label);
         }
     }
@@ -68,17 +89,23 @@ public class MainActivity extends Activity {
     private static final String KEY_THEME_BG = "theme_bg_index";
     private static final String KEY_THEME_ACCENT = "theme_accent_index";
     private static final String KEY_LAYOUT_ORDER = "theme_layout_order";
+    private static final String KEY_SHOW_SYSTEM_APPS = "pref_show_system_apps";
+    private static final String KEY_SHOW_NETWORK_DETAILS = "pref_show_network_details";
+
+    public static final int SECTION_FAVORITES = 1;
+    public static final int SECTION_STREAMING = 2;
+    public static final int SECTION_ALL_APPS = 3;
 
     // Theme Palettes
-    private static final int[] BG_COLORS = {
-        0xFF0A0B10, // 0: Midnight Dark (Originale)
+    public static final int[] BG_COLORS = {
+        0xFF0A0B10, // 0: Midnight Dark (Default)
         0xFF081225, // 1: Deep Navy Blue
         0xFF0F172A, // 2: Carbon Slate
         0xFF000000, // 3: Pure OLED Black
         0xFF18080C  // 4: Ruby Dark
     };
 
-    private static final int[] SURFACE_COLORS = {
+    public static final int[] SURFACE_COLORS = {
         0xFF141B2D,
         0xFF0F2244,
         0xFF1E293B,
@@ -86,7 +113,7 @@ public class MainActivity extends Activity {
         0xFF2D1016
     };
 
-    private static final int[] FOCUSED_SURFACE_COLORS = {
+    public static final int[] FOCUSED_SURFACE_COLORS = {
         0xFF1E3A8A,
         0xFF1E40AF,
         0xFF334155,
@@ -94,21 +121,21 @@ public class MainActivity extends Activity {
         0xFF4C1D24
     };
 
-    private static final int[] ACCENT_COLORS = {
-        0xFFF59E0B, // 0: Oro AKAI
-        0xFF00E5FF, // 1: Ciano Neon
-        0xFFE50914, // 2: Rosso AKAI
-        0xFF10B981  // 3: Smeraldo
+    public static final int[] ACCENT_COLORS = {
+        0xFFF59E0B, // 0: Oro AKAI (#F59E0B) - WCAG AAA 13.3:1
+        0xFF00E5FF, // 1: Ciano Neon (#00E5FF)
+        0xFFE50914, // 2: Rosso AKAI (#E50914)
+        0xFF10B981  // 3: Smeraldo (#10B981)
     };
 
-    private static final String[] ACCENT_NAMES = {
+    public static final String[] ACCENT_NAMES = {
         "Oro AKAI (#F59E0B)",
         "Ciano Neon (#00E5FF)",
         "Rosso AKAI (#E50914)",
         "Smeraldo (#10B981)"
     };
 
-    private static final String[] BG_NAMES = {
+    public static final String[] BG_NAMES = {
         "Midnight Dark (Default)",
         "Deep Navy Blue (Blu Notte)",
         "Carbon Slate (Ardesia Scuro)",
@@ -116,27 +143,108 @@ public class MainActivity extends Activity {
         "Ruby Dark (Rosso Notturno)"
     };
 
+    // Filtro applicazioni tecniche e diagnostiche OEM da nascondere di default
+    public static final String[] SYSTEM_FILTER_PACKAGES = {
+        "it.akai.customhome",
+        "it.akai.customremote",
+        "com.airoha.",
+        "com.cultraview.",
+        "com.mediatek.wwtv.factory",
+        "com.mediatek.TimeMeasurementAgent",
+        "com.android.traceur",
+        "com.google.android.traceur",
+        "com.mediatek.engineermode",
+        "com.mediatek.ygps",
+        "com.mediatek.factorymode",
+        "com.mstar.android.video"
+    };
+
+    public static final String[] SYSTEM_FILTER_LABELS = {
+        "a2dpsinkplayer",
+        "boot video",
+        "cultraview",
+        "factory menu",
+        "engineermode",
+        "factorymode",
+        "open_launch",
+        "system tracing",
+        "traceur"
+    };
+
+    // Keyword per identificare app di streaming e cinema
+    public static final String[] STREAMING_PACKAGE_KEYWORDS = {
+        "youtube", "netflix", "amazonvideo", "primevideo", "raiplay", "it.rai",
+        "mediaset", "disney", "spotify", "kodi", "vlc", "pluto", "dazn",
+        "timvision", "discovery", "crunchyroll", "twitch", "appletv", "paramount", "nowtv"
+    };
+
+    public static final String[] STREAMING_LABEL_KEYWORDS = {
+        "youtube", "netflix", "prime video", "raiplay", "mediaset", "infinity",
+        "disney", "spotify", "kodi", "vlc", "pluto tv", "dazn", "timvision",
+        "discovery", "crunchyroll", "twitch", "apple tv", "paramount", "now tv"
+    };
+
+    // Layout Containers
     private LinearLayout layoutMainRoot;
+    private ScrollView scrollMainBody;
+    private LinearLayout layoutSectionsContainer;
     private LinearLayout sectionInputsContainer;
     private LinearLayout sectionFavoritesContainer;
+    private LinearLayout sectionStreamingContainer;
     private LinearLayout sectionAllAppsContainer;
 
+    // Headers & Buttons
+    private TextView tvTitleInputs;
     private TextView tvTitleFavorites;
+    private TextView tvTitleStreaming;
+    private TextView tvTitleAllApps;
     private Button btnWifi;
     private Button btnFavReorder;
     private Button btnTheme;
-    private GridView gvApps;
-    private LinearLayout llFavContainer;
-    private View layoutFavHeader;
+    private Button btnHomeRemote;
+    private Button btnHomeSettings;
 
-    private List<AppItem> allApps = new ArrayList<AppItem>();
-    private List<AppItem> favoriteApps = new ArrayList<AppItem>();
-    private List<String> favoritePackages = new ArrayList<String>();
+    // Hardware input buttons
+    private Button btnDtv;
+    private Button btnHdmi1;
+    private Button btnHdmi2;
+    private Button btnHdmi3;
+    private Button btnSrcAll;
+
+    // Horizontal Row Containers
+    private LinearLayout llInputsContainer;
+    private LinearLayout llFavContainer;
+    private LinearLayout llStreamingContainer;
+    private LinearLayout llAllAppsContainer;
+
+    private View layoutFavHeader;
+    private View layoutStreamingHeader;
+    private View layoutAllAppsHeader;
+    private HorizontalScrollView scrollFavs;
+    private HorizontalScrollView scrollStreaming;
+    private HorizontalScrollView scrollAllApps;
+
+    // Sidebar navigation rail
+    private View sidebarNavHome;
+    private View sidebarNavMovies;
+    private View sidebarNavApps;
+    private View sidebarNavLiveTv;
+    private View sidebarNavSettings;
+
+    // Data lists
+    private final List<AppItem> allApps = new ArrayList<AppItem>();
+    private final List<AppItem> favoriteApps = new ArrayList<AppItem>();
+    private final List<AppItem> streamingApps = new ArrayList<AppItem>();
+    private final List<String> favoritePackages = new ArrayList<String>();
     private SharedPreferences prefs;
 
     private int currentBgIndex = 0;
     private int currentAccentIndex = 0;
     private int currentLayoutOrder = 0; // 0: Ingressi prima, 1: Preferiti prima
+    private boolean showSystemApps = false;
+    private boolean showNetworkDetails = false;
+
+    private BroadcastReceiver packageReceiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -147,18 +255,51 @@ public class MainActivity extends Activity {
         loadPreferences();
 
         layoutMainRoot = (LinearLayout) findViewById(R.id.layout_main_root);
+        scrollMainBody = (ScrollView) findViewById(R.id.scroll_main_body);
+        layoutSectionsContainer = (LinearLayout) findViewById(R.id.layout_sections_container);
+
         sectionInputsContainer = (LinearLayout) findViewById(R.id.section_inputs_container);
         sectionFavoritesContainer = (LinearLayout) findViewById(R.id.section_favorites_container);
+        sectionStreamingContainer = (LinearLayout) findViewById(R.id.section_streaming_container);
         sectionAllAppsContainer = (LinearLayout) findViewById(R.id.section_all_apps_container);
 
+        tvTitleInputs = (TextView) findViewById(R.id.tv_title_inputs);
         tvTitleFavorites = (TextView) findViewById(R.id.tv_title_favorites);
+        tvTitleStreaming = (TextView) findViewById(R.id.tv_title_streaming);
+        tvTitleAllApps = (TextView) findViewById(R.id.tv_title_all_apps);
+
         btnWifi = (Button) findViewById(R.id.btn_home_wifi);
         btnFavReorder = (Button) findViewById(R.id.btn_fav_reorder);
         btnTheme = (Button) findViewById(R.id.btn_home_theme);
-        gvApps = (GridView) findViewById(R.id.gv_apps);
-        llFavContainer = (LinearLayout) findViewById(R.id.ll_fav_container);
-        layoutFavHeader = findViewById(R.id.layout_fav_header);
+        btnHomeRemote = (Button) findViewById(R.id.btn_home_remote);
+        btnHomeSettings = (Button) findViewById(R.id.btn_home_settings);
 
+        btnDtv = (Button) findViewById(R.id.btn_src_dtv);
+        btnHdmi1 = (Button) findViewById(R.id.btn_src_hdmi1);
+        btnHdmi2 = (Button) findViewById(R.id.btn_src_hdmi2);
+        btnHdmi3 = (Button) findViewById(R.id.btn_src_hdmi3);
+        btnSrcAll = (Button) findViewById(R.id.btn_src_all);
+
+        llInputsContainer = (LinearLayout) findViewById(R.id.ll_inputs_container);
+        llFavContainer = (LinearLayout) findViewById(R.id.ll_fav_container);
+        llStreamingContainer = (LinearLayout) findViewById(R.id.ll_streaming_container);
+        llAllAppsContainer = (LinearLayout) findViewById(R.id.ll_all_apps_container);
+
+        layoutFavHeader = findViewById(R.id.layout_fav_header);
+        layoutStreamingHeader = findViewById(R.id.layout_streaming_header);
+        layoutAllAppsHeader = findViewById(R.id.layout_all_apps_header);
+
+        scrollFavs = (HorizontalScrollView) findViewById(R.id.scroll_favs);
+        scrollStreaming = (HorizontalScrollView) findViewById(R.id.scroll_streaming);
+        scrollAllApps = (HorizontalScrollView) findViewById(R.id.scroll_all_apps);
+
+        sidebarNavHome = findViewById(R.id.sidebar_nav_home);
+        sidebarNavMovies = findViewById(R.id.sidebar_nav_movies);
+        sidebarNavApps = findViewById(R.id.sidebar_nav_apps);
+        sidebarNavLiveTv = findViewById(R.id.sidebar_nav_livetv);
+        sidebarNavSettings = findViewById(R.id.sidebar_nav_settings);
+
+        setupSidebarNavigation();
         setupTopBar();
         setupHardwareInputs();
         loadInstalledApps();
@@ -168,12 +309,60 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        registerPackageReceiver();
         updateWifiStatus();
+        loadInstalledApps();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        unregisterPackageReceiver();
     }
 
     @Override
     public void onBackPressed() {
-        Toast.makeText(this, "Premi HOME sul telecomando per tornare a LTvLauncher", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Premi HOME sul telecomando per la schermata principale", Toast.LENGTH_SHORT).show();
+    }
+
+    private void registerPackageReceiver() {
+        if (packageReceiver != null) return;
+        packageReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null) return;
+                String action = intent.getAction();
+                if (Intent.ACTION_PACKAGE_REMOVED.equals(action)) {
+                    boolean replacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false);
+                    if (!replacing && intent.getData() != null) {
+                        String uninstalledPkg = intent.getData().getSchemeSpecificPart();
+                        if (uninstalledPkg != null && favoritePackages.contains(uninstalledPkg)) {
+                            favoritePackages.remove(uninstalledPkg);
+                            saveFavoritePreferences();
+                        }
+                    }
+                }
+                boolean forceRefresh = Intent.ACTION_PACKAGE_REPLACED.equals(action);
+                loadInstalledApps(forceRefresh);
+            }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_PACKAGE_ADDED);
+        filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        filter.addAction(Intent.ACTION_PACKAGE_REPLACED);
+        filter.addDataScheme("package");
+        try {
+            registerReceiver(packageReceiver, filter);
+        } catch (Exception ignored) {}
+    }
+
+    private void unregisterPackageReceiver() {
+        if (packageReceiver != null) {
+            try {
+                unregisterReceiver(packageReceiver);
+            } catch (Exception ignored) {}
+            packageReceiver = null;
+        }
     }
 
     private void loadPreferences() {
@@ -184,39 +373,34 @@ public class MainActivity extends Activity {
         if (currentAccentIndex < 0 || currentAccentIndex >= ACCENT_COLORS.length) currentAccentIndex = 0;
 
         currentLayoutOrder = prefs.getInt(KEY_LAYOUT_ORDER, 0);
+        showSystemApps = prefs.getBoolean(KEY_SHOW_SYSTEM_APPS, false);
+        showNetworkDetails = prefs.getBoolean(KEY_SHOW_NETWORK_DETAILS, false);
 
         favoritePackages.clear();
-        String savedOrdered = prefs.getString(KEY_FAVORITES_ORDERED, null);
-        if (savedOrdered != null && !savedOrdered.trim().isEmpty()) {
-            String[] parts = savedOrdered.split(",");
-            for (String p : parts) {
-                String trimmed = p.trim();
-                if (!trimmed.isEmpty() && !favoritePackages.contains(trimmed)) {
-                    favoritePackages.add(trimmed);
+        // Verifica la presenza esplicita della chiave: se l'utente ha svuotato i preferiti,
+        // la lista DEVE rimanere vuota e NON ripopolarsi con i default (P1 Risolto)
+        if (prefs.contains(KEY_FAVORITES_ORDERED)) {
+            String savedOrdered = prefs.getString(KEY_FAVORITES_ORDERED, "");
+            if (savedOrdered != null && !savedOrdered.trim().isEmpty()) {
+                String[] parts = savedOrdered.split(",");
+                for (String p : parts) {
+                    String trimmed = p.trim();
+                    if (!trimmed.isEmpty() && !favoritePackages.contains(trimmed)) {
+                        favoritePackages.add(trimmed);
+                    }
                 }
             }
-        } else {
+        } else if (prefs.contains(KEY_FAVORITES_LEGACY)) {
             Set<String> legacy = prefs.getStringSet(KEY_FAVORITES_LEGACY, null);
-            if (legacy != null && !legacy.isEmpty()) {
+            if (legacy != null) {
                 favoritePackages.addAll(legacy);
-            } else {
-                favoritePackages.add("com.google.android.youtube.tv");
-                favoritePackages.add("it.rainet.androidtv");
-                favoritePackages.add("com.android.vending");
-                favoritePackages.add("com.mediatek.wwtv.tvcenter");
             }
             saveFavoritePreferences();
-        }
-
-        if (!favoritePackages.contains("it.rainet.androidtv")) {
+        } else {
+            // Primo avvio assoluto: inizializza le app preferite predefinite
+            favoritePackages.add("com.google.android.youtube.tv");
             favoritePackages.add("it.rainet.androidtv");
-            saveFavoritePreferences();
-        }
-        if (!favoritePackages.contains("it.mediaset.infinitytv")) {
             favoritePackages.add("it.mediaset.infinitytv");
-            saveFavoritePreferences();
-        }
-        if (!favoritePackages.contains("com.disney.disneyplus")) {
             favoritePackages.add("com.disney.disneyplus");
             saveFavoritePreferences();
         }
@@ -234,6 +418,8 @@ public class MainActivity extends Activity {
         editor.putInt(KEY_THEME_BG, currentBgIndex);
         editor.putInt(KEY_THEME_ACCENT, currentAccentIndex);
         editor.putInt(KEY_LAYOUT_ORDER, currentLayoutOrder);
+        editor.putBoolean(KEY_SHOW_SYSTEM_APPS, showSystemApps);
+        editor.putBoolean(KEY_SHOW_NETWORK_DETAILS, showNetworkDetails);
         editor.apply();
     }
 
@@ -242,7 +428,15 @@ public class MainActivity extends Activity {
         int accent = ACCENT_COLORS[currentAccentIndex];
 
         if (layoutMainRoot != null) {
-            layoutMainRoot.setBackgroundColor(bg);
+            if (currentBgIndex == 0) {
+                try {
+                    layoutMainRoot.setBackgroundResource(R.drawable.bg_cinematic_gradient);
+                } catch (Throwable t) {
+                    layoutMainRoot.setBackgroundColor(bg);
+                }
+            } else {
+                layoutMainRoot.setBackgroundColor(bg);
+            }
         }
         if (tvTitleFavorites != null) {
             tvTitleFavorites.setTextColor(accent);
@@ -251,43 +445,76 @@ public class MainActivity extends Activity {
             btnFavReorder.setTextColor(accent);
         }
 
+        // Applica selector dinamico coerente anche agli ingressi hardware e ai pulsanti header
+        updateHeaderAndInputsSelectors();
+
         applySectionOrder(currentLayoutOrder == 1);
         updateFavoritesList();
-        if (gvApps != null && gvApps.getAdapter() != null) {
-            ((BaseAdapter) gvApps.getAdapter()).notifyDataSetChanged();
-        }
+        updateStreamingList();
+        updateAllAppsList();
+    }
+
+    private void updateHeaderAndInputsSelectors() {
+        float density = getResources().getDisplayMetrics().density;
+        StateListDrawable chipSelector = createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex],
+            FOCUSED_SURFACE_COLORS[currentBgIndex],
+            ACCENT_COLORS[currentAccentIndex],
+            (int) (12 * density),
+            3.5f * density
+        );
+
+        if (btnDtv != null) btnDtv.setBackground(chipSelector);
+        if (btnHdmi1 != null) btnHdmi1.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
+        if (btnHdmi2 != null) btnHdmi2.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
+        if (btnHdmi3 != null) btnHdmi3.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
+        if (btnSrcAll != null) btnSrcAll.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(12 * density), 3.5f * density));
+
+        // Header buttons selector (pill silhouette)
+        StateListDrawable headerSelector = createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex],
+            FOCUSED_SURFACE_COLORS[currentBgIndex],
+            ACCENT_COLORS[currentAccentIndex],
+            (int) (14 * density),
+            3.0f * density
+        );
+        if (btnWifi != null) btnWifi.setBackground(headerSelector);
+        if (btnHomeRemote != null) btnHomeRemote.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(14 * density), 3.0f * density));
+        if (btnTheme != null) btnTheme.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(14 * density), 3.0f * density));
+        if (btnHomeSettings != null) btnHomeSettings.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(14 * density), 3.0f * density));
+        if (btnFavReorder != null) btnFavReorder.setBackground(createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex], FOCUSED_SURFACE_COLORS[currentBgIndex], ACCENT_COLORS[currentAccentIndex], (int)(14 * density), 3.0f * density));
     }
 
     private void applySectionOrder(boolean favsFirst) {
-        if (layoutMainRoot == null || sectionInputsContainer == null || sectionFavoritesContainer == null) return;
-        layoutMainRoot.removeView(sectionInputsContainer);
-        layoutMainRoot.removeView(sectionFavoritesContainer);
+        if (layoutSectionsContainer == null || sectionInputsContainer == null || sectionFavoritesContainer == null) return;
+        layoutSectionsContainer.removeView(sectionInputsContainer);
+        layoutSectionsContainer.removeView(sectionFavoritesContainer);
 
         if (favsFirst) {
-            layoutMainRoot.addView(sectionFavoritesContainer, 1);
-            layoutMainRoot.addView(sectionInputsContainer, 2);
+            layoutSectionsContainer.addView(sectionFavoritesContainer, 0);
+            layoutSectionsContainer.addView(sectionInputsContainer, 1);
         } else {
-            layoutMainRoot.addView(sectionInputsContainer, 1);
-            layoutMainRoot.addView(sectionFavoritesContainer, 2);
+            layoutSectionsContainer.addView(sectionInputsContainer, 0);
+            layoutSectionsContainer.addView(sectionFavoritesContainer, 1);
         }
     }
 
-    private StateListDrawable createDynamicCardSelector() {
-        float density = getResources().getDisplayMetrics().density;
-        int cornerPx = (int) (14 * density);
-        int strokeWidthPx = (int) (3 * density);
-
-        int normalBg = SURFACE_COLORS[currentBgIndex];
-        int focusedBg = FOCUSED_SURFACE_COLORS[currentBgIndex];
-        int accent = ACCENT_COLORS[currentAccentIndex];
-
+    public StateListDrawable createDynamicSelector(int normalBg, int focusedBg, int accent, int cornerPx, float strokeWidthPx) {
         StateListDrawable sld = new StateListDrawable();
 
-        // Focused state
+        // Focused state (bordo evidente con contrasto elevato WCAG AAA)
         GradientDrawable focused = new GradientDrawable();
         focused.setColor(focusedBg);
         focused.setCornerRadius(cornerPx);
-        focused.setStroke(strokeWidthPx, accent);
+        focused.setStroke((int) strokeWidthPx, accent);
         sld.addState(new int[]{android.R.attr.state_focused}, focused);
 
         // Pressed state
@@ -300,33 +527,49 @@ public class MainActivity extends Activity {
         GradientDrawable normal = new GradientDrawable();
         normal.setColor(normalBg);
         normal.setCornerRadius(cornerPx);
-        normal.setStroke((int) (1 * density), 0xFF1E293B);
+        normal.setStroke((int) (1 * getResources().getDisplayMetrics().density), 0xFF1E293B);
         sld.addState(new int[]{}, normal);
 
         return sld;
     }
 
-    private void setupTopBar() {
-        btnWifi.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                try {
-                    startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
-                } catch (Exception e) {
-                    try {
-                        startActivity(new Intent(Settings.ACTION_SETTINGS));
-                    } catch (Exception ignored) {}
-                }
-            }
-        });
+    private StateListDrawable createDynamicCardSelector() {
+        float density = getResources().getDisplayMetrics().density;
+        return createDynamicSelector(
+            SURFACE_COLORS[currentBgIndex],
+            FOCUSED_SURFACE_COLORS[currentBgIndex],
+            ACCENT_COLORS[currentAccentIndex],
+            (int) (14 * density),
+            3.5f * density
+        );
+    }
 
-        Button btnRemote = (Button) findViewById(R.id.btn_home_remote);
-        btnRemote.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                launchRemotePairing();
-            }
-        });
+    private void setupTopBar() {
+        if (btnWifi != null) {
+            btnWifi.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
+                    } catch (Exception e) {
+                        try {
+                            startActivity(new Intent(Settings.ACTION_SETTINGS));
+                        } catch (Exception ignored) {}
+                    }
+                }
+            });
+            attachFocusScale(btnWifi, 1.05f);
+        }
+
+        if (btnHomeRemote != null) {
+            btnHomeRemote.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchRemotePairing();
+                }
+            });
+            attachFocusScale(btnHomeRemote, 1.05f);
+        }
 
         if (btnTheme != null) {
             btnTheme.setOnClickListener(new View.OnClickListener() {
@@ -335,15 +578,18 @@ public class MainActivity extends Activity {
                     showThemeDialog();
                 }
             });
+            attachFocusScale(btnTheme, 1.05f);
         }
 
-        Button btnSettings = (Button) findViewById(R.id.btn_home_settings);
-        btnSettings.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                launchSettings();
-            }
-        });
+        if (btnHomeSettings != null) {
+            btnHomeSettings.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchSettings();
+                }
+            });
+            attachFocusScale(btnHomeSettings, 1.05f);
+        }
 
         if (btnFavReorder != null) {
             btnFavReorder.setOnClickListener(new View.OnClickListener() {
@@ -352,19 +598,151 @@ public class MainActivity extends Activity {
                     showReorderAllDialog();
                 }
             });
+            attachFocusScale(btnFavReorder, 1.05f);
         }
 
         updateWifiStatus();
     }
 
+    private void setupSidebarNavigation() {
+        if (sidebarNavHome != null) {
+            attachFocusScale(sidebarNavHome, 1.12f);
+            sidebarNavHome.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (scrollMainBody != null) scrollMainBody.smoothScrollTo(0, 0);
+                    if (btnDtv != null) btnDtv.requestFocus();
+                }
+            });
+            sidebarNavHome.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (btnDtv != null) { btnDtv.requestFocus(); return true; }
+                    }
+                    return false;
+                }
+            });
+        }
+
+        if (sidebarNavMovies != null) {
+            attachFocusScale(sidebarNavMovies, 1.12f);
+            sidebarNavMovies.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (scrollMainBody != null && sectionStreamingContainer != null) {
+                        scrollMainBody.smoothScrollTo(0, sectionStreamingContainer.getTop());
+                    }
+                    if (llStreamingContainer != null && llStreamingContainer.getChildCount() > 0) {
+                        llStreamingContainer.getChildAt(0).requestFocus();
+                    }
+                }
+            });
+            sidebarNavMovies.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (llStreamingContainer != null && llStreamingContainer.getChildCount() > 0) {
+                            llStreamingContainer.getChildAt(0).requestFocus();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+        }
+
+        if (sidebarNavApps != null) {
+            attachFocusScale(sidebarNavApps, 1.12f);
+            sidebarNavApps.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (scrollMainBody != null && sectionAllAppsContainer != null) {
+                        scrollMainBody.smoothScrollTo(0, sectionAllAppsContainer.getTop());
+                    }
+                    if (llAllAppsContainer != null && llAllAppsContainer.getChildCount() > 0) {
+                        llAllAppsContainer.getChildAt(0).requestFocus();
+                    }
+                }
+            });
+            sidebarNavApps.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (llAllAppsContainer != null && llAllAppsContainer.getChildCount() > 0) {
+                            llAllAppsContainer.getChildAt(0).requestFocus();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+        }
+
+        if (sidebarNavLiveTv != null) {
+            attachFocusScale(sidebarNavLiveTv, 1.12f);
+            sidebarNavLiveTv.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchDtv();
+                }
+            });
+            sidebarNavLiveTv.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (btnDtv != null) { btnDtv.requestFocus(); return true; }
+                    }
+                    return false;
+                }
+            });
+        }
+
+        if (sidebarNavSettings != null) {
+            attachFocusScale(sidebarNavSettings, 1.12f);
+            sidebarNavSettings.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchSettings();
+                }
+            });
+            sidebarNavSettings.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (btnHomeSettings != null) { btnHomeSettings.requestFocus(); return true; }
+                    }
+                    return false;
+                }
+            });
+        }
+    }
+
+    private AlertDialog showAccessibleDialog(AlertDialog.Builder builder) {
+        final AlertDialog dialog = builder.show();
+        final ListView lv = dialog != null ? dialog.getListView() : null;
+        if (lv != null) {
+            lv.post(new Runnable() {
+                @Override
+                public void run() {
+                    lv.requestFocus();
+                    lv.setSelection(0);
+                }
+            });
+        }
+        return dialog;
+    }
+
     private void showThemeDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
-        builder.setTitle("🎨 Personalizzazione AKAI Home v7");
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
+        builder.setTitle("🎨 Personalizzazione AKAI Home v8 Leanback");
 
         String[] options = {
             "🎨 Scegli Sfondo (" + BG_NAMES[currentBgIndex] + ")",
             "✨ Colore Evidenziazione Focus (" + ACCENT_NAMES[currentAccentIndex] + ")",
             "📐 Disposizione Sezioni (" + (currentLayoutOrder == 0 ? "Ingressi prima" : "Preferiti prima") + ")",
+            "🛠️ App Tecniche OEM: " + (showSystemApps ? "Visibili" : "Nascoste (Consigliato)"),
+            "📶 Dettagli Rete: " + (showNetworkDetails ? "Visibili (SSID/IP)" : "Nascosti (Privacy)"),
             "🔄 Ripristina Impostazioni Predefinite"
         };
 
@@ -378,21 +756,34 @@ public class MainActivity extends Activity {
                 } else if (which == 2) {
                     showLayoutOrderSelectorDialog();
                 } else if (which == 3) {
+                    showSystemApps = !showSystemApps;
+                    saveThemePreferences();
+                    loadInstalledApps(true);
+                    Toast.makeText(MainActivity.this, "App tecniche: " + (showSystemApps ? "Visibili" : "Nascoste"), Toast.LENGTH_SHORT).show();
+                } else if (which == 4) {
+                    showNetworkDetails = !showNetworkDetails;
+                    saveThemePreferences();
+                    updateWifiStatus();
+                    Toast.makeText(MainActivity.this, "Dettagli rete: " + (showNetworkDetails ? "Visibili" : "Nascosti"), Toast.LENGTH_SHORT).show();
+                } else if (which == 5) {
                     currentBgIndex = 0;
                     currentAccentIndex = 0;
                     currentLayoutOrder = 0;
+                    showSystemApps = false;
+                    showNetworkDetails = false;
                     saveThemePreferences();
+                    loadInstalledApps(true);
                     applyTheme();
                     Toast.makeText(MainActivity.this, "Tema ripristinato", Toast.LENGTH_SHORT).show();
                 }
             }
         });
         builder.setNegativeButton("Chiudi", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void showBackgroundSelectorDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("🎨 Scegli Sfondo TV");
 
         builder.setSingleChoiceItems(BG_NAMES, currentBgIndex, new DialogInterface.OnClickListener() {
@@ -406,12 +797,12 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Annulla", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void showAccentSelectorDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
-        builder.setTitle("✨ Scegli Colore Evidenziazione (Focus)");
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
+        builder.setTitle("✨ Scegli Colore Evidenziazione Focus (WCAG AAA)");
 
         builder.setSingleChoiceItems(ACCENT_NAMES, currentAccentIndex, new DialogInterface.OnClickListener() {
             @Override
@@ -424,11 +815,11 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Annulla", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void showLayoutOrderSelectorDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("📐 Disposizione Sezioni Home");
 
         String[] layoutNames = {
@@ -447,7 +838,7 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Annulla", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void launchRemotePairing() {
@@ -462,7 +853,7 @@ public class MainActivity extends Activity {
                 fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(fallbackIntent);
             } catch (Exception e2) {
-                Toast.makeText(MainActivity.this, "AKAI Remote non trovato sulla TV", Toast.LENGTH_SHORT).show();
+                Toast.makeText(MainActivity.this, "AKAI Remote headless in esecuzione", Toast.LENGTH_SHORT).show();
             }
         }
     }
@@ -482,7 +873,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String getLocalIpAddress() {
+    public static String getLocalIpAddress() {
         try {
             for (Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces(); en.hasMoreElements();) {
                 NetworkInterface intf = en.nextElement();
@@ -494,14 +885,15 @@ public class MainActivity extends Activity {
                 }
             }
         } catch (Exception ignored) {}
-        return "192.168.1.8";
+        return "";
     }
 
     private void updateWifiStatus() {
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            boolean isEnabled = (wm != null && wm.isWifiEnabled());
             String ssid = "Wi-Fi";
-            if (wm != null && wm.isWifiEnabled()) {
+            if (isEnabled) {
                 WifiInfo info = wm.getConnectionInfo();
                 if (info != null && info.getSSID() != null) {
                     String cleanSsid = info.getSSID().replace("\"", "");
@@ -510,46 +902,60 @@ public class MainActivity extends Activity {
                     }
                 }
             }
+
+            if (!showNetworkDetails) {
+                // Modalità Privacy: mostra solo lo stato generale senza SSID né IP
+                if (btnWifi != null) {
+                    btnWifi.setText(isEnabled ? "📶 Wi-Fi Connesso" : "📶 Rete Disconnessa");
+                }
+                return;
+            }
+
             String ip = getLocalIpAddress();
-            btnWifi.setText("📶 " + ssid + " (" + ip + ")");
+            if (btnWifi != null) {
+                if (ip != null && !ip.isEmpty()) {
+                    btnWifi.setText("📶 " + ssid + " (" + ip + ")");
+                } else {
+                    btnWifi.setText("📶 " + ssid);
+                }
+            }
         } catch (Exception e) {
-            btnWifi.setText("📶 Rete");
+            if (btnWifi != null) btnWifi.setText("📶 Rete");
         }
     }
 
     private void setupHardwareInputs() {
-        // DTV - Digitale Terrestre
-        Button btnDtv = (Button) findViewById(R.id.btn_src_dtv);
-        btnDtv.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                launchDtv();
-            }
-        });
+        if (btnDtv != null) {
+            btnDtv.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchDtv();
+                }
+            });
+            attachFocusScale(btnDtv, 1.05f);
+            btnDtv.requestFocus();
+        }
 
-        // Request initial focus on DTV button
-        btnDtv.requestFocus();
+        if (btnHdmi1 != null) {
+            btnHdmi1.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchHdmiInput("HW6", "Fire TV (HDMI 1)");
+                }
+            });
+            attachFocusScale(btnHdmi1, 1.05f);
+        }
 
-        // HDMI 1 - Amazon Fire TV (con passthrough codificato)
-        Button btnHdmi1 = (Button) findViewById(R.id.btn_src_hdmi1);
-        btnHdmi1.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                launchHdmiInput("HW6", "Fire TV (HDMI 1)");
-            }
-        });
+        if (btnHdmi2 != null) {
+            btnHdmi2.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    launchHdmiInput("HW7", "HDMI 2");
+                }
+            });
+            attachFocusScale(btnHdmi2, 1.05f);
+        }
 
-        // HDMI 2
-        Button btnHdmi2 = (Button) findViewById(R.id.btn_src_hdmi2);
-        btnHdmi2.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                launchHdmiInput("HW7", "HDMI 2");
-            }
-        });
-
-        // HDMI 3
-        Button btnHdmi3 = (Button) findViewById(R.id.btn_src_hdmi3);
         if (btnHdmi3 != null) {
             btnHdmi3.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -557,29 +963,31 @@ public class MainActivity extends Activity {
                     launchHdmiInput("HW8", "HDMI 3");
                 }
             });
+            attachFocusScale(btnHdmi3, 1.05f);
         }
 
-        // Ingressi Completi (Drawer nativo Android TV)
-        Button btnAll = (Button) findViewById(R.id.btn_src_all);
-        btnAll.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                try {
-                    Intent intent = new Intent("com.android.tv.action.VIEW_INPUTS");
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(intent);
-                } catch (Exception e1) {
+        if (btnSrcAll != null) {
+            btnSrcAll.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
                     try {
-                        Intent intent = new Intent();
-                        intent.setComponent(new ComponentName("com.mediatek.wwtv.tvcenter", "com.mediatek.wwtv.tvcenter.nav.inputpanel.InputsPanelActivity"));
+                        Intent intent = new Intent("com.android.tv.action.VIEW_INPUTS");
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                         startActivity(intent);
-                    } catch (Exception e2) {
-                        sendBroadcast(new Intent("com.mediatek.select.source"));
+                    } catch (Exception e1) {
+                        try {
+                            Intent intent = new Intent();
+                            intent.setComponent(new ComponentName("com.mediatek.wwtv.tvcenter", "com.mediatek.wwtv.tvcenter.nav.inputpanel.InputsPanelActivity"));
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(intent);
+                        } catch (Exception e2) {
+                            sendBroadcast(new Intent("com.mediatek.select.source"));
+                        }
                     }
                 }
-            }
-        });
+            });
+            attachFocusScale(btnSrcAll, 1.05f);
+        }
     }
 
     private void launchDtv() {
@@ -623,8 +1031,627 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showFavoriteOptionsDialog(final AppItem fav, final int index) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+    public static boolean isSystemOrTechnicalApp(String pkg, String act, String label) {
+        String p = pkg != null ? pkg.toLowerCase(Locale.ROOT) : "";
+        String a = act != null ? act.toLowerCase(Locale.ROOT) : "";
+        String l = label != null ? label.toLowerCase(Locale.ROOT) : "";
+
+        for (String filterPkg : SYSTEM_FILTER_PACKAGES) {
+            if (p.equals(filterPkg.toLowerCase(Locale.ROOT)) || p.startsWith(filterPkg.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+
+        for (String filterLbl : SYSTEM_FILTER_LABELS) {
+            if (a.contains(filterLbl) || l.contains(filterLbl)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isSystemOrTechnicalApp(ResolveInfo ri, PackageManager pm) {
+        String pkg = ri.activityInfo.packageName;
+        String act = ri.activityInfo.name;
+        String label = "";
+        try {
+            CharSequence cs = ri.loadLabel(pm);
+            if (cs != null) label = cs.toString();
+        } catch (Exception ignored) {}
+        return isSystemOrTechnicalApp(pkg, act, label);
+    }
+
+    public static boolean isStreamingApp(String packageName, String label) {
+        String p = packageName != null ? packageName.toLowerCase(Locale.ROOT) : "";
+        String l = label != null ? label.toLowerCase(Locale.ROOT) : "";
+
+        for (String kw : STREAMING_PACKAGE_KEYWORDS) {
+            if (p.contains(kw)) return true;
+        }
+        for (String kw : STREAMING_LABEL_KEYWORDS) {
+            if (l.contains(kw)) return true;
+        }
+        return false;
+    }
+
+    private boolean isStreamingApp(AppItem item) {
+        return isStreamingApp(item.packageName, item.label);
+    }
+
+    public static class CardTag {
+        public final String packageName;
+        public final int sectionType;
+
+        public CardTag(String packageName, int sectionType) {
+            this.packageName = packageName;
+            this.sectionType = sectionType;
+        }
+    }
+
+    public static boolean areAppListsEqual(List<AppItem> list1, List<AppItem> list2) {
+        if (list1 == list2) return true;
+        if (list1 == null || list2 == null) return false;
+        if (list1.size() != list2.size()) return false;
+        for (int i = 0; i < list1.size(); i++) {
+            AppItem a = list1.get(i);
+            AppItem b = list2.get(i);
+            if (!areAppItemsEqual(a, b)) return false;
+        }
+        return true;
+    }
+
+    public static boolean areAppItemsEqual(AppItem a, AppItem b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (!objectsEqual(a.packageName, b.packageName)) return false;
+        if (!objectsEqual(a.activityName, b.activityName)) return false;
+        if (!objectsEqual(a.label, b.label)) return false;
+        if (a.versionCode != b.versionCode) return false;
+        if (a.lastUpdateTime != b.lastUpdateTime) return false;
+        // Chiave deterministica: package + activity + label + versionCode + lastUpdateTime.
+        // Evita rebuild spuri dovuti a identità instabili di Drawable/ConstantState restituiti da loadIcon().
+        return true;
+    }
+
+    public static boolean areIconsEqual(Drawable i1, Drawable i2) {
+        if (i1 == i2) return true;
+        if (i1 == null || i2 == null) return false;
+        Drawable.ConstantState cs1 = i1.getConstantState();
+        Drawable.ConstantState cs2 = i2.getConstantState();
+        if (cs1 != null && cs2 != null) {
+            return cs1.equals(cs2);
+        }
+        return i1.equals(i2);
+    }
+
+    public static boolean objectsEqual(Object a, Object b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        return a.equals(b);
+    }
+
+    private void restoreFocusState(final String focusedPkg, final int focusedSection, final int focusedViewId) {
+        Runnable r = new Runnable() {
+            @Override
+            public void run() {
+                performRestoreFocus(focusedPkg, focusedSection, focusedViewId);
+            }
+        };
+        if (layoutMainRoot != null) {
+            layoutMainRoot.post(r);
+        } else {
+            r.run();
+        }
+    }
+
+    private void performRestoreFocus(String focusedPkg, int focusedSection, int focusedViewId) {
+        if (focusedPkg != null) {
+            ViewGroup targetContainer = null;
+            if (focusedSection == SECTION_FAVORITES) targetContainer = llFavContainer;
+            else if (focusedSection == SECTION_STREAMING) targetContainer = llStreamingContainer;
+            else if (focusedSection == SECTION_ALL_APPS) targetContainer = llAllAppsContainer;
+
+            if (targetContainer != null) {
+                for (int i = 0; i < targetContainer.getChildCount(); i++) {
+                    View child = targetContainer.getChildAt(i);
+                    Object tag = child.getTag();
+                    if (tag instanceof CardTag) {
+                        CardTag ct = (CardTag) tag;
+                        if (focusedPkg.equals(ct.packageName)) {
+                            child.requestFocus();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if (focusedViewId != -1) {
+            View v = findViewById(focusedViewId);
+            if (v != null && v.isFocusable()) {
+                v.requestFocus();
+                return;
+            }
+        }
+        if (btnDtv != null && getCurrentFocus() == null) {
+            btnDtv.requestFocus();
+        }
+    }
+
+    private void restoreScrollPositions(final int scrollY, final int favX, final int streamX, final int allX) {
+        if (scrollMainBody != null) {
+            scrollMainBody.post(new Runnable() {
+                @Override
+                public void run() { scrollMainBody.scrollTo(0, scrollY); }
+            });
+        }
+        if (scrollFavs != null) {
+            scrollFavs.post(new Runnable() {
+                @Override
+                public void run() { scrollFavs.scrollTo(favX, 0); }
+            });
+        }
+        if (scrollStreaming != null) {
+            scrollStreaming.post(new Runnable() {
+                @Override
+                public void run() { scrollStreaming.scrollTo(streamX, 0); }
+            });
+        }
+        if (scrollAllApps != null) {
+            scrollAllApps.post(new Runnable() {
+                @Override
+                public void run() { scrollAllApps.scrollTo(allX, 0); }
+            });
+        }
+    }
+
+    public void loadInstalledApps() {
+        loadInstalledApps(false);
+    }
+
+    public void loadInstalledApps(boolean forceRefresh) {
+        PackageManager pm = getPackageManager();
+        Set<String> seen = new HashSet<String>();
+        List<AppItem> newAllApps = new ArrayList<AppItem>();
+        List<AppItem> newStreamingApps = new ArrayList<AppItem>();
+
+        // 1. Leanback Apps
+        Intent lbIntent = new Intent(Intent.ACTION_MAIN, null);
+        lbIntent.addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
+        List<ResolveInfo> lbList = pm.queryIntentActivities(lbIntent, 0);
+
+        // 2. Standard Launcher Apps
+        Intent stdIntent = new Intent(Intent.ACTION_MAIN, null);
+        stdIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> stdList = pm.queryIntentActivities(stdIntent, 0);
+
+        List<ResolveInfo> combined = new ArrayList<ResolveInfo>();
+        if (lbList != null) combined.addAll(lbList);
+        if (stdList != null) combined.addAll(stdList);
+
+        for (ResolveInfo ri : combined) {
+            String pkg = ri.activityInfo.packageName;
+            String act = ri.activityInfo.name;
+
+            // Il launcher corrente non deve mai apparire nel catalogo di avvio
+            if ("it.akai.customhome".equals(pkg)) {
+                continue;
+            }
+
+            // Filtro app tecniche e OEM di fabbrica se non abilitate esplicitamente
+            if (!showSystemApps && isSystemOrTechnicalApp(ri, pm)) {
+                continue;
+            }
+
+            if (!seen.contains(pkg)) {
+                seen.add(pkg);
+                String label = ri.loadLabel(pm).toString();
+                if (label == null || label.trim().isEmpty()) {
+                    label = pkg;
+                }
+                Drawable icon = ri.loadIcon(pm);
+                Drawable banner = null;
+                try {
+                    banner = ri.activityInfo.loadBanner(pm);
+                    if (banner == null && ri.activityInfo.applicationInfo != null) {
+                        banner = pm.getApplicationBanner(ri.activityInfo.applicationInfo);
+                    }
+                } catch (Throwable ignored) {}
+                int versionCode = 0;
+                long lastUpdateTime = 0L;
+                try {
+                    PackageInfo pi = pm.getPackageInfo(pkg, 0);
+                    if (pi != null) {
+                        versionCode = pi.versionCode;
+                        lastUpdateTime = pi.lastUpdateTime;
+                    }
+                } catch (Exception ignored) {
+                }
+                AppItem item = new AppItem(label, pkg, act, icon, banner, versionCode, lastUpdateTime);
+                newAllApps.add(item);
+                if (isStreamingApp(item)) {
+                    newStreamingApps.add(item);
+                }
+            }
+        }
+
+        Collections.sort(newAllApps);
+        Collections.sort(newStreamingApps);
+
+        // Costruzione preferiti visibili: SOLO le app attualmente visibili
+        // NOTA CRITICA P0: favoritePackages NON viene mai alterato o cancellato qui.
+        // Se un'app tecnica è salvata nei preferiti ma l'utente ha showSystemApps = false,
+        // essa rimane salvata in favoritePackages e ricompare intatta quando il filtro viene riattivato.
+        List<AppItem> newFavoriteApps = new ArrayList<AppItem>();
+        for (String favPkg : favoritePackages) {
+            for (AppItem app : newAllApps) {
+                if (app.packageName.equals(favPkg)) {
+                    newFavoriteApps.add(app);
+                    break;
+                }
+            }
+        }
+
+        // Memorizza stato di focus e scroll prima di eventuale rebuild
+        String focusedPkg = null;
+        int focusedSection = -1;
+        int focusedViewId = -1;
+        View currentFocus = getCurrentFocus();
+        if (currentFocus != null) {
+            focusedViewId = currentFocus.getId();
+            Object tag = currentFocus.getTag();
+            if (tag instanceof CardTag) {
+                CardTag ct = (CardTag) tag;
+                focusedPkg = ct.packageName;
+                focusedSection = ct.sectionType;
+            }
+        }
+        int scrollY = (scrollMainBody != null) ? scrollMainBody.getScrollY() : 0;
+        int scrollFavX = (scrollFavs != null) ? scrollFavs.getScrollX() : 0;
+        int scrollStreamX = (scrollStreaming != null) ? scrollStreaming.getScrollX() : 0;
+        int scrollAllX = (scrollAllApps != null) ? scrollAllApps.getScrollX() : 0;
+
+        boolean favsChanged = forceRefresh || !areAppListsEqual(favoriteApps, newFavoriteApps);
+        boolean streamChanged = forceRefresh || !areAppListsEqual(streamingApps, newStreamingApps);
+        boolean allAppsChanged = forceRefresh || !areAppListsEqual(allApps, newAllApps);
+
+        favoriteApps.clear();
+        favoriteApps.addAll(newFavoriteApps);
+
+        streamingApps.clear();
+        streamingApps.addAll(newStreamingApps);
+
+        allApps.clear();
+        allApps.addAll(newAllApps);
+
+        // Se le liste sono identiche, NON distrugge le View: mantiene focus e scroll al 100%!
+        if (favsChanged) {
+            updateFavoritesList();
+        }
+        if (streamChanged) {
+            updateStreamingList();
+        }
+        if (allAppsChanged) {
+            updateAllAppsList();
+        }
+
+        if (favsChanged || streamChanged || allAppsChanged) {
+            restoreScrollPositions(scrollY, scrollFavX, scrollStreamX, scrollAllX);
+            restoreFocusState(focusedPkg, focusedSection, focusedViewId);
+        }
+    }
+
+    private void attachFocusScale(final View view, final float scale) {
+        view.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (hasFocus) {
+                    v.animate().scaleX(scale).scaleY(scale).setDuration(120).start();
+                } else {
+                    v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start();
+                }
+            }
+        });
+    }
+
+    /**
+     * Gestore tasti D-Pad per le card: risolve formalmente il P0 (prevenzione doppio avvio
+     * su pressione prolungata). Traccia rigorosamente lo stato di longPressHandled e downReceived:
+     * - Consuma le ripetizioni multiple per evitare dialoghi duplicati
+     * - Ignora gli eventi ACTION_UP orfani (senza previo DOWN)
+     * - Al rilascio (ACTION_UP), se la pressione prolungata è stata consumata, l'evento viene consumato
+     *   senza lanciare l'app (ZERO lanci spuri).
+     */
+    public static class CardKeyHandler implements View.OnKeyListener {
+        private final MainActivity activity;
+        private final AppItem item;
+        private final int sectionType;
+        private final int index;
+        private boolean longPressHandled = false;
+        private boolean downReceived = false;
+
+        public CardKeyHandler(MainActivity activity, AppItem item, int sectionType, int index) {
+            this.activity = activity;
+            this.item = item;
+            this.sectionType = sectionType;
+            this.index = index;
+        }
+
+        public boolean isLongPressHandled() {
+            return longPressHandled;
+        }
+
+        public boolean isDownReceived() {
+            return downReceived;
+        }
+
+        public void reset() {
+            longPressHandled = false;
+            downReceived = false;
+        }
+
+        @Override
+        public boolean onKey(View v, int keyCode, KeyEvent event) {
+            if (keyCode != KeyEvent.KEYCODE_DPAD_CENTER && keyCode != KeyEvent.KEYCODE_ENTER) {
+                return false;
+            }
+            int action = event.getAction();
+            if (action == KeyEvent.ACTION_DOWN) {
+                downReceived = true;
+                if (event.isLongPress() || event.getRepeatCount() > 0) {
+                    if (!longPressHandled) {
+                        longPressHandled = true;
+                        Runnable openDialogTask = new Runnable() {
+                            @Override
+                            public void run() {
+                                if (sectionType == SECTION_FAVORITES) {
+                                    activity.showFavoriteOptionsDialog(item, index);
+                                } else {
+                                    activity.showAppOptionsDialog(item);
+                                }
+                            }
+                        };
+                        if (v != null) {
+                            v.postDelayed(openDialogTask, 80L);
+                        } else {
+                            openDialogTask.run();
+                        }
+                    }
+                    // Consuma tutti i repeat successivi per evitare aperture multiple del dialogo
+                    return true;
+                }
+                event.startTracking();
+                return true;
+            } else if (action == KeyEvent.ACTION_UP) {
+                if (!downReceived) {
+                    // UP orfano (senza previo DOWN su questa card): ignora completamente
+                    reset();
+                    return true;
+                }
+                if (longPressHandled) {
+                    // Consuma il rilascio dopo long press: ZERO lanci dell'app!
+                    reset();
+                    return true;
+                }
+                reset();
+                if (!event.isCanceled()) {
+                    activity.launchApp(item);
+                    return true;
+                }
+                return true;
+            }
+            return false;
+        }
+    }
+
+    private View createCardView(ViewGroup parent, final AppItem item, final int sectionType, final int index) {
+        LayoutInflater inflater = LayoutInflater.from(this);
+        View card = inflater.inflate(R.layout.item_leanback_card, parent, false);
+        card.setBackground(createDynamicCardSelector());
+        card.setTag(new CardTag(item.packageName, sectionType));
+        card.setContentDescription(item.label);
+
+        float density = getResources().getDisplayMetrics().density;
+        ViewGroup.LayoutParams lp = card.getLayoutParams();
+        if (lp != null) {
+            if (sectionType == SECTION_STREAMING) {
+                lp.width = (int) (168 * density);
+                lp.height = (int) (92 * density);
+            } else {
+                lp.width = (int) (136 * density);
+                lp.height = (int) (68 * density);
+            }
+            card.setLayoutParams(lp);
+        }
+
+        if (index == 0) {
+            if (sectionType == SECTION_STREAMING) {
+                card.setNextFocusLeftId(R.id.sidebar_nav_movies);
+            } else if (sectionType == SECTION_ALL_APPS) {
+                card.setNextFocusLeftId(R.id.sidebar_nav_apps);
+            } else {
+                card.setNextFocusLeftId(R.id.sidebar_nav_home);
+            }
+        }
+
+        ImageView ivBanner = (ImageView) card.findViewById(R.id.iv_card_banner);
+        View layoutIconMode = card.findViewById(R.id.layout_card_icon_mode);
+        ImageView iv = (ImageView) card.findViewById(R.id.iv_card_icon);
+        TextView tv = (TextView) card.findViewById(R.id.tv_card_label);
+
+        if (item.banner != null && ivBanner != null && layoutIconMode != null) {
+            ivBanner.setImageDrawable(item.banner);
+            ivBanner.setVisibility(View.VISIBLE);
+            try { ivBanner.setClipToOutline(true); } catch (Throwable ignored) {}
+            layoutIconMode.setVisibility(View.GONE);
+        } else {
+            if (ivBanner != null) ivBanner.setVisibility(View.GONE);
+            if (layoutIconMode != null) {
+                layoutIconMode.setVisibility(View.VISIBLE);
+                try { layoutIconMode.setClipToOutline(true); } catch (Throwable ignored) {}
+            }
+            if (iv != null) iv.setImageDrawable(item.icon);
+            if (tv != null) tv.setText(item.label);
+        }
+
+        final CardKeyHandler keyHandler = new CardKeyHandler(this, item, sectionType, index);
+        card.setOnKeyListener(keyHandler);
+
+        card.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (hasFocus) {
+                    v.animate().scaleX(1.045f).scaleY(1.045f).setDuration(120).start();
+                } else {
+                    v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start();
+                    keyHandler.reset(); // reset deterministico su perdita focus
+                }
+            }
+        });
+
+        // Click standard per touch / mouse
+        card.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                launchApp(item);
+            }
+        });
+
+        // Long click standard per touch / mouse
+        card.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                if (sectionType == SECTION_FAVORITES) {
+                    showFavoriteOptionsDialog(item, index);
+                } else {
+                    showAppOptionsDialog(item);
+                }
+                return true;
+            }
+        });
+
+        return card;
+    }
+
+    private void updateFavoritesList() {
+        favoriteApps.clear();
+        for (String pkg : favoritePackages) {
+            for (AppItem app : allApps) {
+                if (app.packageName.equals(pkg)) {
+                    favoriteApps.add(app);
+                    break;
+                }
+            }
+        }
+
+        if (llFavContainer == null) return;
+        llFavContainer.removeAllViews();
+
+        if (favoriteApps.isEmpty()) {
+            if (layoutFavHeader != null) layoutFavHeader.setVisibility(View.GONE);
+            if (scrollFavs != null) scrollFavs.setVisibility(View.GONE);
+            return;
+        }
+
+        if (layoutFavHeader != null) layoutFavHeader.setVisibility(View.VISIBLE);
+        if (scrollFavs != null) scrollFavs.setVisibility(View.VISIBLE);
+
+        for (int i = 0; i < favoriteApps.size(); i++) {
+            AppItem fav = favoriteApps.get(i);
+            View card = createCardView(llFavContainer, fav, SECTION_FAVORITES, i);
+            llFavContainer.addView(card);
+        }
+    }
+
+    private void updateStreamingList() {
+        if (llStreamingContainer == null) return;
+        llStreamingContainer.removeAllViews();
+
+        if (streamingApps.isEmpty()) {
+            if (layoutStreamingHeader != null) layoutStreamingHeader.setVisibility(View.GONE);
+            if (scrollStreaming != null) scrollStreaming.setVisibility(View.GONE);
+            return;
+        }
+
+        if (layoutStreamingHeader != null) layoutStreamingHeader.setVisibility(View.VISIBLE);
+        if (scrollStreaming != null) scrollStreaming.setVisibility(View.VISIBLE);
+
+        for (int i = 0; i < streamingApps.size(); i++) {
+            AppItem item = streamingApps.get(i);
+            View card = createCardView(llStreamingContainer, item, SECTION_STREAMING, i);
+            llStreamingContainer.addView(card);
+        }
+    }
+
+    private void updateAllAppsList() {
+        if (llAllAppsContainer == null) return;
+        llAllAppsContainer.removeAllViews();
+
+        if (allApps.isEmpty()) {
+            if (layoutAllAppsHeader != null) layoutAllAppsHeader.setVisibility(View.GONE);
+            if (scrollAllApps != null) scrollAllApps.setVisibility(View.GONE);
+            return;
+        }
+
+        if (layoutAllAppsHeader != null) layoutAllAppsHeader.setVisibility(View.VISIBLE);
+        if (scrollAllApps != null) scrollAllApps.setVisibility(View.VISIBLE);
+
+        for (int i = 0; i < allApps.size(); i++) {
+            AppItem item = allApps.get(i);
+            View card = createCardView(llAllAppsContainer, item, SECTION_ALL_APPS, i);
+            llAllAppsContainer.addView(card);
+        }
+    }
+
+    public void launchApp(AppItem item) {
+        try {
+            PackageManager pm = getPackageManager();
+            Intent intent = pm.getLeanbackLaunchIntentForPackage(item.packageName);
+            if (intent == null) {
+                intent = pm.getLaunchIntentForPackage(item.packageName);
+            }
+            if (intent == null && item.activityName != null && !item.activityName.isEmpty()) {
+                intent = new Intent(Intent.ACTION_MAIN);
+                intent.setComponent(new ComponentName(item.packageName, item.activityName));
+            }
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            } else {
+                Toast.makeText(this, "Impossibile aprire " + item.label, Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Errore: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    public boolean moveVisibleFavorite(String targetPkg, boolean moveRight) {
+        if (targetPkg == null) return false;
+        int visibleIndex = -1;
+        for (int i = 0; i < favoriteApps.size(); i++) {
+            if (targetPkg.equals(favoriteApps.get(i).packageName)) {
+                visibleIndex = i;
+                break;
+            }
+        }
+        if (visibleIndex == -1) return false;
+        int targetVisibleIndex = moveRight ? visibleIndex + 1 : visibleIndex - 1;
+        if (targetVisibleIndex < 0 || targetVisibleIndex >= favoriteApps.size()) {
+            return false;
+        }
+        String swapWithPkg = favoriteApps.get(targetVisibleIndex).packageName;
+        int pIdx1 = favoritePackages.indexOf(targetPkg);
+        int pIdx2 = favoritePackages.indexOf(swapWithPkg);
+        if (pIdx1 != -1 && pIdx2 != -1) {
+            Collections.swap(favoritePackages, pIdx1, pIdx2);
+            saveFavoritePreferences();
+            updateFavoritesList();
+            return true;
+        }
+        return false;
+    }
+
+    public void showFavoriteOptionsDialog(final AppItem fav, final int index) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle(fav.label + " (Preferiti)");
 
         List<String> options = new ArrayList<String>();
@@ -634,7 +1661,7 @@ public class MainActivity extends Activity {
             options.add("⬅️ Sposta a sinistra");
             actions.add(1);
         }
-        if (index < favoritePackages.size() - 1) {
+        if (index < favoriteApps.size() - 1) {
             options.add("➡️ Sposta a destra");
             actions.add(2);
         }
@@ -649,14 +1676,10 @@ public class MainActivity extends Activity {
             public void onClick(DialogInterface dialog, int which) {
                 int action = actions.get(which);
                 if (action == 1) {
-                    Collections.swap(favoritePackages, index, index - 1);
-                    saveFavoritePreferences();
-                    updateFavoritesList();
+                    moveVisibleFavorite(fav.packageName, false);
                     Toast.makeText(MainActivity.this, fav.label + " spostato a sinistra", Toast.LENGTH_SHORT).show();
                 } else if (action == 2) {
-                    Collections.swap(favoritePackages, index, index + 1);
-                    saveFavoritePreferences();
-                    updateFavoritesList();
+                    moveVisibleFavorite(fav.packageName, true);
                     Toast.makeText(MainActivity.this, fav.label + " spostato a destra", Toast.LENGTH_SHORT).show();
                 } else if (action == 3) {
                     favoritePackages.remove(fav.packageName);
@@ -675,11 +1698,11 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Chiudi", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
-    private void showAppOptionsDialog(final AppItem item) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+    public void showAppOptionsDialog(final AppItem item) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle(item.label);
 
         final boolean isFav = favoritePackages.contains(item.packageName);
@@ -717,7 +1740,7 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Chiudi", null);
-        builder.show();
+        showAccessibleDialog(builder);
     }
 
     private void showReorderAllDialog() {
@@ -731,7 +1754,7 @@ public class MainActivity extends Activity {
             names.add((i + 1) + ". " + favoriteApps.get(i).label);
         }
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.Theme_Akai_Dialog);
         builder.setTitle("Seleziona app da riordinare");
         builder.setItems(names.toArray(new CharSequence[names.size()]), new DialogInterface.OnClickListener() {
             @Override
@@ -742,236 +1765,6 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton("Chiudi", null);
-        builder.show();
-    }
-
-    private void loadInstalledApps() {
-        PackageManager pm = getPackageManager();
-        Set<String> seen = new HashSet<String>();
-        allApps.clear();
-
-        // 1. Leanback Apps
-        Intent lbIntent = new Intent(Intent.ACTION_MAIN, null);
-        lbIntent.addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        List<ResolveInfo> lbList = pm.queryIntentActivities(lbIntent, 0);
-
-        // 2. Standard Launcher Apps
-        Intent stdIntent = new Intent(Intent.ACTION_MAIN, null);
-        stdIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-        List<ResolveInfo> stdList = pm.queryIntentActivities(stdIntent, 0);
-
-        List<ResolveInfo> combined = new ArrayList<ResolveInfo>();
-        if (lbList != null) combined.addAll(lbList);
-        if (stdList != null) combined.addAll(stdList);
-
-        for (ResolveInfo ri : combined) {
-            String pkg = ri.activityInfo.packageName;
-            String act = ri.activityInfo.name;
-
-            // Skip OEM internal factory / diagnostic packages
-            if (pkg.equals("it.akai.customhome") ||
-                pkg.equals("it.akai.customremote") ||
-                pkg.startsWith("com.airoha.") ||
-                pkg.startsWith("com.cultraview.") ||
-                pkg.equals("com.mediatek.TimeMeasurementAgent") ||
-                pkg.equals("com.android.traceur") ||
-                pkg.equals("com.mediatek.wwtv.factory")) {
-                continue;
-            }
-
-            if (!seen.contains(pkg)) {
-                seen.add(pkg);
-                String label = ri.loadLabel(pm).toString();
-                if (label == null || label.trim().isEmpty()) {
-                    label = pkg;
-                }
-                Drawable icon = ri.loadIcon(pm);
-                allApps.add(new AppItem(label, pkg, act, icon));
-            }
-        }
-
-        Collections.sort(allApps);
-
-        updateFavoritesList();
-
-        gvApps.setAdapter(new AllAppsAdapter());
-        gvApps.setOnItemClickListener(new AdapterView.OnItemClickListener() {
-            @Override
-            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-                AppItem item = allApps.get(position);
-                launchApp(item);
-            }
-        });
-
-        gvApps.setOnKeyListener(new View.OnKeyListener() {
-            @Override
-            public boolean onKey(View v, int keyCode, KeyEvent event) {
-                if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                    int pos = gvApps.getSelectedItemPosition();
-                    if (pos >= 0 && pos < allApps.size()) {
-                        final AppItem item = allApps.get(pos);
-                        if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                            if (event.getRepeatCount() == 0) {
-                                event.startTracking();
-                                return true;
-                            } else if (event.isLongPress()) {
-                                showAppOptionsDialog(item);
-                                return true;
-                            }
-                        } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                            if (!event.isCanceled()) {
-                                launchApp(item);
-                                return true;
-                            }
-                        }
-                    }
-                }
-                return false;
-            }
-        });
-
-        gvApps.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
-            @Override
-            public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
-                AppItem item = allApps.get(position);
-                showAppOptionsDialog(item);
-                return true;
-            }
-        });
-    }
-
-    private void updateFavoritesList() {
-        favoriteApps.clear();
-        for (String pkg : favoritePackages) {
-            for (AppItem app : allApps) {
-                if (app.packageName.equals(pkg)) {
-                    favoriteApps.add(app);
-                    break;
-                }
-            }
-        }
-
-        llFavContainer.removeAllViews();
-        if (favoriteApps.isEmpty()) {
-            layoutFavHeader.setVisibility(View.GONE);
-            llFavContainer.setVisibility(View.GONE);
-            return;
-        }
-
-        layoutFavHeader.setVisibility(View.VISIBLE);
-        llFavContainer.setVisibility(View.VISIBLE);
-
-        LayoutInflater inflater = LayoutInflater.from(this);
-        for (int i = 0; i < favoriteApps.size(); i++) {
-            final int index = i;
-            final AppItem fav = favoriteApps.get(i);
-            View card = inflater.inflate(R.layout.item_fav_card, llFavContainer, false);
-
-            card.setBackground(createDynamicCardSelector());
-
-            ImageView iv = (ImageView) card.findViewById(R.id.iv_fav_icon);
-            TextView tv = (TextView) card.findViewById(R.id.tv_fav_label);
-
-            iv.setImageDrawable(fav.icon);
-            tv.setText(fav.label);
-
-            card.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    launchApp(fav);
-                }
-            });
-
-            card.setOnKeyListener(new View.OnKeyListener() {
-                @Override
-                public boolean onKey(View v, int keyCode, KeyEvent event) {
-                    if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                        if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                            if (event.getRepeatCount() == 0) {
-                                event.startTracking();
-                                return true;
-                            } else if (event.isLongPress()) {
-                                showFavoriteOptionsDialog(fav, index);
-                                return true;
-                            }
-                        } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                            if (!event.isCanceled()) {
-                                launchApp(fav);
-                                return true;
-                            }
-                        }
-                    }
-                    return false;
-                }
-            });
-
-            card.setOnLongClickListener(new View.OnLongClickListener() {
-                @Override
-                public boolean onLongClick(View v) {
-                    showFavoriteOptionsDialog(fav, index);
-                    return true;
-                }
-            });
-
-            llFavContainer.addView(card);
-        }
-    }
-
-    private void launchApp(AppItem item) {
-        try {
-            PackageManager pm = getPackageManager();
-            Intent intent = pm.getLeanbackLaunchIntentForPackage(item.packageName);
-            if (intent == null) {
-                intent = pm.getLaunchIntentForPackage(item.packageName);
-            }
-            if (intent == null && item.activityName != null && !item.activityName.isEmpty()) {
-                intent = new Intent(Intent.ACTION_MAIN);
-                intent.setComponent(new ComponentName(item.packageName, item.activityName));
-            }
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent);
-            } else {
-                Toast.makeText(this, "Impossibile aprire " + item.label, Toast.LENGTH_SHORT).show();
-            }
-        } catch (Exception e) {
-            Toast.makeText(this, "Errore: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private class AllAppsAdapter extends BaseAdapter {
-        @Override
-        public int getCount() {
-            return allApps.size();
-        }
-
-        @Override
-        public Object getItem(int position) {
-            return allApps.get(position);
-        }
-
-        @Override
-        public long getItemId(int position) {
-            return position;
-        }
-
-        @Override
-        public View getView(int position, View convertView, ViewGroup parent) {
-            View v = convertView;
-            if (v == null) {
-                v = LayoutInflater.from(MainActivity.this).inflate(R.layout.item_app_card, parent, false);
-            }
-
-            v.setBackground(createDynamicCardSelector());
-
-            AppItem item = allApps.get(position);
-            ImageView iv = (ImageView) v.findViewById(R.id.iv_app_icon);
-            TextView tv = (TextView) v.findViewById(R.id.tv_app_label);
-
-            iv.setImageDrawable(item.icon);
-            tv.setText(item.label);
-
-            return v;
-        }
+        showAccessibleDialog(builder);
     }
 }
