@@ -2116,6 +2116,10 @@ public class UnitTests {
             JSONObject localBlockConn = adapter.testConnection(AiProviderAdapter.PROVIDER_DEEPSEEK, null, null);
             boolean localZeroHttpOk = !localBlockPlan.success && !localBlockConn.optBoolean("success", true) && mockHttpCount.get() == 0;
 
+            // Test 1 above deliberately leaves LOCAL_ONLY enabled. Explicitly
+            // switch to cloud mode for the *mock* vision tests; no real APIs used.
+            AkaiAiController.setExecutionMode(AkaiAiController.MODE_CLOUD_OPTIONAL);
+
             // Visual inference: mandatory OS+owner+cloud consent and ONLY DeepSeek/Kimi.
             // Actual HTTP is a 127.0.0.1 host mock, never a paid API.
             byte[] visionJpeg = new byte[256];
