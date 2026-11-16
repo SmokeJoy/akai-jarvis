@@ -678,12 +678,14 @@
             return false;
         }
 
-        // P1-04: AbortController with 25-second timeout
+        // A2: multiple bounded cloud replans can outlast 25 seconds.
+        // Keep the client request alive while allowing explicit Stop. On a
+        // hard timeout notify the backend to cancel cooperatively.
         convoSession.userCancelRequested = false;
         convoSession.aiAbortController = new AbortController();
         const timeoutId = setTimeout(() => {
             if (convoSession.aiAbortController) convoSession.aiAbortController.abort();
-        }, 25000);
+        }, 90000);
 
         try {
             const res = await fetch(getApiUrl('/api/ai/ask'), {
@@ -723,11 +725,14 @@
                 }, query);
                 return false;
             } else {
+                // Preserve the server's actionable diagnostic and stage rather
+                // than replacing every API 400 with a generic error message.
                 displayAiResponse({
+                    ...data,
                     success: false,
-                    status: 'ERROR',
-                    reply: data.error || 'Errore nella richiesta alla TV',
-                    verified: false
+                    verified: false,
+                    status: data.status || 'ERROR',
+                    reply: data.reply || data.error || 'Errore nella richiesta alla TV'
                 }, query);
                 return false;
             }
@@ -745,16 +750,35 @@
                 return false;
             }
             if (e.name === 'AbortError') {
-                showToast('Richiesta annullata o timeout.', true);
+                // Aborting fetch only disconnects the browser; the TV may
+                // still be executing actions. Explicitly request cooperative
+                // cancellation so the task cannot silently continue.
+                try {
+                    await fetch(getApiUrl('/api/ai/cancel'), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${state.token}`
+                        },
+                        body: JSON.stringify({ reason: 'client_timeout' })
+                    });
+                } catch (ignored) {}
+                showToast('Timeout AI: annullamento richiesto alla TV.', true);
+                displayAiResponse({
+                    success: false,
+                    status: 'CANCEL_SIGNALLED',
+                    reply: 'Tempo massimo superato. Ho richiesto di fermare il compito, ma non posso confermare lo stato finale.',
+                    verified: false
+                }, query);
             } else {
                 showToast('Errore di comunicazione con il modulo AI della TV', true);
+                displayAiResponse({
+                    success: false,
+                    status: 'ERROR',
+                    reply: 'Comunicazione con la Smart TV interrotta.',
+                    verified: false
+                }, query);
             }
-            displayAiResponse({
-                success: false,
-                status: 'ERROR',
-                reply: 'Comunicazione con la Smart TV interrotta.',
-                verified: false
-            }, query);
             return false;
         } finally {
             convoSession.aiAbortController = null;

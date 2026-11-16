@@ -5,6 +5,7 @@ import it.akai.customremote.ai.AiProviderAdapter;
 import it.akai.customremote.ai.AkaiAiController;
 import it.akai.customremote.ai.AkaiMemoryEngine;
 import it.akai.customremote.ai.KeystoreSecurityHelper;
+import it.akai.customremote.ai.GoalEvidenceVerifier;
 import it.akai.customremote.ai.LocalIntentParser;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.qr.QrCode;
@@ -2193,6 +2194,7 @@ public class UnitTests {
 
             final AtomicInteger ctrlHttpCalls = new AtomicInteger(0);
             final String[] ctrlScenario = new String[]{"DISCOVERY_YT"};
+            final AtomicInteger a2ReplanCallCount = new AtomicInteger(0);
             mockCtrlServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             mockCtrlServer.createContext("/v1/chat/completions", exchange -> {
                 try {
@@ -2201,7 +2203,11 @@ public class UnitTests {
                     String reqBody = new String(reqBytes, StandardCharsets.UTF_8);
                     JSONObject payload = new JSONObject();
                     String sc = ctrlScenario[0];
-                    if ("DISCOVERY_YT".equals(sc)) {
+                    if ("DIALOG_ONLY".equals(sc)) {
+                        payload.put("reply", "Fatto, completato tutto senza azioni.")
+                               .put("intent_key", "fake_dialog_completion")
+                               .put("actions", new JSONArray());
+                    } else if ("DISCOVERY_YT".equals(sc)) {
                         payload.put("reply", "Apro app YouTube TV")
                                .put("intent_key", "discover_youtube_music")
                                .put("learn_procedure", true)
@@ -2223,6 +2229,22 @@ public class UnitTests {
                                    .put("actions", new JSONArray().put(new JSONObject().put("type", "press_key").put("key", "dpad_down")))
                                    .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Uscita digitale"));
                         }
+                    } else if ("A2_TWO_REPLANS".equals(sc)) {
+                        int attempt = a2ReplanCallCount.incrementAndGet();
+                        JSONArray actions = new JSONArray();
+                        if (attempt <= 2) {
+                            actions.put(new JSONObject().put("type", "press_key")
+                                    .put("key", attempt == 1 ? "dpad_left" : "dpad_right"));
+                        } else {
+                            actions.put(new JSONObject().put("type", "launch_app")
+                                    .put("pkg", "com.android.tv.settings"));
+                        }
+                        payload.put("reply", "Controllo obiettivo finale alla prova " + attempt)
+                               .put("intent_key", "a2_two_replans")
+                               .put("learn_procedure", false)
+                               .put("actions", actions)
+                               .put("success_condition", new JSONObject()
+                                       .put("type", "pkg_is").put("value", "com.android.tv.settings"));
                     } else if ("DUPLICATE_REPLAN".equals(sc)) {
                         payload.put("reply", "Piano fisso identico")
                                .put("intent_key", "dup_plan_key")
@@ -2347,8 +2369,8 @@ public class UnitTests {
             snapQueue.clear();
             snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.emptyList(), Collections.emptyList(), null, false, false, false));
             JSONObject r1a = ctrl37.processQuery("apri YouTube", false);
-            boolean sc1aOk = r1a.optBoolean("success") && r1a.optInt("tokens", -1) == 0 &&
-                    "STATE_VERIFIED".equals(r1a.optString("execution_outcome")) && ctrlHttpCalls.get() == 0;
+            boolean sc1aOk = !r1a.optBoolean("success") && r1a.optInt("tokens", -1) == 0 &&
+                    "COMMAND_SENT".equals(r1a.optString("execution_outcome")) && ctrlHttpCalls.get() == 0;
 
             // Scenario 1a-bis: no observable condition MUST NOT become STATE_VERIFIED.
             // "alza" is a known local volume intent without a success_condition.
@@ -2362,6 +2384,23 @@ public class UnitTests {
                     && "COMPLETED_UNVERIFIED".equals(r1aNoEvidence.optString("status"))
                     && r1aNoEvidence.optString("reply", "").contains("non posso confermare")
                     && ctrlHttpCalls.get() == 0;
+
+            // Scenario A2: a model saying "Fatto" without TV actions must
+            // NEVER count as having completed an actionable user goal.
+            ctrlScenario[0] = "DIALOG_ONLY";
+            snapQueue.clear();
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8",
+                    Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false));
+            JSONObject rFakeDone = ctrl37.processQuery("apri impostazioni avanzate e cambia audio", false);
+            JSONObject rRealDialog = ctrl37.processQuery("che cos'e una Smart TV", false);
+            boolean fakeDoneBlockedOk = !rFakeDone.optBoolean("success")
+                    && !rFakeDone.optBoolean("verified")
+                    && "NO_ACTION_PLAN".equals(rFakeDone.optString("status"))
+                    && "FAILED".equals(rFakeDone.optString("execution_outcome"))
+                    && rFakeDone.optString("reply", "").contains("Non ho eseguito")
+                    && rRealDialog.optBoolean("success")
+                    && "ANSWERED_DIALOG".equals(rRealDialog.optString("status"))
+                    && !rRealDialog.optBoolean("verified");
 
             // Scenario 1b: Discovery YouTube con bounded adaptive wait < 300ms e salvataggio SQLite
             ctrlScenario[0] = "DISCOVERY_YT";
@@ -2438,6 +2477,40 @@ public class UnitTests {
             boolean dupRejectedOk = !rDup.optBoolean("success") && rDup.optBoolean("replan_rejected_duplicate") &&
                     rDup.optInt("replan_count", -1) == 0 && mem37.getSavedProceduresCount() == 2;
 
+            // Scenario A2: two different retry plans, no duplicate replay,
+            // verify only the final actual UI state after the third plan.
+            ctrlScenario[0] = "A2_TWO_REPLANS";
+            a2ReplanCallCount.set(0);
+            final AtomicInteger a2ExecutedPlans = new AtomicInteger(0);
+            AkaiAiController.PerceptionAndExecutionBridge a2RetryBridge = new AkaiAiController.PerceptionAndExecutionBridge() {
+                @Override
+                public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
+                    boolean finalState = a2ExecutedPlans.get() >= 3;
+                    return new ScreenPerceptionEngine.PerceptionSnapshot(
+                            finalState ? "com.android.tv.settings" : "it.akai.customhome.v8",
+                            Collections.singletonList(finalState ? "Impostazioni" : "Home"),
+                            Collections.emptyList(), null, false, false, false);
+                }
+                @Override
+                public TvController.CommandResult executeActions(JSONArray actions) {
+                    int attempt = a2ExecutedPlans.incrementAndGet();
+                    return attempt >= 3
+                            ? new TvController.CommandResult(true, "Final UI reached")
+                            : new TvController.CommandResult(false, "Intermediate command failed", true);
+                }
+                @Override
+                public void sleepMs(long ms) {}
+            };
+            AkaiAiController ctrlA2Retry = AkaiAiController.createForTest(
+                    ctx37, new TvController(), mem37, adapter37, a2RetryBridge);
+            JSONObject rTwoReplans = ctrlA2Retry.processQuery("apri impostazioni alla terza prova", false);
+            boolean twoReplansOk = rTwoReplans.optBoolean("success")
+                    && "STATE_VERIFIED".equals(rTwoReplans.optString("execution_outcome"))
+                    && rTwoReplans.optInt("replan_count", -1) == 2
+                    && rTwoReplans.optInt("cloud_calls", -1) == 3
+                    && a2ReplanCallCount.get() == 3
+                    && a2ExecutedPlans.get() == 3;
+
             // Scenario 3: COMMAND_SENT non salvato in SQLite (quando exec ok ma screen unchanged)
             ctrlScenario[0] = "UNVERIFIED_STAY";
             JSONObject r3 = ctrlFastFail.processQuery("azione non verificabile senza cambio ui", false);
@@ -2477,7 +2550,9 @@ public class UnitTests {
             JSONObject r4c = ctrl37.processQuery("sequenza p1 launch wait click ok", false);
             boolean sc4cOk = r4c.optBoolean("success") && "STATE_VERIFIED".equals(r4c.optString("execution_outcome")) &&
                     clickTextInvoked37.get() && r4c.optInt("snapshot_count", 0) >= 3 &&
-                    r4c.optLong("wait_elapsed_ms", 9999L) < 500L;
+                    r4c.optLong("wait_elapsed_ms", 9999L) < 500L &&
+                    // Planner omitted learn_procedure: do not persist this skill.
+                    mem37.getSavedProceduresCount() == 2;
 
             // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
             ctrlScenario[0] = "CANCEL_MULTI";
@@ -2676,9 +2751,62 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
+            // Scenario A2: even a planner-claimed valid condition is insufficient
+            // if it proves only navigation rather than the requested final goal.
+            ScreenPerceptionEngine.PerceptionSnapshot searchUiOnly = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Cerca", "YouTube"),
+                    Collections.emptyList(), "Cerca", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot foundResult = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Apollo 11 missione"),
+                    Collections.singletonList(new ScreenPerceptionEngine.ClickableElement(
+                            "Apollo 11 missione", "android.widget.FrameLayout", "youtube_result_tile", null)),
+                    "Apollo 11 missione", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot queryEchoOnly = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Apollo 11"),
+                    Collections.singletonList(new ScreenPerceptionEngine.ClickableElement(
+                            "Apollo 11", "android.widget.EditText", "search_src_text", null)),
+                    "Apollo 11", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot querySuggestionOnly = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Apollo 11"),
+                    Collections.singletonList(new ScreenPerceptionEngine.ClickableElement(
+                            "Apollo 11", "android.widget.FrameLayout", "search_suggestion_row", null)),
+                    "Apollo 11", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot playing = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot silentPlayer = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
+                    Collections.emptyList(), null, false, true, false);
+            ScreenPerceptionEngine.PerceptionSnapshot sensitivePlaying = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
+                    Collections.emptyList(), null, true, true, true);
+            String playingCondition = "{\"type\":\"player_active\",\"expected_text\":\"Demo Film\"}";
+            boolean goalEvidenceGateOk =
+                    !GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
+                            "{\"type\":\"contains_text\",\"value\":\"Cerca\"}", searchUiOnly).verified &&
+                    GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
+                            "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", foundResult).verified &&
+                    !GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
+                            "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", queryEchoOnly).verified &&
+                    !GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
+                            "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", querySuggestionOnly).verified &&
+                    !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film",
+                            "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}", playing).verified &&
+                    !GoalEvidenceVerifier.check("avvia video Demo Film",
+                            "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}", playing).verified &&
+                    !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, silentPlayer).verified &&
+                    GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, playing).verified &&
+                    !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, sensitivePlaying).verified &&
+                    !GoalEvidenceVerifier.check("apri YouTube", null, playing).verified &&
+                    GoalEvidenceVerifier.looksActionable("Puoi aprire YouTube?") &&
+                    GoalEvidenceVerifier.looksActionable("Fammi vedere il video Demo Film") &&
+                    GoalEvidenceVerifier.looksActionable("Mi cerchi Apollo 11") &&
+                    !GoalEvidenceVerifier.looksActionable("Come si apre YouTube?");
+
+            test37Passed = twoReplansOk && fakeDoneBlockedOk && goalEvidenceGateOk && sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
-                System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
+                System.err.println("[DEBUG Test 37] twoReplans=" + twoReplansOk
+                        + " fakeDoneBlocked=" + fakeDoneBlockedOk + " goalEvidence=" + goalEvidenceGateOk + " sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
@@ -2942,7 +3070,8 @@ public class UnitTests {
 
             boolean part2Ok = (rKnownAi.statusCode == 200) &&
                               rKnownAi.json != null &&
-                              rKnownAi.json.optBoolean("success") &&
+                              !rKnownAi.json.optBoolean("success") &&
+                              "COMMAND_SENT".equals(rKnownAi.json.optString("execution_outcome")) &&
                               rKnownAi.json.optInt("tokens", -1) == 0 &&
                               rKnownAi.json.optInt("cloud_calls", -1) == 0 &&
                               rKnownAi.json.optString("source", "").contains("local") &&

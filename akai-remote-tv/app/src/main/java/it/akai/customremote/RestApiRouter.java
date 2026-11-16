@@ -522,7 +522,14 @@ public class RestApiRouter {
             }
 
             JSONObject res = aiHandler.processQuery(query, speak);
-            int status = res.optBoolean("success", false) ? 200 : 400;
+            // HTTP 200 means the API accepted/processed a command, NOT that
+            // the requested TV state was verified. Preserve "success=false"
+            // and the explicit COMMAND_SENT verdict in the JSON payload.
+            // This also lets the web remote display the unverified warning,
+            // instead of swallowing the detailed backend result as HTTP 400.
+            boolean acceptedWithoutProof = "COMMAND_SENT".equals(
+                    res.optString("execution_outcome", ""));
+            int status = (res.optBoolean("success", false) || acceptedWithoutProof) ? 200 : 400;
             sendJsonResponse(os, status, res);
             return true;
         }

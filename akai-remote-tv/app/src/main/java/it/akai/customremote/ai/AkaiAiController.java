@@ -37,6 +37,9 @@ public class AkaiAiController {
 
     private static final String PREFS_NAME = "akai_ai_secure_prefs";
     private static final String PREF_EXECUTION_MODE = "execution_mode";
+    private static final int MAX_CLOUD_REPLANS_PER_TASK = 2;
+    private static final int MAX_TASK_ACTION_STEPS = 24;
+    private static final long MAX_REPLAN_ELAPSED_MS = 45_000L;
 
     // Modalita configurabile: CLOUD_OPTIONAL (default, false) vs LOCAL_ONLY (true)
     private static volatile boolean sStrictLocalOnly = false;
@@ -276,14 +279,14 @@ public class AkaiAiController {
         }
     }
 
-    private WaitObservation waitForConditionOrUiChange(String successCondition, long maxWaitMs, long pollIntervalMs, TaskToken token) {
+    private WaitObservation waitForConditionOrUiChange(String goal, String successCondition, long maxWaitMs, long pollIntervalMs, TaskToken token) {
         long waited = 0L;
         int snaps = 0;
         boolean hasCondition = successCondition != null && !successCondition.trim().isEmpty();
 
         ScreenPerceptionEngine.PerceptionSnapshot snap = bridge.capture(context);
         snaps++;
-        boolean verified = hasCondition && ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition);
+        boolean verified = hasCondition && GoalEvidenceVerifier.check(goal, successCondition, snap).verified;
 
         while (hasCondition && !verified && waited < maxWaitMs && !isTokenCancelled(token)) {
             long step = pollIntervalMs > 0 ? Math.min(pollIntervalMs, maxWaitMs - waited) : Math.min(50L, maxWaitMs - waited);
@@ -294,7 +297,7 @@ public class AkaiAiController {
             waited += step;
             snap = bridge.capture(context);
             snaps++;
-            verified = ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition);
+            verified = GoalEvidenceVerifier.check(goal, successCondition, snap).verified;
         }
         return new WaitObservation(snap, verified, waited, snaps);
     }
@@ -423,7 +426,9 @@ public class AkaiAiController {
                         obs.snapshotCount, obs.elapsedMs, 1, false, obs.snapshot);
             }
             TvController.CommandResult singleRes = bridge.executeActions(actions);
-            int executedOne = (singleRes != null && singleRes.success) ? 1 : 0;
+            // Count attempted actions even when the driver reports failure;
+            // otherwise retries can undercount the per-task step budget.
+            int executedOne = 1;
             return new StepwiseResult(
                     singleRes != null ? singleRes : new TvController.CommandResult(false, "Errore esecuzione"),
                     0, 0L, executedOne, false, null);
@@ -569,10 +574,15 @@ public class AkaiAiController {
 
     private String buildReflectorContext(ScreenPerceptionEngine.PerceptionSnapshot postSnap,
                                         JSONArray previousActions,
-                                        TvController.CommandResult previousExec) {
+                                        TvController.CommandResult previousExec,
+                                        String finalCondition,
+                                        String goal,
+                                        int attemptNumber) {
         try {
             JSONObject wrapper = new JSONObject();
-            wrapper.put("replan_attempt", 1);
+            wrapper.put("replan_attempt", attemptNumber);
+            wrapper.put("final_goal_verification_reason", GoalEvidenceVerifier.check(goal, finalCondition, postSnap).reason);
+            wrapper.put("requested_final_condition", finalCondition != null ? finalCondition : "");
             wrapper.put("previous_execution_success", previousExec != null && previousExec.success);
             wrapper.put("previous_error", previousExec != null && previousExec.message != null ? previousExec.message : "");
             wrapper.put("failed_actions", previousActions != null ? previousActions : new JSONArray());
@@ -581,7 +591,8 @@ public class AkaiAiController {
             }
             return wrapper.toString();
         } catch (Exception e) {
-            return postSnap != null ? postSnap.toRedactedMinimalContextPrompt() : "{\"replan_attempt\":1}";
+            return postSnap != null ? postSnap.toRedactedMinimalContextPrompt()
+                    : "{\"replan_attempt\":" + attemptNumber + "}";
         }
     }
 
@@ -725,10 +736,12 @@ public class AkaiAiController {
 
             boolean hasCondition = parsed.successCondition != null && !parsed.successCondition.trim().isEmpty();
             boolean verified = false;
+            ScreenPerceptionEngine.PerceptionSnapshot verifiedSnapshot = null;
             if (cmdRes.success) {
-                WaitObservation obs = waitForConditionOrUiChange(hasCondition ? parsed.successCondition : null, 1200L, sDefaultPollIntervalMs, myToken);
+                WaitObservation obs = waitForConditionOrUiChange(query, hasCondition ? parsed.successCondition : null, 1200L, sDefaultPollIntervalMs, myToken);
                 snapshotCount += obs.snapshotCount;
                 waitElapsedMs += obs.elapsedMs;
+                verifiedSnapshot = obs.snapshot;
                 // A successful hardware dispatch is NOT proof that the requested
                 // state changed. Without observable evidence the truthful outcome
                 // must remain COMMAND_SENT, never STATE_VERIFIED.
@@ -774,6 +787,8 @@ public class AkaiAiController {
                 result.put("tokens", 0);
                 result.put("cost_eur", 0.0);
                 result.put("verified", verified);
+                result.put("verification_reason", !cmdRes.success ? "ACTION_FAILED" :
+                        GoalEvidenceVerifier.check(query, parsed.successCondition, verifiedSnapshot).reason);
                 result.put("execution_outcome", executionOutcome);
                 result.put("replan_count", 0);
                 result.put("cloud_calls", 0);
@@ -837,6 +852,7 @@ public class AkaiAiController {
         String planReply = null;
         String planWarning = null;
         boolean usedCloudPlanner = false;
+        boolean allowProcedureLearning = false;
 
         if (isStrictLocalOnly()) {
             long elapsed = System.currentTimeMillis() - startTime;
@@ -846,6 +862,7 @@ public class AkaiAiController {
                 candidateKey = generateIntentKey(query);
                 candidateCondition = plan.successCondition;
                 planReply = plan.reply;
+                allowProcedureLearning = true;
             } else {
                 try {
                     result.put("success", false);
@@ -907,21 +924,28 @@ public class AkaiAiController {
                 costEur = planRes.costEur;
                 planReply = planRes.reply;
                 planWarning = planRes.warningMessage;
+                allowProcedureLearning = planRes.learnProcedure;
 
                 // Caso A: Domanda puramente conversazionale -> 0 azioni hardware richieste
                 if (planRes.actions == null || planRes.actions.length() == 0) {
-                    Log.i(TAG, "Conversational dialog response received (content redacted)");
+                    // A cloud model cannot claim to have changed the TV by
+                    // returning a reassuring sentence with zero actions.
+                    final boolean actionRequested = GoalEvidenceVerifier.looksActionable(query);
+                    Log.i(TAG, actionRequested
+                            ? "Action request returned a dialog-only plan; refusing fake completion."
+                            : "Conversational dialog response received (content redacted)");
                     memoryEngine.incrementStat("cloud_ai_calls", 1);
                     memoryEngine.incrementStat("prompt_tokens", promptTokens);
                     memoryEngine.incrementStat("completion_tokens", compTokens);
 
                     try {
-                        result.put("success", true);
+                        result.put("success", !actionRequested);
                         result.put("source", provider);
                         result.put("tokens", totalTokens);
                         result.put("cost_eur", costEur);
                         result.put("verified", false);
-                        result.put("execution_outcome", OUTCOME_NOT_TESTED);
+                        result.put("execution_outcome", actionRequested ? OUTCOME_FAILED : OUTCOME_NOT_TESTED);
+                        result.put("verification_reason", actionRequested ? "NO_ACTION_PLAN" : "DIALOG_ONLY");
                         result.put("cloud_calls", cloudCalls);
                         result.put("snapshot_count", snapshotCount);
                         result.put("execution_mode", getExecutionMode());
@@ -930,7 +954,12 @@ public class AkaiAiController {
                         result.put("actions_count", 0);
                     } catch (Exception ignored) {}
 
-                    return completeAndSpeak(result, query, planReply, "ANSWERED_DIALOG", "dialog", totalTokens, costEur, speak, startTime);
+                    String safeReply = actionRequested
+                            ? "Non ho eseguito il compito: il modello ha restituito una risposta senza alcuna azione verificabile."
+                            : planReply;
+                    return completeAndSpeak(result, query, safeReply,
+                            actionRequested ? "NO_ACTION_PLAN" : "ANSWERED_DIALOG",
+                            "dialog", totalTokens, costEur, speak, startTime);
                 }
 
                 // Caso B: Richiesta operativa TV con sequenza azioni validata
@@ -972,6 +1001,7 @@ public class AkaiAiController {
                 candidateKey = generateIntentKey(query);
                 candidateCondition = plan.successCondition;
                 planReply = plan.reply;
+                allowProcedureLearning = true;
             }
         }
 
@@ -1010,7 +1040,7 @@ public class AkaiAiController {
         boolean verified = false;
         if (!stepExec.cancelled && !isTokenCancelled(myToken)) {
             if (execRes.success) {
-                WaitObservation firstObs = waitForConditionOrUiChange(candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                WaitObservation firstObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
                 postSnap = firstObs.snapshot;
                 verified = firstObs.verified;
                 snapshotCount += firstObs.snapshotCount;
@@ -1023,9 +1053,24 @@ public class AkaiAiController {
 
         Log.i(TAG, "Discovery verification attempt 1: " + verified + " (execSuccess=" + execRes.success + ", postPkg=" + (postSnap != null ? postSnap.foregroundPackage : "") + ")");
 
-        // Reflector & singolo replanning non ripetitivo se fallito o non verificato
-        if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
-            String reflectorContext = buildReflectorContext(postSnap, candidateActions, execRes);
+        // A2: bounded self-correction. The goal verifier, not the LLM,
+        // determines whether the FINAL requested state was observed.
+        // Never repeat an identical action sequence, and limit cost/work.
+        java.util.Set<String> attemptedPlans = new java.util.HashSet<>();
+        attemptedPlans.add(candidateActions.toString());
+        for (int attemptNumber = 1; attemptNumber <= MAX_CLOUD_REPLANS_PER_TASK; attemptNumber++) {
+            if (!usedCloudPlanner || stepExec.cancelled || isTokenCancelled(myToken)
+                    || (execRes.success && verified) || aiAdapter.isBudgetExceeded()) {
+                break;
+            }
+            if (System.currentTimeMillis() - startTime >= MAX_REPLAN_ELAPSED_MS
+                    || executedStepsTotal >= MAX_TASK_ACTION_STEPS) {
+                Log.w(TAG, "A2 replan aborted: elapsed time or action-step budget exceeded.");
+                break;
+            }
+
+            String reflectorContext = buildReflectorContext(
+                    postSnap, candidateActions, execRes, candidateCondition, query, attemptNumber);
             JSONObject prefs = memoryEngine.getAllPreferences();
             try {
                 prefs.put("agent_relevant_facts",
@@ -1041,44 +1086,59 @@ public class AkaiAiController {
             costEur += retryRes.costEur;
             if (retryRes.warningMessage != null) planWarning = retryRes.warningMessage;
 
-            if (!isTokenCancelled(myToken) && retryRes.success && retryRes.actions != null && retryRes.actions.length() > 0) {
-                String firstSerialized = candidateActions.toString();
-                String retrySerialized = retryRes.actions.toString();
-                if (firstSerialized.equals(retrySerialized)) {
-                    Log.w(TAG, "Replan rejected: identical action sequence returned by LLM.");
-                    replanRejectedDuplicate = true;
-                } else {
-                    replanCount = 1;
-                    candidateActions = retryRes.actions;
-                    candidateCondition = retryRes.successCondition;
-                    if (retryRes.intentKey != null && !retryRes.intentKey.isEmpty()) {
-                        candidateKey = retryRes.intentKey;
-                    }
-                    if (retryRes.reply != null && !retryRes.reply.isEmpty()) {
-                        planReply = retryRes.reply;
-                    }
-                    StepwiseResult replanStepExec = executeActionsStepwise(candidateActions, myToken);
-                    execRes = replanStepExec.commandResult;
-                    snapshotCount += replanStepExec.snapshotCount;
-                    totalWaitElapsedMs += replanStepExec.waitElapsedMs;
-                    executedStepsTotal += replanStepExec.executedSteps;
-                    if (replanStepExec.cancelled || isTokenCancelled(myToken)) {
-                        postSnap = replanStepExec.lastSnapshot;
-                        verified = false;
-                    } else if (execRes.success) {
-                        WaitObservation retryObs = waitForConditionOrUiChange(candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
-                        postSnap = retryObs.snapshot;
-                        verified = retryObs.verified;
-                        snapshotCount += retryObs.snapshotCount;
-                        totalWaitElapsedMs += retryObs.elapsedMs;
-                    } else {
-                        postSnap = replanStepExec.lastSnapshot != null ? replanStepExec.lastSnapshot : bridge.capture(context);
-                        if (replanStepExec.lastSnapshot == null) snapshotCount++;
-                        verified = false;
-                    }
-                    Log.i(TAG, "Discovery verification attempt 2 (replan): " + verified + " (execSuccess=" + execRes.success + ")");
-                }
+            if (isTokenCancelled(myToken) || !retryRes.success
+                    || retryRes.actions == null || retryRes.actions.length() == 0) {
+                break;
             }
+
+            String retrySerialized = retryRes.actions.toString();
+            if (!attemptedPlans.add(retrySerialized)) {
+                Log.w(TAG, "A2 replan rejected: already attempted identical action sequence.");
+                replanRejectedDuplicate = true;
+                break;
+            }
+            if (executedStepsTotal + retryRes.actions.length() > MAX_TASK_ACTION_STEPS
+                    || System.currentTimeMillis() - startTime >= MAX_REPLAN_ELAPSED_MS) {
+                Log.w(TAG, "A2 replan rejected: total action/time budget exceeded.");
+                break;
+            }
+
+            replanCount++;
+            candidateActions = retryRes.actions;
+            candidateCondition = retryRes.successCondition;
+            allowProcedureLearning = retryRes.learnProcedure;
+            if (retryRes.intentKey != null && !retryRes.intentKey.isEmpty()) {
+                candidateKey = retryRes.intentKey;
+            }
+            if (retryRes.reply != null && !retryRes.reply.isEmpty()) {
+                planReply = retryRes.reply;
+            }
+
+            StepwiseResult retryStepExec = executeActionsStepwise(candidateActions, myToken);
+            execRes = retryStepExec.commandResult;
+            snapshotCount += retryStepExec.snapshotCount;
+            totalWaitElapsedMs += retryStepExec.waitElapsedMs;
+            executedStepsTotal += retryStepExec.executedSteps;
+            if (retryStepExec.cancelled || isTokenCancelled(myToken)) {
+                postSnap = retryStepExec.lastSnapshot;
+                verified = false;
+                break;
+            }
+            if (execRes.success) {
+                WaitObservation retryObs = waitForConditionOrUiChange(
+                        query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                postSnap = retryObs.snapshot;
+                verified = retryObs.verified;
+                snapshotCount += retryObs.snapshotCount;
+                totalWaitElapsedMs += retryObs.elapsedMs;
+            } else {
+                postSnap = retryStepExec.lastSnapshot != null
+                        ? retryStepExec.lastSnapshot : bridge.capture(context);
+                if (retryStepExec.lastSnapshot == null) snapshotCount++;
+                verified = false;
+            }
+            Log.i(TAG, "A2 goal verification after replan " + attemptNumber
+                    + ": " + verified + " (execSuccess=" + execRes.success + ")");
         }
 
         if (stepExec.cancelled || isTokenCancelled(myToken)) {
@@ -1109,6 +1169,7 @@ public class AkaiAiController {
         // ---------------------------------------------------------------------
         boolean newlyLearned = false;
         if (OUTCOME_STATE_VERIFIED.equals(executionOutcome)
+                && allowProcedureLearning
                 && AgentSkillGate.canLearn(verified, candidateActions, candidateCondition)) {
             if (candidateKey == null || candidateKey.trim().isEmpty()) candidateKey = generateIntentKey(query);
             String initialState = "{\"pkg\":\"" + (initialSnap != null ? initialSnap.foregroundPackage : "") + "\"}";
@@ -1160,6 +1221,8 @@ public class AkaiAiController {
                 result.put("budget_warning", planWarning);
             }
             result.put("verified", verified);
+            result.put("verification_reason", !execRes.success ? "ACTION_FAILED" :
+                    GoalEvidenceVerifier.check(query, candidateCondition, postSnap).reason);
             result.put("execution_outcome", executionOutcome);
             result.put("replan_count", replanCount);
             result.put("replan_rejected_duplicate", replanRejectedDuplicate);

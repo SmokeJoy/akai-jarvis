@@ -42,7 +42,16 @@ Stato: SPECIFICA / DA IMPLEMENTARE. NON equivale a funzionalità già presente s
 - Test preflight hardware *read-only* e prova su TV vera soltanto dopo CI verde, backup v1 conservato e procedura rollback verso **v1** verificata: un successivo nuovo `-Action install` farebbe altrimenti backup di v2 difettosa.
 - NESSUN merge/deploy autonomo sulla TV. Report su PR con HEAD SHA, CI, mock/Android reali distinti, prove concrete, limiti residui.
 
-## Assegnazione implementazione
-- Antigravity/Gemini: implementare in un ramo/PR isolata con test e doc, evitando refactor massicci.
-- ChatGPT/Codex supervisione: riesaminare diff, test effettivi, sicurezza/firme/migrazioni, correggere falsi successi.
-- Prima dell'installazione: mostrare piano e richiedere approvazione del proprietario per il nuovo APK.
+## Assegnazione implementazione (aggiornata dopo esaurimento crediti Antigravity)
+- ChatGPT sviluppa direttamente su `feat/jarvis-a2-goal-verifier` / PR #9, mantenendo PR #8 A1 come base; Antigravity non è un prerequisito.
+- ChatGPT effettua una seconda revisione indipendente del proprio diff, confronta ogni HEAD SHA con i log CI effettivi e documenta ciò che manca. Le prove via ADB vengono eseguite dal proprietario con comandi guidati e consenso consapevole.
+- Prima dell'installazione: mostrare piano e richiedere approvazione del proprietario per il nuovo APK. Il rollback deve recuperare la baseline v1, NON la v2 attualmente sulla TV.
+
+## Implementazione concreta su PR #9 — verifica in corso (non installata)
+- `GoalEvidenceVerifier.java`: verifica deterministica dell'obiettivo finale; impedisce che una schermata intermedia "Cerca" o la sola app aperta attestino playback/ricerca, richiede un risultato di ricerca accessibile e selezionabile, e rifiuta il testo ripetuto nel campo di ricerca come prova del risultato.
+- `AkaiAiController.java`: verifica passa dal verificatore finale; distinti `STATE_VERIFIED` e `COMMAND_SENT`, spiegazione della ragione quando non verificato; risposta cloud senza azioni per compiti operativi non può dichiarare "Fatto"; procedure salvate soltanto se verificate e richieste dal planner/local.
+- `LocalIntentParser.java`: per apertura delle app conosciute la condizione finale verifica il pacchetto in primo piano invece di considerare sufficiente l'invio del comando.
+- `RestApiRouter.java` e `akai-remote-web/app.js`: HTTP 200 per richiesta accettata ma `COMMAND_SENT` (nel JSON `success=false`, `verified=false`), mentre gli errori mantengono il dettaglio `reply` originale anziché essere nascosti da messaggi generici.
+- `UnitTests.java`: regressioni su falsa conferma, dialog-only "Fatto", schermo di ricerca senza risultati, campo di testo non selezionabile, playback non osservabile, apprendimento senza consenso del piano; i test host simulati NON attestano compatibilità Android reale.
+- `AGENTS.md` canonico nel ramo `main` aggiornato in modo non distruttivo; evitare qualsiasi file omonimo sovrapposto nella PR #9.
+- **Limiti attuali:** non c'è certificazione sul device reale della nuova patch; non è implementato il doppio replan controllato, né osservazione MediaSession/metadata di video DRM. Accettare `UNVERIFIED` quando l'app non offre evidenza sufficiente. Attendere CI verde e audit rollback prima di parlare di deploy.
