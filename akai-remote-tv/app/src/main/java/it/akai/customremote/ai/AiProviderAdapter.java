@@ -230,7 +230,10 @@ public class AiProviderAdapter {
     // -------------------------------------------------------------
 
     public String getActiveProvider() {
-        return prefs.getString(KEY_PROVIDER, PROVIDER_DEEPSEEK);
+        String configured = prefs.getString(KEY_PROVIDER, PROVIDER_DEEPSEEK);
+        if (PROVIDER_LOCAL.equals(configured)) return PROVIDER_LOCAL; // deterministic non-AI only
+        // Unknown or tampered stored providers must NEVER default to a paid API.
+        return CloudProviderPolicy.isSupportedCloudProvider(configured) ? configured : PROVIDER_LOCAL;
     }
 
     public void setActiveProvider(String provider) {
@@ -264,6 +267,10 @@ public class AiProviderAdapter {
     }
 
     public String getEndpointForProvider(String provider) {
+        if (PROVIDER_LOCAL.equals(provider)) return ""; // no local AI inference
+        if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+            throw new IllegalArgumentException("Cloud provider non autorizzato");
+        }
         if (testEndpointOverride != null) {
             return testEndpointOverride;
         }
@@ -332,6 +339,9 @@ public class AiProviderAdapter {
     }
 
     public String getApiKey(String provider) {
+        if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+            throw new IllegalArgumentException("Provider senza credenziali autorizzate");
+        }
         String prefKey = PROVIDER_KIMI.equals(provider) ? KEY_KIMI_KEY : KEY_DEEPSEEK_KEY;
         String enc = prefs.getString(prefKey, "");
         if (enc == null || enc.isEmpty()) return "";
@@ -354,6 +364,9 @@ public class AiProviderAdapter {
     }
 
     public void setApiKey(String provider, String rawKey) {
+        if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+            throw new IllegalArgumentException("Provider senza credenziali autorizzate");
+        }
         String prefKey = PROVIDER_KIMI.equals(provider) ? KEY_KIMI_KEY : KEY_DEEPSEEK_KEY;
         if (rawKey == null || rawKey.trim().isEmpty()) {
             prefs.edit().remove(prefKey).apply();
@@ -686,7 +699,10 @@ public class AiProviderAdapter {
         }
         String provider = getActiveProvider();
         if (PROVIDER_LOCAL.equals(provider)) {
-            return AiResponse.failure("Modalità Solo Locale attiva.");
+            return AiResponse.failure("Cloud AI disattivata; disponibili solo i comandi deterministici.");
+        }
+        if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+            return AiResponse.failure("Cloud provider non supportato: soltanto DeepSeek o Kimi.");
         }
         if (isBudgetExceeded()) {
             return AiResponse.failure("Budget massimo stimato locale di 5,00 € raggiunto. Chiamate cloud sospese.");
@@ -1039,12 +1055,21 @@ public class AiProviderAdapter {
         if (AkaiAiController.isStrictLocalOnly()) {
             throw new IllegalStateException("LOCAL_ONLY active: Cloud HTTP requests strictly prohibited.");
         }
-        if (!isAllowedEndpoint(endpointUrl, testEndpointOverride != null)) {
-            throw new SecurityException("Endpoint non consentito dall'allowlist ufficiale: " + endpointUrl);
+        if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+            throw new SecurityException("Solo DeepSeek o Kimi possono eseguire inferenza AI.");
+        }
+        boolean trustedProductionEndpoint = CloudProviderPolicy.isApprovedDestination(provider, endpointUrl);
+        boolean injectedLoopback = testEndpointOverride != null
+                && testEndpointOverride.equals(endpointUrl)
+                && CloudProviderPolicy.isLoopbackTestDestination(endpointUrl);
+        if (!trustedProductionEndpoint && !injectedLoopback) {
+            throw new SecurityException("Host, percorso o provider cloud non corrispondenti alla policy JARVIS.");
         }
 
         URL url = new URL(endpointUrl);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        // Never forward Bearer credentials to another host after an HTTP redirect.
+        conn.setInstanceFollowRedirects(false);
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         conn.setRequestProperty("Authorization", "Bearer " + apiKey);
