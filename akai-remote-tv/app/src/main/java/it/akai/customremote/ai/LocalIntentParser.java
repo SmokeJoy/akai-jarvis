@@ -64,7 +64,7 @@ public class LocalIntentParser {
                 .replaceAll("\\s+", " ")
                 .trim();
 
-        Log.d(TAG, "Parsing query: \"" + clean + "\"");
+        Log.d(TAG, "Parsing query (length=" + query.length() + ")");
 
         // A0: Personal memory is opt-in, local and bounded; never infer facts
         // from ordinary conversation. Handle it before any command matching.
