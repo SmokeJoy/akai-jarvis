@@ -2038,6 +2038,12 @@ public class UnitTests {
                         for (int i = 0; i < 67000; i++) big.append('x');
                         big.append("\"}");
                         respBody = big.toString();
+                    } else if ("VISION".equals(mode)) {
+                        respBody = new JSONObject()
+                            .put("usage", new JSONObject().put("prompt_tokens", 110).put("completion_tokens", 28).put("total_tokens", 138))
+                            .put("choices", new JSONArray().put(new JSONObject().put("message", new JSONObject()
+                                .put("content", "Schermata con un menu TV; verifica etichette reali prima di cliccare."))))
+                            .toString();
                     } else if ("TOOL_CALL".equals(mode)) {
                         String argsJson = new JSONObject()
                             .put("reply", "Apro YouTube")
@@ -2109,6 +2115,40 @@ public class UnitTests {
             AiProviderAdapter.AiResponse localBlockPlan = adapter.planActionSequence("apri youtube", "{}", null, null);
             JSONObject localBlockConn = adapter.testConnection(AiProviderAdapter.PROVIDER_DEEPSEEK, null, null);
             boolean localZeroHttpOk = !localBlockPlan.success && !localBlockConn.optBoolean("success", true) && mockHttpCount.get() == 0;
+
+            // Visual inference: mandatory OS+owner+cloud consent and ONLY DeepSeek/Kimi.
+            // Actual HTTP is a 127.0.0.1 host mock, never a paid API.
+            byte[] visionJpeg = new byte[256];
+            visionJpeg[0] = (byte) 0xff; visionJpeg[1] = (byte) 0xd8;
+            visionJpeg[254] = (byte) 0xff; visionJpeg[255] = (byte) 0xd9;
+            adapter.setCloudContextConsent(true);
+            mockBehavior[0] = "VISION";
+            int visionHttpBefore = mockHttpCount.get();
+            AiProviderAdapter.VisionCloudResult deniedVision = adapter.describeScreenJpegOnce(
+                    visionJpeg, 960, 540, true, false, false);
+            if (deniedVision.success || mockHttpCount.get() != visionHttpBefore) {
+                throw new AssertionError("Vision: separate cloud image consent MUST block network");
+            }
+            AiProviderAdapter.VisionCloudResult dsVision = adapter.describeScreenJpegOnce(
+                    visionJpeg, 960, 540, true, true, false);
+            if (!dsVision.success || !"UNVERIFIED_VISUAL_DESCRIPTION".equals(dsVision.status)
+                    || mockHttpCount.get() != visionHttpBefore + 1) {
+                throw new AssertionError("DeepSeek mock vision: cloud HTTP and unverified description expected");
+            }
+            adapter.setActiveProvider(AiProviderAdapter.PROVIDER_KIMI);
+            AiProviderAdapter.VisionCloudResult kimiVision = adapter.describeScreenJpegOnce(
+                    visionJpeg, 960, 540, true, true, false);
+            if (!kimiVision.success || mockHttpCount.get() != visionHttpBefore + 2) {
+                throw new AssertionError("Kimi mock vision: one HTTP request expected");
+            }
+            adapter.setCloudContextConsent(false);
+            AiProviderAdapter.VisionCloudResult blockedSensitive = adapter.describeScreenJpegOnce(
+                    visionJpeg, 960, 540, true, true, true);
+            if (blockedSensitive.success || mockHttpCount.get() != visionHttpBefore + 2) {
+                throw new AssertionError("Sensitive/no-consent screenshot MUST NOT upload");
+            }
+            adapter.setCloudContextConsent(true);
+            mockBehavior[0] = "JSON_CONTENT";
 
             // 2. CLOUD_OPTIONAL DeepSeek JSON content + Kimi tool_calls
             AkaiAiController.setExecutionMode(AkaiAiController.MODE_CLOUD_OPTIONAL);
