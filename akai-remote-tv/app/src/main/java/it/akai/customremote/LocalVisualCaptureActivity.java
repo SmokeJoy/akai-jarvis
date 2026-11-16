@@ -226,7 +226,6 @@ public final class LocalVisualCaptureActivity extends Activity {
     private void consumeFrame(ImageReader source) {
         Image frame = null;
         Bitmap full = null;
-        Bitmap cropped = null;
         try {
             frame = source.acquireLatestImage();
             if (frame == null || completed) return;
@@ -244,17 +243,31 @@ public final class LocalVisualCaptureActivity extends Activity {
             Image.Plane plane = frame.getPlanes()[0];
             int stride = plane.getRowStride();
             int pixelStride = plane.getPixelStride();
-            if (pixelStride <= 0 || stride < frameWidth * pixelStride) return;
+            if (pixelStride != 4 || stride < frameWidth * 4) return;
             if (!frameQueued.compareAndSet(false, true)) return;
-            int paddedWidth = frameWidth + (stride - frameWidth * pixelStride) / pixelStride;
-            if (paddedWidth < frameWidth || paddedWidth > frameWidth + 256) return;
-            full = Bitmap.createBitmap(paddedWidth, frameHeight, Bitmap.Config.ARGB_8888);
-            ByteBuffer pixels = plane.getBuffer();
-            full.copyPixelsFromBuffer(pixels);
-            cropped = Bitmap.createBitmap(full, 0, 0, frameWidth, frameHeight);
-            if (cropped == full) full = null; // Bitmap.createBitmap may return its source.
-            final Bitmap result = cropped;
-            cropped = null;
+            // Android ImageReader may omit padding bytes at the end of the last
+            // row. Copying directly into a padded bitmap can underflow/crash.
+            // Pack only visible RGBA rows, within the 960x540 memory budget.
+            int rowBytes = frameWidth * 4;
+            int imageBytes = rowBytes * frameHeight;
+            ByteBuffer source = plane.getBuffer().duplicate();
+            int sourceLimit = source.limit();
+            ByteBuffer packed = ByteBuffer.allocateDirect(imageBytes);
+            for (int y = 0; y < frameHeight; y++) {
+                long start = (long) y * stride;
+                if (start + rowBytes > sourceLimit) {
+                    throw new IllegalArgumentException("Image row truncated");
+                }
+                source.position((int) start);
+                source.limit((int) (start + rowBytes));
+                packed.put(source);
+                source.limit(sourceLimit);
+            }
+            packed.flip();
+            full = Bitmap.createBitmap(frameWidth, frameHeight, Bitmap.Config.ARGB_8888);
+            full.copyPixelsFromBuffer(packed);
+            final Bitmap result = full;
+            full = null;
             final boolean dark = isMostlyBlack(result);
             ui.post(new Runnable() {
                 @Override public void run() {
@@ -270,7 +283,6 @@ public final class LocalVisualCaptureActivity extends Activity {
                 }
             });
         } finally {
-            if (cropped != null) cropped.recycle();
             if (full != null) full.recycle();
             if (frame != null) frame.close();
         }
