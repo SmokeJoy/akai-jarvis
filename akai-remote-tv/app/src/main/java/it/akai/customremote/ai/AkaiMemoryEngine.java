@@ -303,7 +303,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             if (guest) where1 += " AND " + COL_IS_PERSONAL + "=0";
             c = db.query(TABLE_PROCEDURES, null, where1, new String[]{clean}, null, null, null);
             if (c != null && c.moveToFirst()) {
-                return parseProcedureCursor(c);
+                JSONObject candidate = parseProcedureCursor(c);
+                if (AgentSkillGate.shouldReplay(candidate.optInt("success_count", 0),
+                        candidate.optInt("failure_count", 0))) {
+                    return candidate;
+                }
             }
             if (c != null) c.close();
 
@@ -312,7 +316,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             if (guest) where2 += " AND " + COL_IS_PERSONAL + "=0";
             c = db.query(TABLE_PROCEDURES, null, where2, new String[]{clean}, null, null, null);
             if (c != null && c.moveToFirst()) {
-                return parseProcedureCursor(c);
+                JSONObject candidate = parseProcedureCursor(c);
+                if (AgentSkillGate.shouldReplay(candidate.optInt("success_count", 0),
+                        candidate.optInt("failure_count", 0))) {
+                    return candidate;
+                }
             }
             if (c != null) c.close();
 
@@ -329,8 +337,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                         String ikNoSpace = ik.toLowerCase(Locale.ITALIAN).replaceAll("[_\\s]+", "");
                         if (clean.contains(ikClean) || (!ikNoSpace.isEmpty() && cleanNoSpace.contains(ikNoSpace))) {
                             JSONObject res = parseProcedureCursor(allProcs);
-                            allProcs.close();
-                            return res;
+                            if (AgentSkillGate.shouldReplay(res.optInt("success_count", 0),
+                                    res.optInt("failure_count", 0))) {
+                                allProcs.close();
+                                return res;
+                            }
                         }
                     }
                     if (gi != null) {
@@ -338,8 +349,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                         String giNoSpace = gi.toLowerCase(Locale.ITALIAN).replaceAll("[_\\s]+", "");
                         if (clean.contains(giClean) || giClean.contains(clean) || (!giNoSpace.isEmpty() && cleanNoSpace.contains(giNoSpace))) {
                             JSONObject res = parseProcedureCursor(allProcs);
-                            allProcs.close();
-                            return res;
+                            if (AgentSkillGate.shouldReplay(res.optInt("success_count", 0),
+                                    res.optInt("failure_count", 0))) {
+                                allProcs.close();
+                                return res;
+                            }
                         }
                     }
                 } while (allProcs.moveToNext());
