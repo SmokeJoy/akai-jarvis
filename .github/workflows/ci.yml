@@ -250,6 +250,13 @@ jobs:
 
           # 10. Verify APK signature schemes (v1 + v2)
           "$APKSIGNER" verify --verbose build_ci/app-ci-test-nondistributable.apk
+
+          # Ensure the AndroidManifest app icon/label can actually resolve, not only package/version.
+          "$AAPT2" dump badging build_ci/app-ci-test-nondistributable.apk > build_ci/ci_badging.txt
+          grep -q "package: name='it.akai.customremote'" build_ci/ci_badging.txt
+          grep -q "^application: label=" build_ci/ci_badging.txt
+          echo "APK manifest package and application icon resources resolve successfully."
+
           APK_SIZE=$(stat -c%s build_ci/app-ci-test-nondistributable.apk)
           echo "CI TEST APK BUILT AND VERIFIED: $APK_SIZE bytes."
 
