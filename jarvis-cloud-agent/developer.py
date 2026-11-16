@@ -47,6 +47,10 @@ def target_path(root: Path, raw: str) -> Path:
         raise DeveloperError("Only isolated AI Java skill sources can be proposed")
     if posix.name in PROTECTED_AI_FILES:
         raise DeveloperError("Core AI, memory, API and safety files require direct human development")
+    if posix.parent.as_posix() != ALLOWED_ROOTS[0].rstrip("/"):
+        raise DeveloperError("Nested Java source paths are outside the draft-skill sandbox")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*[.]java", posix.name):
+        raise DeveloperError("Malformed Java source filename")
     parent = root.resolve()
     path = parent.joinpath(*posix.parts)
     if not path.resolve(strict=False).is_relative_to(parent):
