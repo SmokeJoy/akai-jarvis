@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, "fix/*" ]
   pull_request:
-    branches: [ main, "fix/*" ]
+    branches: [ main, "fix/*", "feat/jarvis-agent-a0-memory-learning" ]
 
 jobs:
   audit-and-tests:
