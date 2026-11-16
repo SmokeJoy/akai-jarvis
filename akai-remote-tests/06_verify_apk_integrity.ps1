@@ -1,7 +1,11 @@
-# ==============================================================================
+﻿# ==============================================================================
 # AKAI Custom TV - Test 06: Verifica Rigorosa Integrità APK (Fase 4.2)
 # Ispezione profonda di classes.dex, ELF JNI, Keystore TLS, Assets e Firma
 # ==============================================================================
+
+param(
+    [string]$ApkPath = $null
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -19,7 +23,11 @@ $java = Join-Path $jdkDir "bin\java.exe"
 $readelf = Join-Path $llvmBin "llvm-readelf.exe"
 $nm = Join-Path $llvmBin "llvm-nm.exe"
 
-$apkPath = Join-Path $workspace "akai-remote-tv\app\build\outputs\apk\debug\app-debug.apk"
+if (-not $ApkPath) {
+    $releaseCand = Join-Path $workspace "akai-remote-tv\app\build\outputs\apk\release\app-release.apk"
+    $debugCand = Join-Path $workspace "akai-remote-tv\app\build\outputs\apk\debug\app-debug.apk"
+    $apkPath = if (Test-Path $releaseCand) { $releaseCand } else { $debugCand }
+}
 
 Write-Host "=== VERIFICA RIGOROSA INTEGRITA' APK (AKAI CUSTOM REMOTE) ===" -ForegroundColor Cyan
 

@@ -32,10 +32,38 @@ public class KeystoreSecurityHelper {
 
     private static boolean sKeystoreAvailable = false;
     private static boolean sInitialized = false;
+    private static volatile Boolean sHardwareBackedDetected = null;
+    private static volatile SecretKey sTestFallbackSecretKey = null;
+    private static volatile boolean sForceKeystoreUnavailableForTest = false;
+
+    /**
+     * Solo per unit test JVM host dove AndroidKeyStore non esiste: inietta una SecretKey AES-256 in memoria
+     * per esercitare la vera cifratura AES/GCM/NoPadding, oppure lascia null per testare il blocco P0 fail-closed.
+     */
+    public static synchronized void setTestFallbackSecretKey(SecretKey key) {
+        sTestFallbackSecretKey = key;
+        sHardwareBackedDetected = null;
+        sInitialized = false;
+    }
+
+    public static synchronized void setForceKeystoreUnavailableForTest(boolean force) {
+        sForceKeystoreUnavailableForTest = force;
+        if (force) {
+            sKeystoreAvailable = false;
+            sHardwareBackedDetected = false;
+        }
+        sInitialized = false;
+    }
 
     private static synchronized void initKeystore() {
         if (sInitialized) return;
         sInitialized = true;
+        sHardwareBackedDetected = null;
+        if (sForceKeystoreUnavailableForTest) {
+            sKeystoreAvailable = false;
+            sHardwareBackedDetected = false;
+            return;
+        }
         try {
             KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
             keyStore.load(null);
@@ -58,91 +86,154 @@ public class KeystoreSecurityHelper {
             }
             sKeystoreAvailable = true;
         } catch (Throwable t) {
-            Log.w(TAG, "AndroidKeyStore non completamente disponibile: " + t.getMessage() + ". Utilizzo fallback applicativo sicuro.");
-            sKeystoreAvailable = false;
+            if (sTestFallbackSecretKey != null) {
+                sKeystoreAvailable = true;
+                sHardwareBackedDetected = false;
+                Log.d(TAG, "AndroidKeyStore assente su host test: attiva chiave AES-256 GCM iniettata per test.");
+            } else {
+                Log.w(TAG, "AndroidKeyStore non disponibile (nessun fallback in chiaro consentito): " + t.getMessage());
+                sKeystoreAvailable = false;
+                sHardwareBackedDetected = false;
+            }
         }
+    }
+
+    private static SecretKey resolveActiveSecretKey() throws Exception {
+        if (sForceKeystoreUnavailableForTest) {
+            return null;
+        }
+        try {
+            KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
+            keyStore.load(null);
+            SecretKey ksKey = (SecretKey) keyStore.getKey(KEY_ALIAS, null);
+            if (ksKey != null) {
+                return ksKey;
+            }
+        } catch (Throwable ignored) {
+        }
+        return sTestFallbackSecretKey;
     }
 
     /**
      * Cifra una stringa usando AES-256 GCM in AndroidKeyStore.
-     * Restituisce una stringa Base64 contenente [IV (12 byte)] + [Ciphertext + AuthTag].
+     * FAIL-CLOSED P0: Se nessuna chiave crittografica AES-256-GCM è disponibile, rifiuta il salvataggio
+     * sollevando IllegalStateException (nessun fallback in chiaro Base64 consentito).
      */
     public static String encrypt(String plaintext) {
         if (plaintext == null || plaintext.isEmpty()) return "";
         initKeystore();
 
-        if (sKeystoreAvailable) {
-            try {
-                KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
-                keyStore.load(null);
-                SecretKey key = (SecretKey) keyStore.getKey(KEY_ALIAS, null);
-
-                Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
-                cipher.init(Cipher.ENCRYPT_MODE, key);
-                byte[] iv = cipher.getIV();
-                byte[] encrypted = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
-
-                byte[] combined = new byte[1 + iv.length + encrypted.length];
-                combined[0] = (byte) iv.length;
-                System.arraycopy(iv, 0, combined, 1, iv.length);
-                System.arraycopy(encrypted, 0, combined, 1 + iv.length, encrypted.length);
-
-                return "ks:" + Base64.encodeToString(combined, Base64.NO_WRAP);
-            } catch (Throwable t) {
-                Log.w(TAG, "Fallimento crittografia Keystore, fallback a standard: " + t.getMessage());
-            }
+        if (!sKeystoreAvailable) {
+            throw new IllegalStateException("ERRORE P0 CREDENZIALI: Cifratura crittografica AES-256-GCM non disponibile. Memorizzazione chiave API rifiutata (nessun fallback in chiaro consentito).");
         }
 
-        // Fallback sicuro applicativo
-        return "b64:" + Base64.encodeToString(plaintext.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+        try {
+            SecretKey key = resolveActiveSecretKey();
+            if (key == null) {
+                throw new IllegalStateException("Chiave crittografica AES-256-GCM assente.");
+            }
+
+            Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
+            byte[] iv;
+            if (sTestFallbackSecretKey != null && key == sTestFallbackSecretKey) {
+                iv = new byte[GCM_IV_LENGTH_BYTES];
+                new SecureRandom().nextBytes(iv);
+                cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv));
+            } else {
+                cipher.init(Cipher.ENCRYPT_MODE, key);
+                iv = cipher.getIV();
+            }
+            if (iv == null || iv.length < 12) {
+                throw new IllegalStateException("IV AES-GCM non valido.");
+            }
+            byte[] encrypted = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+
+            byte[] combined = new byte[1 + iv.length + encrypted.length];
+            combined[0] = (byte) iv.length;
+            System.arraycopy(iv, 0, combined, 1, iv.length);
+            System.arraycopy(encrypted, 0, combined, 1 + iv.length, encrypted.length);
+
+            return "ks:" + Base64.encodeToString(combined, Base64.NO_WRAP);
+        } catch (IllegalStateException ise) {
+            throw ise;
+        } catch (Throwable t) {
+            Log.e(TAG, "ERRORE P0: Fallimento crittografia AES-256-GCM (nessun fallback in chiaro consentito): " + t.getMessage());
+            throw new IllegalStateException("ERRORE P0 CREDENZIALI: Fallimento crittografia AES-256-GCM (" + t.getMessage() + "). Memorizzazione chiave API rifiutata.", t);
+        }
     }
 
     /**
-     * Decifra una stringa precedentemente cifrata con AndroidKeyStore o fallback.
+     * Decifra una stringa precedentemente cifrata con prefisso ks: (AES-256 GCM).
+     * Rifiuta qualsiasi payload in chiaro legacy (b64: o non cifrato) restituendo stringa vuota.
      */
     public static String decrypt(String ciphertext) {
         if (ciphertext == null || ciphertext.isEmpty()) return "";
         initKeystore();
 
-        if (ciphertext.startsWith("ks:")) {
-            try {
-                byte[] combined = Base64.decode(ciphertext.substring(3), Base64.DEFAULT);
-                if (combined.length < 13) return "";
+        if (!ciphertext.startsWith("ks:")) {
+            Log.w(TAG, "Payload credenziali legacy non cifrato (prefisso mancante o b64:) rifiutato per sicurezza; richiesta migrazione cifrata o reinserimento.");
+            return "";
+        }
 
-                int ivLen = combined[0] & 0xFF;
-                byte[] iv = Arrays.copyOfRange(combined, 1, 1 + ivLen);
-                byte[] encrypted = Arrays.copyOfRange(combined, 1 + ivLen, combined.length);
+        if (!sKeystoreAvailable) {
+            Log.e(TAG, "Impossibile decifrare credenziale ks:: Keystore crittografico non disponibile.");
+            return "";
+        }
 
-                KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
-                keyStore.load(null);
-                SecretKey key = (SecretKey) keyStore.getKey(KEY_ALIAS, null);
+        try {
+            byte[] combined = Base64.decode(ciphertext.substring(3), Base64.DEFAULT);
+            if (combined.length < 13) return "";
 
-                Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
-                GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv);
-                cipher.init(Cipher.DECRYPT_MODE, key, spec);
+            int ivLen = combined[0] & 0xFF;
+            if (ivLen < 12 || 1 + ivLen >= combined.length) return "";
+            byte[] iv = Arrays.copyOfRange(combined, 1, 1 + ivLen);
+            byte[] encrypted = Arrays.copyOfRange(combined, 1 + ivLen, combined.length);
 
-                byte[] plainBytes = cipher.doFinal(encrypted);
-                return new String(plainBytes, StandardCharsets.UTF_8);
-            } catch (Throwable t) {
-                Log.e(TAG, "Errore decifratura AndroidKeyStore: " + t.getMessage());
-                return "";
-            }
-        } else if (ciphertext.startsWith("b64:")) {
-            try {
-                byte[] dec = Base64.decode(ciphertext.substring(4), Base64.DEFAULT);
-                return new String(dec, StandardCharsets.UTF_8);
-            } catch (Exception e) {
-                return "";
-            }
+            SecretKey key = resolveActiveSecretKey();
+            if (key == null) return "";
+
+            Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
+            GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv);
+            cipher.init(Cipher.DECRYPT_MODE, key, spec);
+
+            byte[] plainBytes = cipher.doFinal(encrypted);
+            return new String(plainBytes, StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            Log.e(TAG, "Errore decifratura AndroidKeyStore: " + t.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * Indica se il valore salvato usa un formato legacy non cifrato (es. b64: o stringa raw senza prefisso ks:).
+     */
+    public static boolean isLegacyUnencryptedPayload(String stored) {
+        return stored != null && !stored.trim().isEmpty() && !stored.startsWith("ks:");
+    }
+
+    /**
+     * Tenta di migrare un payload legacy non cifrato in formato AES-256-GCM ("ks:...").
+     * Se la cifratura crittografica non e' disponibile, solleva IllegalStateException per forzare la rimozione e il reinserimento.
+     */
+    public static String migrateLegacyPayloadIfPossible(String stored) {
+        if (stored == null || stored.trim().isEmpty()) return "";
+        if (stored.startsWith("ks:")) {
+            return stored;
+        }
+        String rawSecret;
+        if (stored.startsWith("b64:")) {
+            byte[] dec = Base64.decode(stored.substring(4), Base64.DEFAULT);
+            rawSecret = new String(dec, StandardCharsets.UTF_8);
         } else {
-            // Compatibilità con versioni precedenti
             try {
-                byte[] dec = Base64.decode(ciphertext, Base64.DEFAULT);
-                return new String(dec, StandardCharsets.UTF_8);
+                byte[] dec = Base64.decode(stored, Base64.DEFAULT);
+                String candidate = new String(dec, StandardCharsets.UTF_8);
+                rawSecret = candidate.isEmpty() ? stored : candidate;
             } catch (Exception e) {
-                return ciphertext;
+                rawSecret = stored;
             }
         }
+        return encrypt(rawSecret);
     }
 
     public static boolean isKeystoreAvailable() {
@@ -151,31 +242,47 @@ public class KeystoreSecurityHelper {
     }
 
     /**
+     * Alias pubblico per isHardwareBacked(): rileva realmente KeyInfo.isInsideSecureHardware().
+     */
+    public static boolean isHardwareBackedKeystore() {
+        return isHardwareBacked();
+    }
+
+    /**
      * Verifica strumentale se la chiave AES dell'Android Keystore risiede realmente in hardware protetto (TEE / TrustZone).
      */
     public static boolean isHardwareBacked() {
         initKeystore();
         if (!sKeystoreAvailable) return false;
+        if (sHardwareBackedDetected != null) return sHardwareBackedDetected;
         try {
             KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
             keyStore.load(null);
             SecretKey key = (SecretKey) keyStore.getKey(KEY_ALIAS, null);
-            if (key == null) return false;
+            if (key == null) {
+                sHardwareBackedDetected = false;
+                return false;
+            }
 
             SecretKeyFactory factory = SecretKeyFactory.getInstance(key.getAlgorithm(), ANDROID_KEY_STORE);
             KeyInfo keyInfo = (KeyInfo) factory.getKeySpec(key, KeyInfo.class);
-            boolean insideHw = keyInfo.isInsideSecureHardware();
-            Log.i(TAG, "KeyInfo.isInsideSecureHardware() = " + insideHw + " (origin=" + keyInfo.getOrigin() + ")");
+            boolean insideHw = keyInfo != null && keyInfo.isInsideSecureHardware();
+            sHardwareBackedDetected = insideHw;
+            Log.i(TAG, "KeyInfo.isInsideSecureHardware() = " + insideHw + (keyInfo != null ? " (origin=" + keyInfo.getOrigin() + ")" : ""));
             return insideHw;
         } catch (Throwable t) {
             Log.w(TAG, "Impossibile interrogare KeyInfo: " + t.getMessage());
+            sHardwareBackedDetected = false;
             return false;
         }
     }
 
     public static String getKeySecurityDetails() {
         initKeystore();
-        if (!sKeystoreAvailable) return "Keystore non disponibile (Fallback software attivo)";
+        if (!sKeystoreAvailable) return "Keystore AES-256-GCM non disponibile (salvataggio chiavi bloccato fail-closed)";
+        if (sTestFallbackSecretKey != null && Boolean.FALSE.equals(sHardwareBackedDetected)) {
+            return "Software AES-256-GCM Key (Host Test Mode, Hardware-Backed: false)";
+        }
         try {
             KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
             keyStore.load(null);
@@ -184,8 +291,9 @@ public class KeystoreSecurityHelper {
 
             SecretKeyFactory factory = SecretKeyFactory.getInstance(key.getAlgorithm(), ANDROID_KEY_STORE);
             KeyInfo keyInfo = (KeyInfo) factory.getKeySpec(key, KeyInfo.class);
-            boolean insideHw = keyInfo.isInsideSecureHardware();
-            return "Hardware-Backed: " + insideHw + ", Origin: " + keyInfo.getOrigin() + ", Purpos: " + keyInfo.getPurposes();
+            boolean insideHw = keyInfo != null && keyInfo.isInsideSecureHardware();
+            sHardwareBackedDetected = insideHw;
+            return "Hardware-Backed: " + insideHw + ", Origin: " + keyInfo.getOrigin() + ", Purposes: " + keyInfo.getPurposes();
         } catch (Throwable t) {
             return "Errore lettura KeyInfo: " + t.getMessage();
         }

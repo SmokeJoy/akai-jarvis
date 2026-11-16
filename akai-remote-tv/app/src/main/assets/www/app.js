@@ -8,16 +8,19 @@
     'use strict';
 
     // State management
+    const isInitialHttps = (location.protocol === 'https:');
+    const defaultInitialPort = isInitialHttps ? '8443' : '8088';
     const state = {
-        host: localStorage.getItem('akai_host') || (location.hostname && location.hostname !== 'localhost' ? location.hostname : '192.168.1.8'),
-        port: localStorage.getItem('akai_port') || (location.port ? location.port : '8088'),
-        proto: localStorage.getItem('akai_proto') || (location.protocol === 'https:' ? 'https' : 'http'),
+        host: localStorage.getItem('akai_host') || (location.hostname && location.hostname !== 'localhost' ? location.hostname : ''),
+        port: localStorage.getItem('akai_port') || (location.port ? location.port : defaultInitialPort),
+        proto: localStorage.getItem('akai_proto') || (isInitialHttps ? 'https' : 'http'),
         token: localStorage.getItem('akai_token') || null,
         connected: false,
         pingMs: 0,
         pingTimer: null,
         speechRecognition: null,
-        isListening: false
+        isListening: false,
+        caFingerprint: null
     };
 
     // Conversation State Machine (P1-02, P1-03, P1-04)
@@ -68,6 +71,7 @@
         btnAiSend: document.getElementById('btn-ai-send'),
         aiActiveState: document.getElementById('ai-active-state'),
         aiActiveLabel: document.getElementById('ai-active-label'),
+        btnAiStop: document.getElementById('btn-ai-stop'),
         aiResponseBox: document.getElementById('ai-response-box'),
         aiBadgeSource: document.getElementById('ai-badge-source'),
         aiBadgeStatus: document.getElementById('ai-badge-status'),
@@ -104,6 +108,13 @@
         pairingError: document.getElementById('pairing-error'),
         btnSubmitPin: document.getElementById('btn-submit-pin'),
         btnClosePairing: document.getElementById('btn-close-pairing'),
+        caTrustCard: document.getElementById('ca-trust-card'),
+        chkConfirmCaTv: document.getElementById('chk-confirm-ca-tv'),
+        caFpVal: document.getElementById('ca-fp-val'),
+        btnDownloadCa: document.getElementById('btn-download-ca'),
+        btnToggleCaInstructions: document.getElementById('btn-toggle-ca-instructions'),
+        caInstructionsPanel: document.getElementById('ca-instructions-panel'),
+        voiceEnvNotice: document.getElementById('voice-env-notice'),
 
         // Settings Modal
         modalSettings: document.getElementById('modal-settings'),
@@ -116,7 +127,9 @@
 
         // Provider & API
         aiModelSelect: document.getElementById('ai-model-select'),
+        aiKimiRegionSelect: document.getElementById('ai-kimi-region-select'),
         aiApiKeyInput: document.getElementById('ai-api-key-input'),
+        chkCloudContextConsent: document.getElementById('chk-cloud-context-consent'),
         btnToggleKeyVisibility: document.getElementById('btn-toggle-key-visibility'),
         btnTestAiConnection: document.getElementById('btn-test-ai-connection'),
         testConnectionResult: document.getElementById('test-connection-result'),
@@ -272,14 +285,39 @@
     }
 
     function initSpeechRecognition() {
+        const isHttps = (location.protocol === 'https:');
+        const isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+        const isSecure = (window.isSecureContext === true) || isLocal;
+
         const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRec) {
-            console.warn('SpeechRecognition API not available in this browser environment.');
+
+        if (!isSecure && !isLocal) {
+            console.warn('SpeechRecognition: Insecure HTTP Context.');
+            if (elements.voiceEnvNotice) {
+                elements.voiceEnvNotice.innerHTML = '<strong>⚠️ Connessione HTTP non cifrata:</strong> Safari (iOS) e Chrome (Android) consentono l\'accesso al microfono solo in <strong>Secure Context (HTTPS)</strong>. Passa a HTTPS (porta 8443) nelle Impostazioni dopo aver installato il certificato della TV, oppure usa la casella di testo qui sotto per digitare comandi a costo 0 token.';
+                elements.voiceEnvNotice.classList.remove('hidden');
+            }
             if (elements.voiceFootnote) {
-                elements.voiceFootnote.textContent = 'Riconoscimento vocale supportato su Safari iOS e Chrome Android su HTTPS.';
+                elements.voiceFootnote.textContent = 'Microfono disabilitato su HTTP non protetto. Digita da tastiera o usa HTTPS.';
             }
             return;
+        } else if (!SpeechRec) {
+            console.warn('SpeechRecognition API not available in this browser environment.');
+            if (elements.voiceEnvNotice) {
+                elements.voiceEnvNotice.innerHTML = '<strong>ℹ️ Riconoscimento vocale non supportato dal browser:</strong> utilizza la casella di testo sottostante per inviare comandi TV istantanei a costo 0 token.';
+                elements.voiceEnvNotice.classList.remove('hidden');
+            }
+            if (elements.voiceFootnote) {
+                elements.voiceFootnote.textContent = 'Riconoscimento vocale supportato nativamente su Safari iOS e Chrome Android su HTTPS.';
+            }
+            return;
+        } else {
+            if (elements.voiceFootnote) {
+                elements.voiceFootnote.textContent = 'Voce Web (motore STT del sistema operativo del telefono; per uso a connessione Internet WAN disattivata, verificare la dettatura offline nelle impostazioni del telefono).';
+            }
         }
+
+        if (!SpeechRec) return;
 
         const recognizer = new SpeechRec();
         recognizer.lang = 'it-IT';
@@ -360,7 +398,11 @@
                 }
             } else if (event.error !== 'aborted') {
                 setJarvisState(JarvisConvoState.ERROR, 'Errore microfono', 'error');
-                showToast(`Microfono: ${event.error}`, true);
+                if (event.error === 'not-allowed') {
+                    showToast('Microfono: not-allowed (Accesso negato. Su iOS: verifica permessi sito e abilita la Root CA in Generali > Info > Attendibilità certificati)', true);
+                } else {
+                    showToast(`Microfono: ${event.error}`, true);
+                }
                 stopConversation();
             }
         };
@@ -426,14 +468,49 @@
         }
     }
 
+    async function cancelBackendAiTask() {
+        const hadInFlight = Boolean(convoSession.aiAbortController);
+        if (convoSession.aiAbortController) {
+            convoSession.userCancelRequested = true;
+            try { convoSession.aiAbortController.abort(); } catch (e) {}
+            convoSession.aiAbortController = null;
+        }
+        if (elements.aiActiveState) {
+            elements.aiActiveState.classList.add('hidden');
+        }
+        if (!state.token) return false;
+        try {
+            const res = await fetch(getApiUrl('/api/ai/cancel'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${state.token}`
+                },
+                body: JSON.stringify({ reason: 'user_stop' })
+            });
+            const cancelData = await res.json().catch(() => ({}));
+            if (res.ok && (cancelData.active_task_cancelled || (cancelData.queued_tasks_invalidated > 0) || hadInFlight)) {
+                showToast('Annullamento richiesto alla TV...');
+            }
+            return res.ok;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function stopConversation() {
+        const shouldCancelTv = Boolean(convoSession.aiAbortController) ||
+            convoSession.state === JarvisConvoState.THINKING ||
+            convoSession.state === JarvisConvoState.SPEAKING;
         convoSession.active = false;
         convoSession.turnLocked = false;
         clearTimeout(convoSession.vadTimer);
         clearTimeout(convoSession.inactivityTimer);
 
-        // P1-04: Abort pending ask request on explicit stop
-        if (convoSession.aiAbortController) {
+        // P1-2: Abort pending ask request AND signal TV backend cancel (/api/ai/cancel)
+        if (shouldCancelTv) {
+            cancelBackendAiTask();
+        } else if (convoSession.aiAbortController) {
             try { convoSession.aiAbortController.abort(); } catch (e) {}
             convoSession.aiAbortController = null;
         }
@@ -602,6 +679,7 @@
         }
 
         // P1-04: AbortController with 25-second timeout
+        convoSession.userCancelRequested = false;
         convoSession.aiAbortController = new AbortController();
         const timeoutId = setTimeout(() => {
             if (convoSession.aiAbortController) convoSession.aiAbortController.abort();
@@ -624,8 +702,25 @@
             if (res.ok) {
                 displayAiResponse(data, query);
                 return true;
+            } else if (res.status === 426) {
+                displayAiResponse({
+                    success: false,
+                    status: 'UPGRADE_REQUIRED',
+                    reply: 'Connessione HTTPS (porta 8443) obbligatoria. HTTP in chiaro non consentito per inviare comandi TV.',
+                    verified: false
+                }, query);
+                showToast('HTTPS obbligatorio (HTTP 426)', true);
+                return false;
             } else if (res.status === 401) {
                 handleSessionExpired();
+                return false;
+            } else if (data.status === 'CANCELLED') {
+                displayAiResponse({
+                    success: false,
+                    status: 'CANCELLED',
+                    reply: data.reply || 'Operazione annullata su richiesta.',
+                    verified: false
+                }, query);
                 return false;
             } else {
                 displayAiResponse({
@@ -638,6 +733,17 @@
             }
         } catch (e) {
             clearTimeout(timeoutId);
+            if (e.name === 'AbortError' && convoSession.userCancelRequested) {
+                convoSession.userCancelRequested = false;
+                displayAiResponse({
+                    success: false,
+                    status: 'CANCELLED',
+                    client_aborted: true,
+                    reply: 'Annullamento richiesto alla TV (stop cooperativo in corso).',
+                    verified: false
+                }, query);
+                return false;
+            }
             if (e.name === 'AbortError') {
                 showToast('Richiesta annullata o timeout.', true);
             } else {
@@ -700,6 +806,11 @@
                 elements.aiBadgeStatus.textContent = '🛑 Budget Bloccato';
                 showToast('Budget massimo raggiunto (5,00 €)', true);
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
+            } else if (data.status === 'CANCELLED') {
+                elements.aiBadgeStatus.className = 'ai-badge-status blocked';
+                elements.aiBadgeStatus.textContent = data.client_aborted ? '⏹ Annullamento richiesto' : '⏹ Annullato';
+                showToast(data.client_aborted ? 'Annullamento richiesto' : 'Task AI annullato');
+                if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
             } else {
                 elements.aiBadgeStatus.className = 'ai-badge-status error';
                 elements.aiBadgeStatus.textContent = '❌ Non Riuscito';
@@ -743,6 +854,11 @@
                 body: JSON.stringify({ action })
             });
 
+            if (res.status === 426) {
+                showToast('HTTPS obbligatorio (HTTP 426): passa alla porta 8443', true);
+                return;
+            }
+
             if (res.status === 401) {
                 handleSessionExpired();
                 return;
@@ -776,6 +892,11 @@
                 },
                 body: JSON.stringify({ action: 'type_text', text })
             });
+
+            if (res.status === 426) {
+                showToast('HTTPS obbligatorio (HTTP 426): passa alla porta 8443', true);
+                return;
+            }
 
             if (res.ok) {
                 showToast(`Testo inviato: "${text}"`);
@@ -903,15 +1024,24 @@
             if (res.ok) {
                 const cfg = await res.json();
 
-                // Provider
+                // Provider & Execution Mode
+                const effectiveProvider = (cfg.execution_mode === 'LOCAL_ONLY' || cfg.strict_local_only)
+                    ? 'local'
+                    : (cfg.active_provider || 'deepseek');
                 const radios = document.getElementsByName('ai-provider');
                 for (const r of radios) {
-                    r.checked = (r.value === cfg.active_provider);
+                    r.checked = (r.value === effectiveProvider);
                 }
 
-                // Model
+                // Model & Kimi Region
                 if (cfg.active_model && elements.aiModelSelect) {
                     elements.aiModelSelect.value = (cfg.active_model === 'deepseek-chat') ? 'deepseek-flash' : cfg.active_model;
+                }
+                if (elements.aiKimiRegionSelect) {
+                    elements.aiKimiRegionSelect.value = cfg.kimi_region || 'intl';
+                }
+                if (elements.chkCloudContextConsent) {
+                    elements.chkCloudContextConsent.checked = (cfg.cloud_context_consent !== false);
                 }
 
                 // Masked API Keys
@@ -1015,14 +1145,23 @@
 
         const selectedRadio = document.querySelector('input[name="ai-provider"]:checked');
         const provider = selectedRadio ? selectedRadio.value : 'deepseek';
-        const model = elements.aiModelSelect.value;
-        const key = elements.aiApiKeyInput.value.trim();
+        const executionMode = (provider === 'local') ? 'LOCAL_ONLY' : 'CLOUD_OPTIONAL';
+        const model = elements.aiModelSelect ? elements.aiModelSelect.value : 'deepseek-flash';
+        const kimiRegion = elements.aiKimiRegionSelect ? elements.aiKimiRegionSelect.value : 'intl';
+        const cloudContextConsent = elements.chkCloudContextConsent ? Boolean(elements.chkCloudContextConsent.checked) : true;
+        const key = elements.aiApiKeyInput ? elements.aiApiKeyInput.value.trim() : '';
 
-        const payload = { provider, model };
+        const payload = {
+            execution_mode: executionMode,
+            provider,
+            model,
+            kimi_region: kimiRegion,
+            cloud_context_consent: cloudContextConsent
+        };
         if (key && !key.includes('••••')) {
             if (provider === 'kimi') {
                 payload.kimi_key = key;
-            } else {
+            } else if (provider === 'deepseek') {
                 payload.deepseek_key = key;
             }
         }
@@ -1036,11 +1175,13 @@
                 },
                 body: JSON.stringify(payload)
             });
-            if (res.ok) {
+            let respData = null;
+            try { respData = await res.json(); } catch (_) {}
+            if (res.ok && (!respData || respData.success !== false)) {
                 showToast('Configurazione AI salvata con successo!');
                 loadAiConfig();
             } else {
-                showToast('Errore salvataggio AI', true);
+                showToast((respData && respData.error) ? respData.error : 'Errore salvataggio AI', true);
             }
         } catch (e) {
             showToast('Errore di comunicazione', true);
@@ -1290,17 +1431,81 @@
     // PAIRING MODAL & PIN AUTHENTICATION
     // =========================================================================
 
-    function openPairingModal() {
+    async function openPairingModal() {
         elements.modalPairing.classList.remove('hidden');
         elements.pinInput.value = '';
         elements.pinInput.focus();
         elements.pairingError.classList.add('hidden');
+
+        // Configure CA cert download link
+        if (elements.btnDownloadCa) {
+            elements.btnDownloadCa.href = `${state.proto}://${state.host}:${state.port}/api/auth/ca.crt`;
+        }
+
+        if (elements.caFpVal) {
+            elements.caFpVal.textContent = state.caFingerprint || 'Richiesta impronta alla TV...';
+        }
+
+        try {
+            // First try pair request which generates a fresh PIN on TV and returns fingerprint
+            const reqRes = await fetch(getApiUrl('/api/auth/pair/request'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ client: 'web_remote' })
+            });
+            if (reqRes.status === 426) {
+                const reqData = await reqRes.json().catch(() => ({}));
+                const httpsPort = reqData.https_port || '8443';
+                const targetHost = state.host || location.hostname || '127.0.0.1';
+                elements.pairingError.innerHTML = `Connessione non cifrata (HTTP). Per associare in sicurezza, scarica il certificato CA qui sotto e passa a HTTPS sulla porta ${httpsPort}: <a href="https://${targetHost}:${httpsPort}" target="_blank" style="color:var(--accent); text-decoration:underline;">https://${targetHost}:${httpsPort}</a>`;
+                elements.pairingError.classList.remove('hidden');
+                const infoRes = await fetch(getApiUrl('/api/auth/tls_info'));
+                if (infoRes.ok) {
+                    const infoData = await infoRes.json().catch(() => ({}));
+                    if (infoData.ca_sha256) {
+                        state.caFingerprint = infoData.ca_sha256;
+                        if (elements.caFpVal) elements.caFpVal.textContent = state.caFingerprint;
+                    }
+                }
+            } else if (reqRes.ok) {
+                const reqData = await reqRes.json();
+                if (reqData.ca_fingerprint_sha256) {
+                    state.caFingerprint = reqData.ca_fingerprint_sha256;
+                    if (elements.caFpVal) elements.caFpVal.textContent = state.caFingerprint;
+                }
+                if (reqData.expires_in && elements.pinCountdown) {
+                    elements.pinCountdown.textContent = reqData.expires_in;
+                }
+            } else {
+                const infoRes = await fetch(getApiUrl('/api/auth/tls_info'));
+                if (infoRes.ok) {
+                    const infoData = await infoRes.json();
+                    if (infoData.ca_sha256) {
+                        state.caFingerprint = infoData.ca_sha256;
+                        if (elements.caFpVal) elements.caFpVal.textContent = state.caFingerprint;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('CA fingerprint lookup failed:', e);
+            if (elements.caFpVal && !state.caFingerprint) {
+                elements.caFpVal.textContent = 'Impronta visualizzata a schermo sulla TV';
+            }
+        }
     }
 
     async function submitPin() {
         const pin = elements.pinInput.value.trim();
         if (pin.length !== 6) {
             elements.pairingError.textContent = 'Inserisci un PIN numerico valido di 6 cifre';
+            elements.pairingError.classList.remove('hidden');
+            return;
+        }
+
+        // HTTPS must verify CA fingerprint. Classic HTTP LAN remote retains v5 PIN
+        // compatibility; never use this path for AI credentials or voice capture.
+        if (state.proto === 'https' && elements.chkConfirmCaTv && !elements.chkConfirmCaTv.checked) {
+            elements.pairingError.textContent = "Conferma obbligatoria su HTTPS: confronta l'impronta mostrata sulla TV e spunta la casella prima di associare.";
             elements.pairingError.classList.remove('hidden');
             return;
         }
@@ -1319,7 +1524,15 @@
                 })
             });
 
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 426 || (data && data.error === 'HTTPS_REQUIRED')) {
+                const targetPort = data.https_port || '8443';
+                const targetHost = state.host || location.hostname || '127.0.0.1';
+                elements.pairingError.innerHTML = `Connessione sicura richiesta (HTTP 426). Passa a HTTPS: <a href="https://${targetHost}:${targetPort}" target="_blank" style="color:var(--accent); text-decoration:underline;">https://${targetHost}:${targetPort}</a>`;
+                elements.pairingError.classList.remove('hidden');
+                return;
+            }
+
             if (res.ok && data.token) {
                 state.token = data.token;
                 localStorage.setItem('akai_token', state.token);
@@ -1487,6 +1700,13 @@
                 if (convoSession.lastQuery) {
                     askAi(convoSession.lastQuery);
                 }
+            });
+        }
+
+        // AI Active Task Stop button
+        if (elements.btnAiStop) {
+            elements.btnAiStop.addEventListener('click', () => {
+                cancelBackendAiTask();
             });
         }
 
@@ -1664,6 +1884,28 @@
                 }
             });
         }
+
+        // Anti-MITM CA Instructions Toggle
+        if (elements.btnToggleCaInstructions && elements.caInstructionsPanel) {
+            elements.btnToggleCaInstructions.addEventListener('click', () => {
+                elements.caInstructionsPanel.classList.toggle('hidden');
+            });
+        }
+
+        // Auto-switch port when changing protocol in settings
+        document.querySelectorAll('input[name="proto"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                if (e.target.value === 'https') {
+                    if (elements.serverPort && (elements.serverPort.value === '8088' || elements.serverPort.value === '8080')) {
+                        elements.serverPort.value = '8443';
+                    }
+                } else if (e.target.value === 'http') {
+                    if (elements.serverPort && elements.serverPort.value === '8443') {
+                        elements.serverPort.value = '8088';
+                    }
+                }
+            });
+        });
 
         // Escape key to close modals
         window.addEventListener('keydown', (e) => {

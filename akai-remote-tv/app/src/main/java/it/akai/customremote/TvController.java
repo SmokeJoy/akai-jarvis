@@ -17,20 +17,23 @@ public class TvController {
     private final AudioManager audioManager;
     private final UInputDriver uinputDriver;
 
-    // Execution result data structure
-    public static class CommandResult {
-        public final boolean success;
-        public final String message;
-        public final boolean unsupported;
+    // Censused TV App Package Identifiers (allineati 1:1 con inventario hardware ADB)
+    public static final String PKG_YOUTUBE = TvAppPackages.PKG_YOUTUBE;
+    public static final String PKG_NETFLIX = TvAppPackages.PKG_NETFLIX;
+    public static final String PKG_PRIME = TvAppPackages.PKG_PRIME;
+    public static final String PKG_PLAYSTORE = TvAppPackages.PKG_PLAYSTORE;
+    public static final String PKG_RAIPLAY = TvAppPackages.PKG_RAIPLAY;
+    public static final String PKG_MEDIASET = TvAppPackages.PKG_MEDIASET;
+    public static final String PKG_BROWSER_TVBRO = TvAppPackages.PKG_BROWSER_TVBRO;
 
+    // Execution result data structure (subclasses top-level CommandResult for backward compatibility)
+    public static class CommandResult extends it.akai.customremote.CommandResult {
         public CommandResult(boolean success, String message) {
-            this(success, message, false);
+            super(success, message, false);
         }
 
         public CommandResult(boolean success, String message, boolean unsupported) {
-            this.success = success;
-            this.message = message;
-            this.unsupported = unsupported;
+            super(success, message, unsupported);
         }
     }
 
@@ -88,18 +91,25 @@ public class TvController {
                 return new CommandResult(false, "Indietro non disponibile (richiede Servizio Accessibilità attivo)");
 
             // D-PAD Navigation (Primary: UInput Virtual Driver, Secondary: Accessibility Focus)
+            case "up":
             case "dpad_up":
                 return executeDpad(UInputDriver.KEY_UP, AccessibilityNodeInfo.FOCUS_INPUT, "Su");
 
+            case "down":
             case "dpad_down":
                 return executeDpad(UInputDriver.KEY_DOWN, AccessibilityNodeInfo.FOCUS_INPUT, "Giù");
 
+            case "left":
             case "dpad_left":
                 return executeDpad(UInputDriver.KEY_LEFT, AccessibilityNodeInfo.FOCUS_INPUT, "Sinistra");
 
+            case "right":
             case "dpad_right":
                 return executeDpad(UInputDriver.KEY_RIGHT, AccessibilityNodeInfo.FOCUS_INPUT, "Destra");
 
+            case "center":
+            case "select":
+            case "enter":
             case "dpad_center":
                 if (uinputDriver.isAvailable() && uinputDriver.sendKey(UInputDriver.KEY_ENTER)) {
                     return new CommandResult(true, "OK");
@@ -110,6 +120,36 @@ public class TvController {
                     if (clicked) return new CommandResult(true, "OK (Accessibility Click)");
                 }
                 return new CommandResult(false, "D-Pad OK non supportato senza driver UInput o Accessibilità");
+
+            // Menu Control
+            case "menu":
+                if (uinputDriver.isAvailable()) {
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_MENU);
+                    return new CommandResult(sent, sent ? "Menu" : "Errore invio Menu");
+                }
+                return new CommandResult(false, "Menu non disponibile senza driver UInput");
+
+            // Channel Navigation
+            case "channel_up":
+                if (uinputDriver.isAvailable()) {
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_CHANNELUP);
+                    return new CommandResult(sent, sent ? "Canale +" : "Errore invio Canale +");
+                }
+                return new CommandResult(false, "Canale + non disponibile senza driver UInput");
+
+            case "channel_down":
+                if (uinputDriver.isAvailable()) {
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_CHANNELDOWN);
+                    return new CommandResult(sent, sent ? "Canale -" : "Errore invio Canale -");
+                }
+                return new CommandResult(false, "Canale - non disponibile senza driver UInput");
+
+            case "channel_prev":
+                if (uinputDriver.isAvailable()) {
+                    boolean sent = uinputDriver.sendKey(UInputDriver.KEY_LAST);
+                    return new CommandResult(sent, sent ? "Canale Precedente (Recall Last KEY_LAST)" : "Errore invio Canale Precedente");
+                }
+                return new CommandResult(false, "Canale Precedente non disponibile senza driver UInput");
 
             // Direct Inputs (DTV, HDMI 1, HDMI 2, Source)
             case "input_tv":
@@ -122,21 +162,40 @@ public class TvController {
             case "input_hdmi2":
                 return sendMediaTekBroadcast("com.mediatek.select.HDMI2", "HDMI 2");
 
+            case "input_hdmi3":
+                return sendMediaTekBroadcast("com.mediatek.select.HDMI3", "HDMI 3");
+
             case "input_source":
                 return sendMediaTekBroadcast("com.mediatek.select.source", "Selezione Ingressi");
 
-            // App Launch Shortcuts
+            // App Launch Shortcuts (allineati a censimento hardware TV)
             case "app_youtube":
-                return launchAppPackage("com.google.android.youtube.tv", "YouTube TV");
+            case "launch_youtube":
+                return launchAppPackage(PKG_YOUTUBE, "YouTube TV");
 
             case "app_netflix":
-                return launchAppPackage("com.netflix.ninja", "Netflix");
+            case "launch_netflix":
+                return launchAppPackage(PKG_NETFLIX, "Netflix");
 
             case "app_prime":
-                return launchAppPackage("com.amazon.amazonvideo.livingroom", "Prime Video");
+            case "launch_prime":
+                return launchAppPackage(PKG_PRIME, "Prime Video");
 
             case "app_playstore":
-                return launchAppPackage("com.android.vending", "Google Play Store");
+            case "launch_playstore":
+                return launchAppPackage(PKG_PLAYSTORE, "Google Play Store");
+
+            case "app_raiplay":
+            case "launch_raiplay":
+                return launchAppPackage(PKG_RAIPLAY, "RaiPlay");
+
+            case "app_mediaset":
+            case "launch_mediaset":
+                return launchAppPackage(PKG_MEDIASET, "Mediaset Infinity");
+
+            case "app_browser":
+            case "launch_browser":
+                return launchAppPackage(PKG_BROWSER_TVBRO, "TV Bro");
 
             case "diagnostics_sample":
                 LocalDiagnosticsManager.getInstance(context).triggerManualSample("user_command");
@@ -227,7 +286,7 @@ public class TvController {
                 context.startActivity(intent);
                 return new CommandResult(true, "Avvio " + appName);
             }
-            return new CommandResult(false, appName + " non risulta installato sulla TV", true);
+            return new CommandResult(false, appName + " non risulta installato sulla TV (" + pkg + ")", true);
         } catch (Exception e) {
             return new CommandResult(false, "Errore avvio " + appName + ": " + e.getMessage());
         }
@@ -287,7 +346,7 @@ public class TvController {
                 switch (type) {
                     case "open_app":
                     case "launch_app": {
-                        String pkg = step.optString("pkg", "");
+                        String pkg = step.optString("pkg", step.optString("package", ""));
                         String name = step.optString("name", pkg);
                         CommandResult res = launchAppPackage(pkg, name);
                         if (!res.success) {

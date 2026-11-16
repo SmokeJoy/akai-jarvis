@@ -10,6 +10,11 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.util.Locale;
 
 /**
@@ -32,9 +37,10 @@ import java.util.Locale;
 public class AkaiMemoryEngine extends SQLiteOpenHelper {
     private static final String TAG = "AKAI_MemoryEngine";
     private static final String DB_NAME = "akai_memory.db";
-    private static final int DB_VERSION = 5;
+    private static final int DB_VERSION = 6;
 
     private static AkaiMemoryEngine sInstance = null;
+    private final Context mContext;
 
     // Tabella procedural_memory
     public static final String TABLE_PROCEDURES = "procedural_memory";
@@ -88,13 +94,14 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
 
     private AkaiMemoryEngine(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
+        this.mContext = context;
     }
 
     @Override
     public void onCreate(SQLiteDatabase db) {
         Log.i(TAG, "Creating AKAI Memory SQLite database schemas v2...");
 
-        // 1. procedural_memory (v2)
+        // 1. procedural_memory (v2/v6)
         String sqlProcedures = "CREATE TABLE " + TABLE_PROCEDURES + " (" +
                 COL_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 COL_INTENT_KEY + " TEXT UNIQUE NOT NULL, " +
@@ -110,6 +117,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                 COL_LAST_USED + " INTEGER, " +
                 COL_LAST_VERIFIED + " INTEGER, " +
                 COL_FALLBACK_STRATEGY + " TEXT, " +
+                COL_IS_PERSONAL + " INTEGER DEFAULT 0, " +
                 COL_CREATED_AT + " INTEGER);";
         db.execSQL(sqlProcedures);
 
@@ -188,6 +196,24 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                 Log.w(TAG, "Schema upgrade v5 notice: " + e.getMessage());
             }
         }
+        if (oldVersion < 6) {
+            try {
+                // Politica categorica di privacy (Criterio 3): TUTTE le procedure legacy v5 pre-esistenti
+                // vengono marcate indistintamente come personali (is_personal = 1) per prevenire
+                // qualsiasi trapelamento di dati o abitudini in Guest Mode.
+                // Nessuna procedura pregressa viene promossa a pubblica per confronto parziale.
+                db.execSQL("ALTER TABLE " + TABLE_PROCEDURES + " ADD COLUMN " + COL_IS_PERSONAL + " INTEGER DEFAULT 1;");
+            } catch (Exception e) {
+                Log.w(TAG, "Schema upgrade v6 notice: " + e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public void onDowngrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        Log.w(TAG, "Database downgrade requested from v" + oldVersion + " to v" + newVersion);
+        // SQLite supporta nativamente tabelle con colonne addizionali; 
+        // non distruggere i dati e consenti al vecchio codice v5 di operare in sicurezza.
     }
 
     private void seedInitialData(SQLiteDatabase db) {
@@ -231,6 +257,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             cvYt.put(COL_FAILURE_COUNT, 0);
             cvYt.put(COL_LAST_USED, 0);
             cvYt.put(COL_LAST_VERIFIED, 0); // 0 = mai verificato a runtime
+            cvYt.put(COL_IS_PERSONAL, 0); // Template di sistema pubblico (non personale)
             cvYt.put(COL_CREATED_AT, now);
             db.insertWithOnConflict(TABLE_PROCEDURES, null, cvYt, SQLiteDatabase.CONFLICT_IGNORE);
 
@@ -265,28 +292,34 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     public synchronized JSONObject findProcedureByGoal(String rawQuery) {
         if (rawQuery == null || rawQuery.trim().isEmpty()) return null;
         String clean = rawQuery.trim().toLowerCase(Locale.ITALIAN).replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
+        boolean guest = isGuestMode();
 
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
 
         try {
-            // Check 1: Match esatto su intent_key
-            c = db.query(TABLE_PROCEDURES, null, COL_INTENT_KEY + "=?", new String[]{clean}, null, null, null);
+            // Check 1: Match esatto su intent_key (filtrando procedure personali in Guest Mode)
+            String where1 = COL_INTENT_KEY + "=?";
+            if (guest) where1 += " AND " + COL_IS_PERSONAL + "=0";
+            c = db.query(TABLE_PROCEDURES, null, where1, new String[]{clean}, null, null, null);
             if (c != null && c.moveToFirst()) {
                 return parseProcedureCursor(c);
             }
             if (c != null) c.close();
 
-            // Check 2: Match su goal_intent
-            c = db.query(TABLE_PROCEDURES, null, COL_GOAL_INTENT + "=?", new String[]{clean}, null, null, null);
+            // Check 2: Match su goal_intent (filtrando procedure personali in Guest Mode)
+            String where2 = COL_GOAL_INTENT + "=?";
+            if (guest) where2 += " AND " + COL_IS_PERSONAL + "=0";
+            c = db.query(TABLE_PROCEDURES, null, where2, new String[]{clean}, null, null, null);
             if (c != null && c.moveToFirst()) {
                 return parseProcedureCursor(c);
             }
             if (c != null) c.close();
 
-            // Check 3: Match se la query contiene l'intent_key memorizzato (es. "metti italia 2" contiene "italia 2" o "italia2")
+            // Check 3: Match se la query contiene l'intent_key memorizzato (es. "metti italia 2")
             String cleanNoSpace = clean.replaceAll("\\s+", "");
-            Cursor allProcs = db.query(TABLE_PROCEDURES, null, null, null, null, null, COL_SUCCESS_COUNT + " DESC");
+            String where3 = guest ? (COL_IS_PERSONAL + "=0") : null;
+            Cursor allProcs = db.query(TABLE_PROCEDURES, null, where3, null, null, null, COL_SUCCESS_COUNT + " DESC");
             if (allProcs != null && allProcs.moveToFirst()) {
                 do {
                     String ik = allProcs.getString(allProcs.getColumnIndex(COL_INTENT_KEY));
@@ -322,10 +355,13 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
 
     public synchronized JSONObject getProcedure(String intentKey) {
         if (intentKey == null) return null;
+        boolean guest = isGuestMode();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
-            c = db.query(TABLE_PROCEDURES, null, COL_INTENT_KEY + "=?", new String[]{intentKey}, null, null, null);
+            String where = COL_INTENT_KEY + "=?";
+            if (guest) where += " AND " + COL_IS_PERSONAL + "=0";
+            c = db.query(TABLE_PROCEDURES, null, where, new String[]{intentKey}, null, null, null);
             if (c != null && c.moveToFirst()) {
                 return parseProcedureCursor(c);
             }
@@ -353,6 +389,8 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
         obj.put("last_used", c.getLong(c.getColumnIndex(COL_LAST_USED)));
         obj.put("last_verified_at", c.getLong(c.getColumnIndex(COL_LAST_VERIFIED)));
         obj.put("fallback_strategy", c.getString(c.getColumnIndex(COL_FALLBACK_STRATEGY)));
+        int isPersonalIdx = c.getColumnIndex(COL_IS_PERSONAL);
+        obj.put("is_personal", isPersonalIdx >= 0 ? c.getInt(isPersonalIdx) : 0);
         return obj;
     }
 
@@ -386,6 +424,13 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     public synchronized boolean saveVerifiedProcedure(String intentKey, String goalIntent, String description,
                                                        String appPackage, String initialState, JSONArray actions,
                                                        String successCondition, String appVersion) {
+        // Le procedure registrate dall'assistente su richiesta dell'utente sono per default personali
+        return saveVerifiedProcedure(intentKey, goalIntent, description, appPackage, initialState, actions, successCondition, appVersion, true);
+    }
+
+    public synchronized boolean saveVerifiedProcedure(String intentKey, String goalIntent, String description,
+                                                       String appPackage, String initialState, JSONArray actions,
+                                                       String successCondition, String appVersion, boolean isPersonal) {
         if (intentKey == null || actions == null || actions.length() == 0) return false;
         SQLiteDatabase db = getWritableDatabase();
         long now = System.currentTimeMillis();
@@ -403,10 +448,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             cv.put(COL_FAILURE_COUNT, 0);
             cv.put(COL_LAST_USED, now);
             cv.put(COL_LAST_VERIFIED, now);
+            cv.put(COL_IS_PERSONAL, isPersonal ? 1 : 0);
             cv.put(COL_CREATED_AT, now);
 
             long row = db.insertWithOnConflict(TABLE_PROCEDURES, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
-            Log.i(TAG, "New procedure saved to SQLite: " + intentKey + " (row=" + row + ")");
+            Log.i(TAG, "New procedure saved to SQLite: " + intentKey + " (personal=" + isPersonal + ", row=" + row + ")");
             return row != -1;
         } catch (Exception e) {
             Log.e(TAG, "Error saving verified procedure " + intentKey + ": " + e.getMessage());
@@ -415,11 +461,16 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     }
 
     public synchronized JSONArray getAllProcedures() {
+        return getAllProcedures(isGuestMode());
+    }
+
+    public synchronized JSONArray getAllProcedures(boolean filterPersonal) {
         JSONArray list = new JSONArray();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
-            c = db.query(TABLE_PROCEDURES, null, null, null, null, null, COL_LAST_USED + " DESC");
+            String selection = filterPersonal ? (COL_IS_PERSONAL + " = 0") : null;
+            c = db.query(TABLE_PROCEDURES, null, selection, null, null, null, COL_LAST_USED + " DESC");
             if (c != null && c.moveToFirst()) {
                 do {
                     list.put(parseProcedureCursor(c));
@@ -499,9 +550,15 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
-            c = db.query(TABLE_PREFERENCES, new String[]{COL_PREF_VAL}, COL_PREF_KEY + "=?", new String[]{key}, null, null, null);
+            c = db.query(TABLE_PREFERENCES, new String[]{COL_PREF_VAL, COL_IS_PERSONAL}, COL_PREF_KEY + "=?", new String[]{key}, null, null, null);
             if (c != null && c.moveToFirst()) {
-                return c.getString(0);
+                String val = c.getString(0);
+                int personal = c.getInt(1);
+                // Se la preferenza è personale e la modalità Ospite è attiva, non esporla
+                if (personal == 1 && !"guest_mode".equals(key) && isGuestMode()) {
+                    return defaultValue;
+                }
+                return val;
             }
         } catch (Exception e) {
             Log.e(TAG, "Error getting pref " + key + ": " + e.getMessage());
@@ -550,10 +607,11 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     public synchronized void clearPersonalPreferencesOnly() {
         SQLiteDatabase db = getWritableDatabase();
         try {
-            // Elimina i record contrassegnati come personali E l'intera cronologia conversazioni
+            // Elimina i record contrassegnati come personali, le procedure personali E l'intera cronologia conversazioni
             int delPrefs = db.delete(TABLE_PREFERENCES, COL_IS_PERSONAL + "=1", null);
+            int delProcs = db.delete(TABLE_PROCEDURES, COL_IS_PERSONAL + "=1", null);
             int delConv = db.delete(TABLE_CONVERSATIONS, null, null);
-            Log.i(TAG, "Cleared " + delPrefs + " personal preferences and " + delConv + " conversation exchanges. Technical settings preserved.");
+            Log.i(TAG, "Cleared " + delPrefs + " personal preferences, " + delProcs + " personal procedures, and " + delConv + " conversation exchanges. Technical settings preserved.");
         } catch (Exception e) {
             Log.e(TAG, "Error clearing personal data: " + e.getMessage());
         }
@@ -596,6 +654,9 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
 
     public synchronized JSONArray getRecentConversations(int limit) {
         JSONArray arr = new JSONArray();
+        if (isGuestMode()) {
+            return arr; // Privacy: in Guest Mode nessuna cronologia precedente o personale è esposta
+        }
         int max = (limit > 0 && limit <= 20) ? limit : 20;
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
@@ -700,5 +761,138 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             if (c != null) c.close();
         }
         return obj;
+    }
+
+    // =========================================================================
+    // METODI BACKUP & RESTORE ATOMICO CONSISTENTE (CON CHECKPOINT WAL)
+    // =========================================================================
+
+    public synchronized boolean performConsistentSnapshot(File destination) {
+        if (destination == null) return false;
+        SQLiteDatabase db = getWritableDatabase();
+        Cursor c = null;
+        boolean checkpointOk = false;
+        try {
+            // Esegui checkpoint TRUNCATE per svuotare il file WAL e committare tutte le pagine sul DB principale
+            c = db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE);", null);
+            if (c != null && c.moveToFirst()) {
+                int busy = c.getInt(0);
+                int logFrames = c.getInt(1);
+                int checkpointed = c.getInt(2);
+                Log.d(TAG, "WAL checkpoint status: busy=" + busy + " logFrames=" + logFrames + " checkpointed=" + checkpointed);
+                if (busy == 0) {
+                    checkpointOk = true;
+                } else {
+                    Log.e(TAG, "WAL checkpoint busy or blocked by concurrent transaction (busy=" + busy + "). Aborting snapshot.");
+                    return false;
+                }
+            } else {
+                Log.e(TAG, "WAL checkpoint returned null cursor. Aborting snapshot.");
+                return false;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "WAL checkpoint fatal error: " + e.getMessage(), e);
+            return false;
+        } finally {
+            if (c != null) c.close();
+        }
+
+        if (!checkpointOk) {
+            return false;
+        }
+
+        try {
+            File currentDb = new File(db.getPath());
+            if (!currentDb.exists() || currentDb.length() == 0) return false;
+            if (destination.getParentFile() != null && !destination.getParentFile().exists()) {
+                destination.getParentFile().mkdirs();
+            }
+            copyFile(currentDb, destination);
+
+            // Validazione Fail-Closed dell'integrità del database appena clonato
+            SQLiteDatabase testDb = SQLiteDatabase.openDatabase(destination.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
+            Cursor ic = null;
+            boolean valid = false;
+            try {
+                ic = testDb.rawQuery("PRAGMA integrity_check;", null);
+                if (ic != null && ic.moveToFirst()) {
+                    valid = "ok".equalsIgnoreCase(ic.getString(0));
+                }
+            } finally {
+                if (ic != null) ic.close();
+                testDb.close();
+            }
+
+            if (!valid) {
+                Log.e(TAG, "Cloned snapshot failed integrity_check. Removing corrupt snapshot.");
+                destination.delete();
+                return false;
+            }
+
+            Log.i(TAG, "Consistent database snapshot created and integrity-verified at: " + destination.getAbsolutePath() + " (" + destination.length() + " bytes)");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed creating consistent snapshot: " + e.getMessage(), e);
+            if (destination.exists()) destination.delete();
+            return false;
+        }
+    }
+
+    public synchronized boolean restoreConsistentSnapshot(File source) {
+        if (source == null || !source.exists() || source.length() < 512) return false;
+
+        // Validazione preventiva integrità del file sorgente
+        try {
+            SQLiteDatabase testSrc = SQLiteDatabase.openDatabase(source.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
+            Cursor ic = testSrc.rawQuery("PRAGMA integrity_check;", null);
+            boolean srcOk = false;
+            if (ic != null && ic.moveToFirst()) {
+                srcOk = "ok".equalsIgnoreCase(ic.getString(0));
+            }
+            if (ic != null) ic.close();
+            testSrc.close();
+            if (!srcOk) {
+                Log.e(TAG, "Source snapshot failed integrity_check. Refusing to restore corrupted file.");
+                return false;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Unable to verify source snapshot integrity: " + e.getMessage());
+            return false;
+        }
+
+        try {
+            close();
+            File currentDb = mContext.getDatabasePath(DB_NAME);
+            copyFile(source, currentDb);
+
+            // Elimina file di transazione WAL/SHM obsoleti per prevenire conflitti di replay
+            File wal = new File(currentDb.getAbsolutePath() + "-wal");
+            if (wal.exists()) wal.delete();
+            File shm = new File(currentDb.getAbsolutePath() + "-shm");
+            if (shm.exists()) shm.delete();
+
+            // Riapre il database e valida l'integrità
+            SQLiteDatabase db = getWritableDatabase();
+            Cursor c = db.rawQuery("PRAGMA integrity_check;", null);
+            boolean ok = false;
+            if (c != null && c.moveToFirst()) {
+                ok = "ok".equalsIgnoreCase(c.getString(0));
+                c.close();
+            }
+            Log.i(TAG, "Consistent database snapshot restored with integrity check result: " + ok);
+            return ok;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed restoring consistent snapshot: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+    private static void copyFile(File src, File dst) throws IOException {
+        try (FileInputStream in = new FileInputStream(src);
+             FileOutputStream out = new FileOutputStream(dst);
+             FileChannel inChannel = in.getChannel();
+             FileChannel outChannel = out.getChannel()) {
+            inChannel.transferTo(0, inChannel.size(), outChannel);
+        }
     }
 }

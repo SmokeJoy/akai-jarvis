@@ -24,6 +24,7 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -62,12 +63,40 @@ public class RemoteServerService extends Service {
     private Thread httpAcceptorThread;
     private Thread httpsAcceptorThread;
     private ExecutorService threadPool;
+    private HttpsRebindController httpsRebindController;
     private volatile boolean isRunning = false;
     private volatile boolean isStarting = false;
     private BroadcastReceiver screenWakeReceiver = null;
 
     private SecurityManager securityManager;
     private TvController tvController;
+    private RestApiRouter restApiRouter;
+
+    private static final java.util.List<ServiceStateListener> sStateListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    public static void registerStateListener(ServiceStateListener listener) {
+        if (listener != null) {
+            sStateListeners.add(listener);
+            RemoteServerService instance = getInstance();
+            if (instance != null && instance.isReady()) {
+                try {
+                    listener.onServerReady(instance.getLocalIpAddress(), HTTP_PORT, HTTPS_PORT);
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    public static void unregisterStateListener(ServiceStateListener listener) {
+        if (listener != null) {
+            sStateListeners.remove(listener);
+        }
+    }
+
+    public boolean isReady() {
+        boolean httpOk = (httpServerSocket != null && !httpServerSocket.isClosed() && httpServerSocket.isBound());
+        boolean httpsOk = (httpsRebindController != null && httpsRebindController.isReady());
+        return isRunning && httpOk && httpsOk && securityManager != null;
+    }
 
     public static RemoteServerService getInstance() {
         return sInstance;
@@ -85,9 +114,140 @@ public class RemoteServerService extends Service {
     public void onCreate() {
         super.onCreate();
         sInstance = this;
+        TlsCertificateManager.setApplicationContext(this);
         securityManager = new SecurityManager(this);
         tvController = new TvController(this);
+        final TlsCertificateManager tlsMgr = TlsCertificateManager.getInstance();
+        final TlsCertificateManager.TlsInfo tlsInfo = tlsMgr.getOrGenerateTlsInfo(this, getLocalIpAddress());
+        final String caFp = (tlsInfo != null) ? tlsInfo.caFingerprintSha256 : null;
+
+        restApiRouter = new RestApiRouter(
+            securityManager,
+            new RestApiRouter.CommandHandler() {
+                @Override public CommandResult executeCommand(String action) { return tvController.executeCommand(action); }
+                @Override public CommandResult injectText(String text) { return tvController.injectText(text); }
+                @Override public boolean isUInputReady() { return tvController.isUInputReady(); }
+            },
+            new RestApiRouter.MemoryHandler() {
+                @Override public JSONArray getAllProcedures() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getAllProcedures(); }
+                @Override public JSONObject getAllPreferences() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getAllPreferences(); }
+                @Override public JSONObject getAllStats() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getAllStats(); }
+                @Override public JSONArray getRecentConversations(int limit) { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getRecentConversations(limit); }
+                @Override public long getDatabaseSizeBytes() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getDatabaseSizeBytes(); }
+                @Override public boolean isGuestMode() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).isGuestMode(); }
+                @Override public void setGuestMode(boolean enabled) { AkaiMemoryEngine.getInstance(RemoteServerService.this).setGuestMode(enabled); }
+                @Override public void resetProcedures() { AkaiMemoryEngine.getInstance(RemoteServerService.this).resetProcedures(); }
+                @Override public void clearPersonalPreferencesOnly() { AkaiMemoryEngine.getInstance(RemoteServerService.this).clearPersonalPreferencesOnly(); }
+            },
+            new RestApiRouter.PinHandler() {
+                @Override public void showPin(String pin, int remaining, String serverUrl) {
+                    PinOverlayDialog.show(RemoteServerService.this, pin, remaining, serverUrl, caFp);
+                }
+                @Override public void showPin(String pin, int remaining, String serverUrl, String caFingerprint) {
+                    PinOverlayDialog.show(RemoteServerService.this, pin, remaining, serverUrl, caFingerprint != null ? caFingerprint : caFp);
+                }
+                @Override public void dismissPin() { PinOverlayDialog.dismiss(); }
+            },
+            new RestApiRouter.AiHandler() {
+                @Override public JSONObject processQuery(String query, boolean speak) {
+                    return AkaiAiController.getInstance(RemoteServerService.this, tvController).processQuery(query, speak);
+                }
+                @Override public boolean isStrictLocalOnly() {
+                    return AkaiAiController.isStrictLocalOnly();
+                }
+                @Override public JSONArray getSupportedCatalog() {
+                    return AkaiAiController.getSupportedCatalog();
+                }
+                @Override public JSONObject testConnection(String requestBody) {
+                    try {
+                        JSONObject req = new JSONObject(requestBody != null && !requestBody.trim().isEmpty() ? requestBody : "{}");
+                        String prov = req.optString("provider", "deepseek");
+                        String key = req.optString("api_key", null);
+                        String model = req.optString("model", null);
+                        AkaiAiController ai = AkaiAiController.getInstance(RemoteServerService.this, tvController);
+                        return ai.getAiAdapter().testConnection(prov, key, model);
+                    } catch (Exception e) {
+                        JSONObject err = new JSONObject();
+                        try {
+                            err.put("success", false);
+                            err.put("message", "Errore test connessione: " + e.getMessage());
+                        } catch (Exception ignored) {}
+                        return err;
+                    }
+                }
+                @Override public boolean speak(String text, boolean interrupt) {
+                    return it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).speak(text, interrupt);
+                }
+                @Override public boolean previewVoice(String voice, String text) {
+                    return it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).previewVoice(voice, text);
+                }
+                @Override public JSONObject getSpeechStatus() {
+                    it.akai.customremote.ai.AkaiSpeechEngine speech = it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this);
+                    JSONObject out = new JSONObject();
+                    try {
+                        out.put("speaking", speech.isSpeaking());
+                        out.put("speech_state", speech.getSpeechState());
+                        out.put("speech_id", speech.getCurrentSpeechId());
+                        out.put("voice", speech.getTtsVoice());
+                    } catch (Exception ignored) {}
+                    return out;
+                }
+                @Override public JSONObject cancelCurrentTask() {
+                    it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).stop();
+                    return AkaiAiController.getInstance(RemoteServerService.this, tvController).cancelActiveTask();
+                }
+            },
+            getLocalIpAddress(),
+            HTTP_PORT
+        );
+        restApiRouter.setTlsCertificateManager(tlsMgr);
         threadPool = Executors.newFixedThreadPool(12);
+
+        httpsRebindController = new HttpsRebindController(
+            HTTPS_PORT,
+            new HttpsRebindController.SslContextProvider() {
+                @Override
+                public SSLContext getSslContext(String ip) throws Exception {
+                    TlsCertificateManager.getInstance().getOrGenerateTlsInfo(RemoteServerService.this, ip);
+                    return createSSLContext(ip);
+                }
+            },
+            new HttpsRebindController.ListenerCallback() {
+                @Override
+                public void onServerReady(String ip, int port) {
+                    if (httpsRebindController != null) {
+                        httpsServerSocket = (SSLServerSocket) httpsRebindController.getActiveSocket();
+                    }
+                    for (ServiceStateListener l : sStateListeners) {
+                        try {
+                            l.onServerReady(ip, HTTP_PORT, HTTPS_PORT);
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                @Override
+                public void onServerDegraded(String reason) {
+                    httpsServerSocket = null;
+                    for (ServiceStateListener l : sStateListeners) {
+                        try {
+                            l.onServerDegraded(reason);
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                @Override
+                public void onClientConnected(final Socket client) {
+                    threadPool.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            handleClient(client, true);
+                        }
+                    });
+                }
+            },
+            threadPool,
+            false
+        );
 
         createNotificationChannel();
         startForeground(NOTIF_ID, buildForegroundNotification());
@@ -126,10 +286,72 @@ public class RemoteServerService extends Service {
         Log.i(TAG, "AKAI Remote HTTP Service running in foreground on port " + HTTP_PORT);
     }
 
+    public static final String ACTION_BACKUP_DB = "it.akai.customremote.ACTION_BACKUP_DB";
+    public static final String ACTION_RESTORE_DB = "it.akai.customremote.ACTION_RESTORE_DB";
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null) {
+            String action = intent.getAction();
+            if (ACTION_BACKUP_DB.equals(action)) {
+                handleBackupDbIntent(intent);
+                return START_NOT_STICKY;
+            } else if (ACTION_RESTORE_DB.equals(action)) {
+                handleRestoreDbIntent(intent);
+                return START_NOT_STICKY;
+            }
+        }
         ensureServerRunning();
         return START_STICKY;
+    }
+
+    private void handleBackupDbIntent(Intent intent) {
+        String targetPath = intent.getStringExtra("target_path");
+        File dest;
+        if (targetPath != null) {
+            File f = new File(targetPath);
+            dest = f.isAbsolute() ? f : new File(getFilesDir(), targetPath);
+        } else {
+            dest = new File(getFilesDir(), "akai_memory_snapshot.db");
+        }
+        boolean ok = AkaiMemoryEngine.getInstance(this).performConsistentSnapshot(dest);
+        Log.i(TAG, "Consistent DB backup intent completed. Success=" + ok + " Destination=" + dest.getAbsolutePath());
+    }
+
+    private void handleRestoreDbIntent(Intent intent) {
+        String sourcePath = intent.getStringExtra("source_path");
+        File src;
+        if (sourcePath != null) {
+            File f = new File(sourcePath);
+            src = f.isAbsolute() ? f : new File(getFilesDir(), sourcePath);
+        } else {
+            src = new File(getFilesDir(), "akai_memory_snapshot.db");
+        }
+        boolean ok = AkaiMemoryEngine.getInstance(this).restoreConsistentSnapshot(src);
+        Log.i(TAG, "Consistent DB restore intent completed. Success=" + ok + " Source=" + src.getAbsolutePath());
+    }
+
+    public String getCurrentServerIp() {
+        return (httpsRebindController != null) ? httpsRebindController.getCurrentServerIp() : null;
+    }
+
+    public void notifyIpAddressChanged(final String newIp) {
+        if (httpsRebindController != null) {
+            httpsRebindController.notifyIpAddressChanged(newIp);
+        }
+    }
+
+    public synchronized boolean reloadHttpsListener() {
+        if (httpsRebindController != null) {
+            boolean ok = httpsRebindController.reloadListener();
+            if (ok) {
+                httpsServerSocket = (SSLServerSocket) httpsRebindController.getActiveSocket();
+            } else {
+                httpsServerSocket = null;
+            }
+            return ok;
+        }
+        return false;
     }
 
     public synchronized void ensureServerRunning() {
@@ -173,14 +395,64 @@ public class RemoteServerService extends Service {
             .build();
     }
 
-    private SSLContext createSSLContext() {
+    private SSLContext createSSLContext(String targetIp) {
+        String ipForSan = (targetIp != null && !targetIp.trim().isEmpty()) ? targetIp.trim() : getLocalIpAddress();
+        try {
+            SSLContext ctx = TlsCertificateManager.getInstance().createSSLContext(this, ipForSan);
+            if (ctx != null) {
+                Log.i(TAG, "SSLContext inizializzato con successo da TlsCertificateManager (M2 SAN & Local CA per " + ipForSan + ").");
+                return ctx;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "TlsCertificateManager SSLContext notice: " + e.getMessage() + ". Tentativo fallback manuale.");
+        }
+
         try {
             KeyStore keyStore = KeyStore.getInstance("PKCS12");
-            try (InputStream is = getAssets().open("server_keystore.p12")) {
-                keyStore.load(is, "akai1234".toCharArray());
+            InputStream is = null;
+
+            // 1. Priorità a Keystore TLS esterno provisionato in storage privato locale (/data/data/.../files)
+            File localKeystore = new File(getFilesDir(), "server_keystore.p12");
+            File passFile = new File(getFilesDir(), "server_keystore.pass");
+            char[] keyPassword = null;
+
+            if (localKeystore.exists() && localKeystore.length() > 0) {
+                // Per un keystore provisionato per-dispositivo, la password personalizzata è OBBLIGATORIA (fail-closed)
+                if (!passFile.exists() || passFile.length() == 0) {
+                    Log.e(TAG, "Provisioned TLS keystore present but password file (server_keystore.pass) is missing. Refusing to load with default credentials.");
+                    return null;
+                }
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(passFile), StandardCharsets.UTF_8))) {
+                    String p = reader.readLine();
+                    if (p != null && !p.trim().isEmpty()) {
+                        keyPassword = p.trim().toCharArray();
+                        Log.i(TAG, "Secure TLS keystore password loaded from provisioned storage.");
+                    } else {
+                        Log.e(TAG, "Provisioned TLS password file is empty. Refusing load.");
+                        return null;
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed reading provisioned TLS password file: " + e.getMessage());
+                    return null;
+                }
+                is = new FileInputStream(localKeystore);
+            } else {
+                // Fail-closed: Nessun keystore TLS autorizzato (né generato on-device da TlsCertificateManager
+                // né provisionato in storage privato). Fallback statico da assets categoricamente vietato in release.
+                Log.e(TAG, "Fail-closed: Nessun materiale TLS autorizzato in storage privato locale. Fallback statico da assets vietato in release.");
+                return null;
             }
+
+            try {
+                keyStore.load(is, keyPassword);
+            } finally {
+                if (is != null) {
+                    try { is.close(); } catch (Exception ignored) {}
+                }
+            }
+
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-            kmf.init(keyStore, "akai1234".toCharArray());
+            kmf.init(keyStore, keyPassword);
             SSLContext sslContext = SSLContext.getInstance("TLS");
             sslContext.init(kmf.getKeyManagers(), null, new SecureRandom());
             return sslContext;
@@ -240,44 +512,23 @@ public class RemoteServerService extends Service {
                 httpAcceptorThread.start();
             }
 
-            // 2. HTTPS Server (Port 8443)
-            if (httpsServerSocket == null || httpsServerSocket.isClosed() || !httpsServerSocket.isBound()) {
-                SSLContext sslContext = createSSLContext();
-                if (sslContext != null) {
-                    if (httpsServerSocket != null && !httpsServerSocket.isClosed()) {
-                        try { httpsServerSocket.close(); } catch (Exception ignored) {}
-                    }
-                    SSLServerSocketFactory factory = sslContext.getServerSocketFactory();
-                    SSLServerSocket sslServer = (SSLServerSocket) factory.createServerSocket();
-                    sslServer.setReuseAddress(true);
-                    sslServer.bind(new InetSocketAddress(HTTPS_PORT));
-                    httpsServerSocket = sslServer;
+            // 2. HTTPS Server (Port 8443) gestito centralmente da HttpsRebindController
+            if (httpsRebindController != null && !httpsRebindController.isReady()) {
+                boolean ok = httpsRebindController.reloadListenerForIp(getLocalIpAddress());
+                if (ok) {
+                    httpsServerSocket = (SSLServerSocket) httpsRebindController.getActiveSocket();
                     Log.i(TAG, "AKAI Remote HTTPS Server listening on port " + HTTPS_PORT + " (Secure Context for Voice)");
-
-                    httpsAcceptorThread = new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            final ServerSocket s = httpsServerSocket;
-                            while (isRunning && s != null && !s.isClosed() && s.isBound()) {
-                                try {
-                                    final Socket client = s.accept();
-                                    threadPool.execute(new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            handleClient(client, true);
-                                        }
-                                    });
-                                } catch (IOException e) {
-                                    if (!isRunning || s.isClosed()) break;
-                                    Log.e(TAG, "HTTPS Accept error: " + e.getMessage());
-                                    try { Thread.sleep(200); } catch (InterruptedException ignored) {}
-                                }
-                            }
-                        }
-                    }, "AkaiHttpsAcceptor");
-                    httpsAcceptorThread.start();
                 } else {
-                    Log.w(TAG, "SSLContext not available; HTTPS server skipped.");
+                    Log.w(TAG, "HTTPS server initialization failed or skipped; check logs.");
+                }
+            }
+
+            if (isReady()) {
+                Log.i(TAG, "AKAI Remote Dual Server READY (HTTP:" + HTTP_PORT + ", HTTPS:" + HTTPS_PORT + ")");
+                for (ServiceStateListener l : sStateListeners) {
+                    try {
+                        l.onServerReady(getLocalIpAddress(), HTTP_PORT, HTTPS_PORT);
+                    } catch (Exception ignored) {}
                 }
             }
         } catch (Exception e) {
@@ -385,8 +636,8 @@ public class RemoteServerService extends Service {
                 return;
             }
 
-            // Route Requests
-            routeRequest(method, path, headers, body, clientIp, os);
+            // Route Requests with HTTPS channel security flag (P0)
+            routeRequest(method, path, headers, body, clientIp, os, isHttps);
 
         } catch (Exception e) {
             Log.e(TAG, "Error handling client: " + e.getMessage());
@@ -395,7 +646,10 @@ public class RemoteServerService extends Service {
         }
     }
 
-    private void routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os) throws Exception {
+    private void routeRequest(String method, String path, Map<String, String> headers, String body, String clientIp, OutputStream os, boolean isHttps) throws Exception {
+        if (restApiRouter != null && restApiRouter.routeRequest(method, path, headers, body, clientIp, os, isHttps)) {
+            return;
+        }
         // Subnet Verification (rifiuta IP esterni WAN)
         if (!securityManager.isPrivateLanIp(clientIp)) {
             JSONObject err = new JSONObject().put("error", "Access denied: non-private LAN IP");
@@ -403,27 +657,16 @@ public class RemoteServerService extends Service {
             return;
         }
 
-        // Status
-        if ("/api/status".equals(path) && "GET".equals(method)) {
-            String token = extractBearerToken(headers);
-            boolean authenticated = false;
-            if (token != null) {
-                if (securityManager.validateToken(token)) {
-                    authenticated = true;
-                } else {
-                    sendJsonResponse(os, 401, new JSONObject().put("error", "Sessione scaduta o non valida"));
-                    return;
-                }
-            }
-            JSONObject json = new JSONObject();
-            json.put("status", "ok");
-            json.put("authenticated", authenticated);
-            json.put("service", "AKAI Custom Remote");
-            json.put("version", "1.1.0");
-            json.put("model", "AKTV5037N");
-            json.put("active_sessions", securityManager.getActiveSessionCount());
-            json.put("uinput_ready", tvController.isUInputReady());
-            sendJsonResponse(os, 200, json);
+        // P0: retain public static remote web assets on LAN HTTP for legacy fallback.
+        // RestApiRouter has already handled authenticated legacy command/PIN routes.
+        // Never serve AI, credentials, memory or diagnostics over HTTP.
+        if (!isHttps && !("/api/status".equals(path) && "GET".equals(method))
+                && !RestApiRouter.isPublicRemoteAssetRequest(method, path)) {
+            JSONObject err = new JSONObject();
+            err.put("error", "HTTPS_REQUIRED");
+            err.put("status", "UPGRADE_REQUIRED");
+            err.put("https_port", HTTPS_PORT);
+            sendJsonResponse(os, 426, err);
             return;
         }
 
@@ -456,127 +699,10 @@ public class RemoteServerService extends Service {
             return;
         }
 
-        // Pair Request
-        if ("/api/auth/pair/request".equals(path) && "POST".equals(method)) {
-            if (securityManager.isClientLockedOut(clientIp)) {
-                long waitSec = securityManager.getLockoutRemainingSeconds(clientIp);
-                JSONObject err = new JSONObject();
-                err.put("error", "Troppi tentativi falliti. Riprova più tardi.");
-                err.put("retry_after", waitSec);
-                sendJsonResponse(os, 429, err);
-                return;
-            }
-
-            String pin = securityManager.generateNewPin();
-            int remaining = securityManager.getPinRemainingSeconds();
-            String serverUrl = "http://" + getLocalIpAddress() + ":" + HTTP_PORT;
-            PinOverlayDialog.show(this, pin, remaining, serverUrl);
-
-            JSONObject res = new JSONObject();
-            res.put("success", true);
-            res.put("expires_in", remaining);
-            sendJsonResponse(os, 200, res);
-            return;
-        }
-
-        // Pair Verify
-        if ("/api/auth/pair/verify".equals(path) && "POST".equals(method)) {
-            if (securityManager.isClientLockedOut(clientIp)) {
-                long waitSec = securityManager.getLockoutRemainingSeconds(clientIp);
-                JSONObject err = new JSONObject();
-                err.put("error", "Troppi tentativi falliti. Riprova più tardi.");
-                err.put("retry_after", waitSec);
-                sendJsonResponse(os, 429, err);
-                return;
-            }
-
-            JSONObject req = new JSONObject(body);
-            String pin = req.optString("pin", "").trim();
-            String deviceName = req.optString("device_name", "Smartphone");
-            String token = securityManager.verifyPinAndCreateToken(clientIp, pin, deviceName);
-            if (token != null) {
-                PinOverlayDialog.dismiss();
-                JSONObject res = new JSONObject();
-                res.put("success", true);
-                res.put("token", token);
-                sendJsonResponse(os, 200, res);
-            } else {
-                JSONObject err = new JSONObject();
-                err.put("error", "Codice PIN non corretto o scaduto");
-                sendJsonResponse(os, 401, err);
-            }
-            return;
-        }
-
-        // Revoke Session
-        if ("/api/auth/revoke".equals(path) && "POST".equals(method)) {
-            String token = extractBearerToken(headers);
-            if (token != null) {
-                securityManager.revokeToken(token);
-            }
-            sendJsonResponse(os, 200, new JSONObject().put("success", true));
-            return;
-        }
-
-        // Control Command
-        if ("/api/control/command".equals(path) && "POST".equals(method)) {
-            String token = extractBearerToken(headers);
-            if (!securityManager.validateToken(token)) {
-                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token non valido o scaduto"));
-                return;
-            }
-
-            JSONObject req = new JSONObject(body);
-            long timestamp = req.optLong("timestamp", 0);
-            String nonce = req.optString("nonce", null);
-            if (timestamp > 0 && nonce != null) {
-                if (!securityManager.validateReplayProtection(timestamp, nonce)) {
-                    sendJsonResponse(os, 403, new JSONObject().put("error", "Richiesta respinta: replay check fallito (timestamp o nonce non validi)"));
-                    return;
-                }
-            }
-
-            String action = req.optString("action", "");
-            TvController.CommandResult res = tvController.executeCommand(action);
-            JSONObject out = new JSONObject();
-            out.put("success", res.success);
-            out.put("message", res.message);
-            out.put("unsupported", res.unsupported);
-
-            int code = res.unsupported ? 501 : (res.success ? 200 : 400);
-            sendJsonResponse(os, code, out);
-            return;
-        }
-
-        // Control Text
-        if ("/api/control/text".equals(path) && "POST".equals(method)) {
-            String token = extractBearerToken(headers);
-            if (!securityManager.validateToken(token)) {
-                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
-                return;
-            }
-
-            JSONObject req = new JSONObject(body);
-            long timestamp = req.optLong("timestamp", 0);
-            String nonce = req.optString("nonce", null);
-            if (timestamp > 0 && nonce != null) {
-                if (!securityManager.validateReplayProtection(timestamp, nonce)) {
-                    sendJsonResponse(os, 403, new JSONObject().put("error", "Richiesta respinta: replay check fallito"));
-                    return;
-                }
-            }
-
-            String text = req.optString("text", "");
-            TvController.CommandResult res = tvController.injectText(text);
-            JSONObject out = new JSONObject();
-            out.put("success", res.success);
-            out.put("message", res.message);
-            sendJsonResponse(os, res.success ? 200 : 400, out);
-            return;
-        }
-
         // =====================================================================
         // AKAI AI ASSISTANT ENDPOINTS (FASE 13)
+        // Note: Le rotte standard di pairing, status e comandi remoti sono
+        // gestite in via esclusiva da RestApiRouter come Single Source of Truth.
         // =====================================================================
 
         // AI Query / Inference (Push-to-talk voice or text - supports /api/ai/ask & /api/ai/query)
@@ -595,6 +721,19 @@ public class RemoteServerService extends Service {
             JSONObject aiRes = ai.processQuery(query, speak);
 
             sendJsonResponse(os, 200, aiRes);
+            return;
+        }
+
+        // AI Active Task Cancel (/api/ai/cancel & /api/ai/stop)
+        if (("/api/ai/cancel".equals(path) || "/api/ai/stop".equals(path)) && "POST".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return;
+            }
+            it.akai.customremote.ai.AkaiSpeechEngine.getInstance(this).stop();
+            JSONObject cancelRes = AkaiAiController.getInstance(this, tvController).cancelActiveTask();
+            sendJsonResponse(os, 200, cancelRes);
             return;
         }
 
@@ -629,6 +768,7 @@ public class RemoteServerService extends Service {
             out.put("success", queued);
             out.put("spoken", textToSpeak);
             out.put("voice", speech.getTtsVoice());
+            out.put("strict_local_only", it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly());
             sendJsonResponse(os, queued ? 200 : 500, out);
             return;
         }
@@ -672,6 +812,21 @@ public class RemoteServerService extends Service {
             }
 
             JSONObject req = new JSONObject(body);
+
+            // Rigoroso blocco cloud in profilo STRICT_LOCAL_ONLY
+            if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly()) {
+                boolean settingAzureKey = req.has("azure_key") && !req.optString("azure_key", "").isEmpty();
+                boolean settingAzureRegion = req.has("azure_region");
+                boolean settingCloudVoice = req.has("voice") && !it.akai.customremote.ai.CloudSpeechAdapter.VOICE_OFFLINE.equals(req.optString("voice", ""));
+                if (settingAzureKey || settingAzureRegion || settingCloudVoice) {
+                    sendJsonResponse(os, 403, new JSONObject()
+                            .put("success", false)
+                            .put("error", "Modifica credenziali o attivazione voci cloud inibita nel profilo STRICT_LOCAL_ONLY")
+                            .put("strict_local_only", true));
+                    return;
+                }
+            }
+
             it.akai.customremote.ai.AkaiSpeechEngine speech = it.akai.customremote.ai.AkaiSpeechEngine.getInstance(this);
 
             if (req.has("voice")) {
@@ -707,6 +862,15 @@ public class RemoteServerService extends Service {
             String voice = req.optString("voice", it.akai.customremote.ai.CloudSpeechAdapter.VOICE_DIEGO);
             String sample = req.optString("text", "Ciao, questa è la voce naturale dell'assistente per la tua televisione AKAI.");
 
+            // Rigoroso blocco anteprima cloud in profilo STRICT_LOCAL_ONLY
+            if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly() && !it.akai.customremote.ai.CloudSpeechAdapter.VOICE_OFFLINE.equals(voice)) {
+                sendJsonResponse(os, 403, new JSONObject()
+                        .put("success", false)
+                        .put("error", "Anteprima voci neurali cloud inibita nel profilo STRICT_LOCAL_ONLY (zero leak verso server esterni)")
+                        .put("strict_local_only", true));
+                return;
+            }
+
             it.akai.customremote.ai.AkaiSpeechEngine speech = it.akai.customremote.ai.AkaiSpeechEngine.getInstance(this);
             boolean started = speech.previewVoice(voice, sample);
 
@@ -736,30 +900,6 @@ public class RemoteServerService extends Service {
             return;
         }
 
-        // AI Memory & Conversations History (/api/ai/memory)
-        if ("/api/ai/memory".equals(path) && "GET".equals(method)) {
-            String token = extractBearerToken(headers);
-            if (!securityManager.validateToken(token)) {
-                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
-                return;
-            }
-
-            AkaiAiController ai = AkaiAiController.getInstance(this, tvController);
-            it.akai.customremote.ai.AkaiMemoryEngine mem = ai.getMemoryEngine();
-
-            JSONObject out = new JSONObject();
-            out.put("conversations", mem.getRecentConversations(20));
-            out.put("preferences", mem.getAllPreferences());
-            long dbBytes = mem.getDatabaseSizeBytes();
-            out.put("db_size_bytes", dbBytes);
-            out.put("db_size_kb", dbBytes / 1024.0);
-            out.put("db_limit_bytes", it.akai.customremote.ai.AkaiMemoryEngine.MAX_STORAGE_BYTES);
-            out.put("stats", mem.getAllStats());
-
-            sendJsonResponse(os, 200, out);
-            return;
-        }
-
         // AI Configuration & Preferences (GET)
         if ("/api/ai/config".equals(path) && "GET".equals(method)) {
             String token = extractBearerToken(headers);
@@ -773,8 +913,13 @@ public class RemoteServerService extends Service {
             AkaiMemoryEngine mem = ai.getMemoryEngine();
 
             JSONObject cfg = new JSONObject();
+            cfg.put("strict_local_only", AkaiAiController.isStrictLocalOnly());
+            cfg.put("execution_mode", AkaiAiController.getExecutionMode());
             cfg.put("active_provider", adapter.getActiveProvider());
             cfg.put("active_model", adapter.getActiveModel());
+            cfg.put("kimi_region", adapter.getKimiRegion());
+            cfg.put("cloud_context_consent", adapter.hasCloudContextConsent());
+            cfg.put("budget_is_client_estimate", true);
             boolean hasDeepSeek = !adapter.getApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK).isEmpty();
             boolean hasKimi = !adapter.getApiKey(AiProviderAdapter.PROVIDER_KIMI).isEmpty();
             cfg.put("has_deepseek_key", hasDeepSeek);
@@ -801,6 +946,36 @@ public class RemoteServerService extends Service {
             }
 
             JSONObject req = new JSONObject(body);
+
+            // Aggiornamento esplicito modalita CLOUD_OPTIONAL vs LOCAL_ONLY (se richiesto)
+            if (req.has("execution_mode")) {
+                try {
+                    it.akai.customremote.ai.AkaiAiController.persistExecutionMode(this, req.getString("execution_mode"));
+                } catch (IllegalArgumentException badMode) {
+                    sendJsonResponse(os, 400, new JSONObject().put("success", false).put("error", badMode.getMessage()));
+                    return;
+                }
+            } else if (req.has("strict_local_only")) {
+                boolean sl = req.getBoolean("strict_local_only");
+                it.akai.customremote.ai.AkaiAiController.persistExecutionMode(this,
+                        sl ? it.akai.customremote.ai.AkaiAiController.MODE_LOCAL_ONLY
+                           : it.akai.customremote.ai.AkaiAiController.MODE_CLOUD_OPTIONAL);
+            }
+
+            // Blocco configurazione chiavi cloud se il profilo effettivo e LOCAL_ONLY
+            if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly()) {
+                boolean settingDeepSeek = req.has("deepseek_key") && !req.optString("deepseek_key", "").isEmpty();
+                boolean settingKimi = req.has("kimi_key") && !req.optString("kimi_key", "").isEmpty();
+                boolean settingCloudProvider = req.has("provider") && !it.akai.customremote.ai.AiProviderAdapter.PROVIDER_LOCAL.equals(req.optString("provider", ""));
+                if (settingDeepSeek || settingKimi || settingCloudProvider) {
+                    sendJsonResponse(os, 403, new JSONObject()
+                            .put("success", false)
+                            .put("error", "Configurazione provider cloud inibita nel profilo STRICT_LOCAL_ONLY (imposta execution_mode=CLOUD_OPTIONAL per abilitare)")
+                            .put("strict_local_only", true));
+                    return;
+                }
+            }
+
             AkaiAiController ai = AkaiAiController.getInstance(this, tvController);
             AiProviderAdapter adapter = ai.getAiAdapter();
             AkaiMemoryEngine mem = ai.getMemoryEngine();
@@ -811,17 +986,34 @@ public class RemoteServerService extends Service {
             if (req.has("model")) {
                 adapter.setActiveModel(req.getString("model"));
             }
-            if (req.has("deepseek_key")) {
-                String k = req.getString("deepseek_key");
-                if (!k.contains("••••")) {
-                    adapter.setApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK, k);
-                }
+            if (req.has("custom_model")) {
+                adapter.setCustomModel(req.getString("custom_model"));
             }
-            if (req.has("kimi_key")) {
-                String k = req.getString("kimi_key");
-                if (!k.contains("••••")) {
-                    adapter.setApiKey(AiProviderAdapter.PROVIDER_KIMI, k);
+            if (req.has("kimi_region")) {
+                adapter.setKimiRegion(req.getString("kimi_region"));
+            }
+            if (req.has("cloud_context_consent")) {
+                adapter.setCloudContextConsent(req.getBoolean("cloud_context_consent"));
+            }
+            try {
+                if (req.has("deepseek_key")) {
+                    String k = req.getString("deepseek_key");
+                    if (!k.contains("••••")) {
+                        adapter.setApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK, k);
+                    }
                 }
+                if (req.has("kimi_key")) {
+                    String k = req.getString("kimi_key");
+                    if (!k.contains("••••")) {
+                        adapter.setApiKey(AiProviderAdapter.PROVIDER_KIMI, k);
+                    }
+                }
+            } catch (IllegalStateException ksFail) {
+                sendJsonResponse(os, 500, new JSONObject()
+                        .put("success", false)
+                        .put("keystore_unavailable", true)
+                        .put("error", ksFail.getMessage()));
+                return;
             }
             if (req.has("preferences")) {
                 JSONObject prefs = req.getJSONObject("preferences");
@@ -840,27 +1032,9 @@ public class RemoteServerService extends Service {
 
             JSONObject res = new JSONObject();
             res.put("success", true);
+            res.put("execution_mode", it.akai.customremote.ai.AkaiAiController.getExecutionMode());
+            res.put("strict_local_only", it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly());
             res.put("message", "Configurazione AI salvata con successo");
-            sendJsonResponse(os, 200, res);
-            return;
-        }
-
-        // Toggle Guest Mode
-        if ("/api/ai/guest_mode".equals(path) && "POST".equals(method)) {
-            String token = extractBearerToken(headers);
-            if (!securityManager.validateToken(token)) {
-                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
-                return;
-            }
-
-            JSONObject req = new JSONObject(body);
-            boolean enable = req.optBoolean("enabled", false);
-            AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(this);
-            mem.setGuestMode(enable);
-
-            JSONObject res = new JSONObject();
-            res.put("success", true);
-            res.put("guest_mode", enable);
             sendJsonResponse(os, 200, res);
             return;
         }
@@ -888,6 +1062,13 @@ public class RemoteServerService extends Service {
             String token = extractBearerToken(headers);
             if (!securityManager.validateToken(token)) {
                 sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                return;
+            }
+            if (it.akai.customremote.ai.AkaiAiController.isStrictLocalOnly()) {
+                sendJsonResponse(os, 403, new JSONObject()
+                        .put("success", false)
+                        .put("error", "Chiamate verso provider cloud disabilitate nel profilo STRICT_LOCAL_ONLY")
+                        .put("strict_local_only", true));
                 return;
             }
 
@@ -943,27 +1124,6 @@ public class RemoteServerService extends Service {
             }
 
             sendJsonResponse(os, 200, simRes);
-            return;
-        }
-
-        // Procedural & User Memory Inspection
-        if ("/api/ai/memory".equals(path) && "GET".equals(method)) {
-            String token = extractBearerToken(headers);
-            if (!securityManager.validateToken(token)) {
-                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
-                return;
-            }
-
-            AkaiMemoryEngine mem = AkaiMemoryEngine.getInstance(this);
-            JSONObject data = new JSONObject();
-            data.put("procedures", mem.getAllProcedures());
-            data.put("preferences", mem.getAllPreferences());
-            data.put("stats", mem.getAllStats());
-            data.put("recent_conversations", mem.getRecentConversations(15));
-            data.put("db_size_bytes", mem.getDatabaseSizeBytes());
-            data.put("guest_mode", mem.isGuestMode());
-
-            sendJsonResponse(os, 200, data);
             return;
         }
 
@@ -1078,18 +1238,35 @@ public class RemoteServerService extends Service {
         try {
             List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
             for (NetworkInterface intf : interfaces) {
+                if (!intf.isUp() || intf.isLoopback()) continue;
                 List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
                 for (InetAddress addr : addrs) {
-                    if (!addr.isLoopbackAddress()) {
+                    if (!addr.isLoopbackAddress() && addr instanceof java.net.Inet4Address) {
                         String sAddr = addr.getHostAddress();
-                        if (sAddr != null && sAddr.indexOf(':') < 0 && (sAddr.startsWith("192.168.") || sAddr.startsWith("10."))) {
+                        if (isPrivateRfc1918(sAddr)) {
                             return sAddr;
                         }
                     }
                 }
             }
         } catch (Exception ignored) {}
-        return "192.168.1.8";
+        // Fail-closed fallback: safe loopback, zero hardcoded external or static LAN IPs
+        return "127.0.0.1";
+    }
+
+    public static boolean isPrivateRfc1918(String ip) {
+        if (ip == null || ip.isEmpty()) return false;
+        if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true;
+        if (ip.startsWith("172.")) {
+            String[] parts = ip.split("\\.");
+            if (parts.length == 4) {
+                try {
+                    int second = Integer.parseInt(parts[1]);
+                    return second >= 16 && second <= 31;
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return false;
     }
 
     @Override
@@ -1129,6 +1306,10 @@ public class RemoteServerService extends Service {
                 httpsServerSocket = null;
             }
         } catch (Exception ignored) {}
+        if (httpsRebindController != null) {
+            try { httpsRebindController.close(); } catch (Exception ignored) {}
+            httpsRebindController = null;
+        }
         if (threadPool != null) threadPool.shutdownNow();
         if (tvController != null) tvController.cleanup();
         sInstance = null;

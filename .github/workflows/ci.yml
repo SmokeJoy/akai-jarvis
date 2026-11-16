@@ -1,0 +1,245 @@
+name: AKAI JARVIS CI
+
+on:
+  push:
+    branches: [ main, "fix/*" ]
+  pull_request:
+    branches: [ main, "fix/*" ]
+
+jobs:
+  audit-and-tests:
+    name: Code Quality, Unit Tests, SQLite, Android APK & ARMv7 JNI Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 1. Syntax Check Web Remote JavaScript
+        run: |
+          echo "=== Syntax Checking Web Remote JS ==="
+          node --check akai-remote-web/app.js
+          node --check akai-remote-web/sw.js
+          echo "JavaScript syntax check passed."
+
+      - name: 2. Secrets Leak Detection
+        run: |
+          echo "=== Scanning for leaked private keys or hardcoded API credentials ==="
+          FORBIDDEN_FILES=$(find . -type f \( -name "*.p12" -o -name "*.jks" -o -name "*.keystore" \) -not -path "*/.*" -not -path "./build_ci/*")
+          if [ -n "$FORBIDDEN_FILES" ]; then
+            echo "ERROR: Forbidden private keystores detected in repository:"
+            echo "$FORBIDDEN_FILES"
+            exit 1
+          fi
+
+          if grep -rn "sk-[a-zA-Z0-9]\{20,\}" --exclude-dir=".git" --exclude-dir="build_ci" .; then
+            echo "ERROR: Potential real API key detected in source tree!"
+            exit 1
+          fi
+          echo "Secrets scan passed: zero private keystores or unmasked API keys detected."
+
+      - name: 3. Real SQLite Database Integrity, Migration & Offline Rollback Simulation
+        run: |
+          echo "=== Running Real SQLite Database & Migration Tests ==="
+          python3 akai-remote-tests/test_sqlite_memory.py
+          echo "=== Running Offline Rollback & 15MB Storage Budget Simulation ==="
+          python3 akai-remote-tests/test_rollback_offline_simulation.py
+          echo "SQLite persistence, v5->v6 migration, offline rollback, and budget enforcement verified on real engine."
+
+      - name: 4. Compile and Run Host Java Unit Tests (40 Tests)
+        run: |
+          echo "=== Compiling and Running Java UnitTests ==="
+          mkdir -p test_bin
+          javac -encoding UTF-8 -d test_bin \
+            akai-remote-tests/host_mock/android/content/*.java \
+            akai-remote-tests/host_mock/android/graphics/*.java \
+            akai-remote-tests/host_mock/android/media/*.java \
+            akai-remote-tests/host_mock/android/security/keystore/*.java \
+            akai-remote-tests/host_mock/android/util/*.java \
+            akai-remote-tests/host_mock/android/view/accessibility/*.java \
+            akai-remote-tests/host_mock/org/json/*.java \
+            akai-remote-tests/host_mock/it/akai/customremote/*.java \
+            akai-remote-tests/host_mock/it/akai/customremote/ai/*.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/qr/*.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ServiceStateListener.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/HttpsRebindController.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/SecurityManager.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/UInputDriver.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/CommandResult.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/TvAppPackages.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/TlsCertificateManager.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/RestApiRouter.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/LocalIntentParser.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/KeystoreSecurityHelper.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AkaiAiController.java \
+            akai-remote-tests/UnitTests.java
+
+          java -cp test_bin it.akai.customremote.UnitTests
+          echo "All 40 Java unit tests passed with 100% success."
+
+      - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
+        run: |
+          echo "=== Compiling Native JNI Driver (uinput_jni.c) for ARMv7 ==="
+          mkdir -p build_ci/lib/armeabi-v7a
+
+          NDK_CLANG=$(find "$ANDROID_HOME/ndk" "$ANDROID_NDK_ROOT" /usr/local/lib/android/sdk/ndk -name "armv7a-linux-androideabi21-clang" 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$NDK_CLANG" ]; then
+            echo "Using Android NDK Clang ARMv7: $NDK_CLANG"
+            "$NDK_CLANG" -shared -fPIC -O2 -llog akai-remote-tv/app/src/main/jni/uinput_jni.c -o build_ci/lib/armeabi-v7a/libakai_uinput.so
+          else
+            echo "Android NDK Clang not found in standard paths; installing gcc-arm-linux-gnueabihf cross-compiler..."
+            sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-linux-gnueabihf
+            mkdir -p /tmp/jni_include/android
+            printf '#pragma once\n#define ANDROID_LOG_INFO 4\n#define ANDROID_LOG_ERROR 6\nstatic inline int __android_log_print(int prio, const char* tag, const char* fmt, ...) { (void)prio; (void)tag; (void)fmt; return 0; }\n' > /tmp/jni_include/android/log.h
+
+            arm-linux-gnueabihf-gcc -shared -fPIC -O2 \
+              -I"$JAVA_HOME/include" \
+              -I"$JAVA_HOME/include/linux" \
+              -I/tmp/jni_include \
+              akai-remote-tv/app/src/main/jni/uinput_jni.c \
+              -o build_ci/lib/armeabi-v7a/libakai_uinput.so
+          fi
+
+          if [ ! -f build_ci/lib/armeabi-v7a/libakai_uinput.so ]; then
+            echo "ERROR: Native JNI compilation failed."
+            exit 1
+          fi
+
+          SO_SIZE=$(stat -c%s build_ci/lib/armeabi-v7a/libakai_uinput.so)
+          echo "Native JNI Driver successfully compiled: $SO_SIZE bytes."
+          echo "--- ABI Verification ---"
+          file build_ci/lib/armeabi-v7a/libakai_uinput.so
+          readelf -h build_ci/lib/armeabi-v7a/libakai_uinput.so | grep -E "Class|Machine|Flags"
+          echo "ARM ABI confirmed."
+
+      - name: 6. Full Android Production APK Build & Packaging (D8, AAPT2, ZipAlign, Apksigner)
+        run: |
+          echo "=== Building Complete Android APK for CI Verification ==="
+          
+          # Tentativo di targeting prioritario su android-28 (Android TV 9 Pie)
+          ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | grep "android-28" | head -n 1)
+          if [ -z "$ANDROID_JAR" ]; then
+            echo "android-28 not present by default. Attempting installation via sdkmanager..."
+            if command -v sdkmanager >/dev/null 2>&1; then
+              yes | sdkmanager --licenses >/dev/null 2>&1 || true
+              sdkmanager "platforms;android-28" >/dev/null 2>&1 || true
+            elif [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+              yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+              "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-28" >/dev/null 2>&1 || true
+            fi
+            ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | grep "android-28" | head -n 1)
+          fi
+          if [ -z "$ANDROID_JAR" ]; then
+            echo "Notice: android-28 not installable; using highest available platform jar."
+            ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+          fi
+
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
+          D8=$(find "$ANDROID_HOME/build-tools" -name "d8" 2>/dev/null | sort -V | tail -n 1)
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign" 2>/dev/null | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" 2>/dev/null | sort -V | tail -n 1)
+
+          if [ -z "$ANDROID_JAR" ] || [ -z "$AAPT2" ] || [ -z "$D8" ] || [ -z "$ZIPALIGN" ] || [ -z "$APKSIGNER" ]; then
+            echo "ERROR: Missing required Android SDK build tools (aapt2, d8, zipalign, apksigner)"
+            exit 1
+          fi
+
+          echo "Using Android platform: $ANDROID_JAR"
+          echo "Using AAPT2: $AAPT2"
+          echo "Using D8: $D8"
+          echo "Using ZipAlign: $ZIPALIGN"
+          echo "Using Apksigner: $APKSIGNER"
+
+          mkdir -p build_ci/gen build_ci/classes build_ci/dex build_ci/assets/www
+
+          # 1. Copia asset statici del Web Remote (HTML, JS, CSS)
+          cp -r akai-remote-web/* build_ci/assets/www/
+
+          # 2. Generazione keystore TLS effimero autofirmato per test di CI (assets/server_keystore.p12)
+          # NOTA: Questo keystore è puramente effimero per verificare che il server HTTPS possa caricarlo
+          keytool -genkeypair -alias akaiserver -keyalg RSA -keysize 2048 -validity 365 \
+            -keystore build_ci/assets/server_keystore.p12 -storetype PKCS12 \
+            -storepass akai1234 -keypass akai1234 \
+            -dname "CN=akai-remote-ci-test,O=AKAI TV,C=IT"
+
+          # 3. AAPT2 compile resources
+          "$AAPT2" compile --dir akai-remote-tv/app/src/main/res -o build_ci/compiled_res.zip
+
+          # 4. AAPT2 link manifest and generate R.java
+          "$AAPT2" link -I "$ANDROID_JAR" \
+            --manifest akai-remote-tv/app/src/main/AndroidManifest.xml \
+            -o build_ci/base.apk \
+            --java build_ci/gen \
+            build_ci/compiled_res.zip \
+            --auto-add-overlay \
+            --min-sdk-version 21 \
+            --target-sdk-version 28
+
+          # 5. Compile all 26 Java sources with javac
+          JAVA_SRC=$(find akai-remote-tv/app/src/main/java build_ci/gen -name "*.java")
+          javac -encoding UTF-8 -source 1.8 -target 1.8 -bootclasspath "$ANDROID_JAR" -cp "$ANDROID_JAR" -d build_ci/classes $JAVA_SRC
+          CLASS_COUNT=$(find build_ci/classes -name "*.class" | wc -l)
+          echo "Java compilation succeeded: $CLASS_COUNT class files generated."
+
+          # 6. Generate Dalvik Executable (classes.dex) with D8
+          CLASS_FILES=$(find build_ci/classes -name "*.class")
+          "$D8" --min-api 21 --lib "$ANDROID_JAR" --output build_ci/dex $CLASS_FILES
+
+          # 7. Assemble APK: inject classes.dex, native ARMv7 library, and runtime assets
+          (cd build_ci/dex && zip -u ../base.apk classes.dex)
+          if [ -f build_ci/lib/armeabi-v7a/libakai_uinput.so ]; then
+            (cd build_ci && zip -u base.apk lib/armeabi-v7a/libakai_uinput.so)
+          fi
+          (cd build_ci && zip -r -u base.apk assets)
+
+          # 8. ZipAlign 4-byte boundary
+          "$ZIPALIGN" -f -v 4 build_ci/base.apk build_ci/aligned.apk
+
+          # 9. Firma con keystore effimero temporaneo di CI
+          # AVVISO DI SICUREZZA: Il binario risultante viene designato come "app-ci-test-nondistributable.apk"
+          # poiché firmato con chiave temporanea effimera e non utilizzabile per update del device reale.
+          keytool -genkey -v -keystore /tmp/ci_debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug CI,O=AKAI JARVIS,C=IT"
+          "$APKSIGNER" sign --ks /tmp/ci_debug.keystore --ks-pass pass:android --key-pass pass:android --out build_ci/app-ci-test-nondistributable.apk build_ci/aligned.apk
+
+          # 10. Verify APK signature schemes (v1 + v2)
+          "$APKSIGNER" verify --verbose build_ci/app-ci-test-nondistributable.apk
+          APK_SIZE=$(stat -c%s build_ci/app-ci-test-nondistributable.apk)
+          echo "CI TEST APK BUILT AND VERIFIED: $APK_SIZE bytes."
+
+      - name: 7. Explicit APK Contents Inspection and Verification (unzip -l)
+        run: |
+          echo "=== Verifying internal contents of candidate CI APK ==="
+          unzip -l build_ci/app-ci-test-nondistributable.apk > build_ci/apk_contents.txt
+          cat build_ci/apk_contents.txt
+
+          echo "--- Verifying all required production components ---"
+          grep "classes.dex" build_ci/apk_contents.txt || (echo "FATAL: classes.dex missing from APK!" && exit 1)
+          grep "lib/armeabi-v7a/libakai_uinput.so" build_ci/apk_contents.txt || (echo "FATAL: libakai_uinput.so missing from APK!" && exit 1)
+          grep "assets/www/index.html" build_ci/apk_contents.txt || (echo "FATAL: assets/www/index.html missing from APK!" && exit 1)
+          grep "assets/www/app.js" build_ci/apk_contents.txt || (echo "FATAL: assets/www/app.js missing from APK!" && exit 1)
+          grep "assets/server_keystore.p12" build_ci/apk_contents.txt || (echo "FATAL: assets/server_keystore.p12 missing from APK!" && exit 1)
+          grep "AndroidManifest.xml" build_ci/apk_contents.txt || (echo "FATAL: AndroidManifest.xml missing from APK!" && exit 1)
+          echo "ALL MANDATORY ARTIFACTS VERIFIED INSIDE APK (DEX, ARMv7 SO, Web Assets, TLS Keystore)."
+
+      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (35 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, ADB Root/Unroot, Watchdog HTTPS Down/SAN Mismatch Auto-Rollback, HTTP 426 LAN Regression, Provisional vs Approved OOB Trust, Read-Only verify-tls & Candidate TLS Forbidden Asset Negative Gate)"
+        shell: pwsh
+        run: |
+          ./akai-remote-tests/test_safe_install_mocked_adb.ps1

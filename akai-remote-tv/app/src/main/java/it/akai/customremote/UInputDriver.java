@@ -21,6 +21,10 @@ public class UInputDriver {
     public static final int KEY_MUTE = 113;
     public static final int KEY_POWER = 116;
     public static final int KEY_SLEEP = 142;
+    public static final int KEY_CHANNELUP = 402;
+    public static final int KEY_CHANNELDOWN = 403;
+    public static final int KEY_LAST = 405; // Linux KEY_LAST (405): Recall Last Channel (Android KEYCODE_LAST_CHANNEL 229)
+    public static final int KEY_PREVIOUS_CHANNEL = KEY_LAST; // Backward compatibility alias
     public static final int KEY_0 = 11;
     public static final int KEY_1 = 2;
     public static final int KEY_2 = 3;

@@ -8,8 +8,13 @@
 *.keystore
 *.key
 *.pem
+*.crt
+*.pass
 *.pkcs12
 *.csr
+server_keystore.*
+ca.crt
+ca.pem
 tools/server_keystore.p12
 tools/akai_ca.p12
 tools/debug.keystore
@@ -52,6 +57,10 @@ AKAI_AUDIT_COMPLETO/
 *.log
 diagnostics/
 backups/
+backup_tv/
+*.db
+*.db-wal
+*.db-shm
 downloads/
 scratch/
 
@@ -60,6 +69,7 @@ scratch/
 *.env
 *.local
 local.properties
+scripts/*.md
 
 # File temporanei di sistema ed editor
 .DS_Store

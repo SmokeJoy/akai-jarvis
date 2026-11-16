@@ -1,6 +1,7 @@
 package it.akai.customremote.ai;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -8,25 +9,129 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 import it.akai.customremote.TvController;
 
 /**
  * AkaiAiController: Orchestratore Cognitivo Autonomo su Smart TV AKAI (v2).
- * 
+ *
  * Implementa il ciclo closed-loop:
  * 1. Percezione -> 2. Memory Lookup -> 3. Fast-Path (0 Token)
- * 4. Autonomous Discovery & Planning (Cloud LLM o Local UI Graph Planner)
- * 5. Closed-loop Execution -> 6. Verifica Schermata -> 7. Salvataggio Memoria SQLite.
+ * 4. Autonomous Discovery & Planning (CLOUD_OPTIONAL DeepSeek/Kimi o Local UI Graph Planner / LOCAL_ONLY)
+ * 5. Stepwise Execution + Bounded UI Wait -> 6. State Reflector & 1 Replanning -> 7. Persistenza SQLite SOLO se STATE_VERIFIED.
  */
 public class AkaiAiController {
     private static final String TAG = "AKAI_AiController";
     private static AkaiAiController sInstance = null;
 
+    public static final String MODE_CLOUD_OPTIONAL = "CLOUD_OPTIONAL";
+    public static final String MODE_LOCAL_ONLY = "LOCAL_ONLY";
+    public static final String OUTCOME_STATE_VERIFIED = "STATE_VERIFIED";
+    public static final String OUTCOME_COMMAND_SENT = "COMMAND_SENT";
+    public static final String OUTCOME_FAILED = "FAILED";
+    public static final String OUTCOME_NOT_TESTED = "NOT_TESTED";
+
+    private static final String PREFS_NAME = "akai_ai_secure_prefs";
+    private static final String PREF_EXECUTION_MODE = "execution_mode";
+
+    // Modalita configurabile: CLOUD_OPTIONAL (default, false) vs LOCAL_ONLY (true)
+    private static volatile boolean sStrictLocalOnly = false;
+    private static volatile long sDefaultPollIntervalMs = 150L;
+
+    public static boolean isStrictLocalOnly() {
+        return sStrictLocalOnly;
+    }
+
+    public static void setStrictLocalOnly(boolean strictLocalOnly) {
+        sStrictLocalOnly = strictLocalOnly;
+    }
+
+    public static String getExecutionMode() {
+        return sStrictLocalOnly ? MODE_LOCAL_ONLY : MODE_CLOUD_OPTIONAL;
+    }
+
+    public static void setExecutionMode(String mode) {
+        String clean = mode != null ? mode.trim().toUpperCase(Locale.US) : "";
+        if (MODE_LOCAL_ONLY.equals(clean)) {
+            sStrictLocalOnly = true;
+        } else if (MODE_CLOUD_OPTIONAL.equals(clean)) {
+            sStrictLocalOnly = false;
+        } else {
+            throw new IllegalArgumentException("Modalita esecuzione non valida: " + mode);
+        }
+    }
+
+    public static void persistExecutionMode(Context context, String mode) {
+        setExecutionMode(mode);
+        if (context != null) {
+            try {
+                SharedPreferences sp = context.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                sp.edit().putString(PREF_EXECUTION_MODE, getExecutionMode()).apply();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public static void setDefaultPollIntervalMsForTest(long pollMs) {
+        sDefaultPollIntervalMs = Math.max(0L, pollMs);
+    }
+
+    public static org.json.JSONArray getSupportedCatalog() {
+        return LocalIntentParser.getSupportedCatalog();
+    }
+
+    /**
+     * Bridge iniettabile per percezione schermo, esecuzione comandi e attese limitate (produzione TV o test JVM).
+     */
+    public interface PerceptionAndExecutionBridge {
+        ScreenPerceptionEngine.PerceptionSnapshot capture(Context ctx);
+        TvController.CommandResult executeActions(JSONArray actions);
+        void sleepMs(long ms);
+    }
+
+    private static final class TaskToken {
+        final long taskId;
+        final AtomicBoolean cancelled = new AtomicBoolean(false);
+
+        TaskToken(long taskId) {
+            this.taskId = taskId;
+        }
+
+        boolean isCancelled() {
+            return cancelled.get();
+        }
+
+        void cancel() {
+            cancelled.set(true);
+        }
+    }
+
     private final Context context;
     private final TvController tvController;
     private final AkaiMemoryEngine memoryEngine;
     private final AiProviderAdapter aiAdapter;
+    private final PerceptionAndExecutionBridge bridge;
+    private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
+    private final AtomicLong taskSequence = new AtomicLong(0);
+    private final AtomicLong cancelGeneration = new AtomicLong(0);
+    private final AtomicLong queuedTasks = new AtomicLong(0);
+    private final AtomicReference<TaskToken> activeTask = new AtomicReference<>(null);
+    private final ReentrantLock sessionLock = new ReentrantLock(true);
+
+    // Test hooks package-private per verificare race window prima e dopo pubblicazione activeTask
+    static volatile Runnable sPrePublishHookForTest = null;
+    static volatile Runnable sPostPublishHookForTest = null;
+
+    public static void setPrePublishHookForTest(Runnable hook) {
+        sPrePublishHookForTest = hook;
+    }
+
+    public static void setPostPublishHookForTest(Runnable hook) {
+        sPostPublishHookForTest = hook;
+    }
 
     public static synchronized AkaiAiController getInstance(Context context, TvController tvController) {
         if (sInstance == null) {
@@ -35,11 +140,114 @@ public class AkaiAiController {
         return sInstance;
     }
 
+    public static AkaiAiController createForTest(Context context,
+                                                 TvController tvController,
+                                                 AkaiMemoryEngine memoryEngine,
+                                                 AiProviderAdapter aiAdapter,
+                                                 PerceptionAndExecutionBridge bridge) {
+        return new AkaiAiController(context, tvController, memoryEngine, aiAdapter, bridge);
+    }
+
     private AkaiAiController(Context context, TvController tvController) {
-        this.context = context;
+        this(context, tvController, AkaiMemoryEngine.getInstance(context), new AiProviderAdapter(context), null);
+    }
+
+    private AkaiAiController(Context context,
+                             TvController tvController,
+                             AkaiMemoryEngine memoryEngine,
+                             AiProviderAdapter aiAdapter,
+                             PerceptionAndExecutionBridge customBridge) {
+        this.context = context != null ? context.getApplicationContext() : null;
         this.tvController = tvController;
-        this.memoryEngine = AkaiMemoryEngine.getInstance(context);
-        this.aiAdapter = new AiProviderAdapter(context);
+        this.memoryEngine = memoryEngine;
+        this.aiAdapter = aiAdapter;
+        this.bridge = customBridge != null ? customBridge : new PerceptionAndExecutionBridge() {
+            @Override
+            public ScreenPerceptionEngine.PerceptionSnapshot capture(Context ctx) {
+                return ScreenPerceptionEngine.capture(ctx);
+            }
+
+            @Override
+            public TvController.CommandResult executeActions(JSONArray actions) {
+                return tvController != null
+                        ? tvController.executeActionSequence(actions)
+                        : new TvController.CommandResult(false, "TvController non inizializzato");
+            }
+
+            @Override
+            public void sleepMs(long ms) {
+                if (ms > 0) {
+                    try { Thread.sleep(ms); } catch (InterruptedException ignored) {}
+                }
+            }
+        };
+
+        if (this.context != null && customBridge == null) {
+            try {
+                SharedPreferences sp = this.context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                String savedMode = sp.getString(PREF_EXECUTION_MODE, null);
+                if (MODE_LOCAL_ONLY.equalsIgnoreCase(savedMode)) {
+                    sStrictLocalOnly = true;
+                } else if (MODE_CLOUD_OPTIONAL.equalsIgnoreCase(savedMode)) {
+                    sStrictLocalOnly = false;
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private boolean isTokenCancelled(TaskToken token) {
+        return token != null ? token.isCancelled() : cancelRequested.get();
+    }
+
+    public JSONObject cancelActiveTask() {
+        long gen = cancelGeneration.incrementAndGet();
+        cancelRequested.set(true);
+        int queuedInvalidated = (int) Math.max(0L, queuedTasks.get());
+        TaskToken current = activeTask.get();
+        boolean cancelledAny = false;
+        long cancelledTaskId = -1L;
+        if (current != null) {
+            current.cancel();
+            cancelledAny = true;
+            cancelledTaskId = current.taskId;
+        }
+        if (context != null) {
+            try {
+                AkaiSpeechEngine.getInstance(context).stop();
+            } catch (Throwable ignored) {}
+        }
+        JSONObject res = new JSONObject();
+        try {
+            res.put("success", true);
+            res.put("status", "CANCEL_SIGNALLED");
+            res.put("cooperative_cancel", true);
+            res.put("active_task_cancelled", cancelledAny);
+            res.put("active_task_id", cancelledTaskId);
+            res.put("queued_tasks_invalidated", queuedInvalidated);
+            res.put("cancel_generation", gen);
+        } catch (Exception ignored) {}
+        return res;
+    }
+
+    public void lockSessionForTest() {
+        sessionLock.lock();
+    }
+
+    public void unlockSessionForTest() {
+        sessionLock.unlock();
+    }
+
+    public void cancelCurrentTask() {
+        cancelActiveTask();
+    }
+
+    public boolean isCancelRequested() {
+        TaskToken current = activeTask.get();
+        return current != null ? current.isCancelled() : cancelRequested.get();
+    }
+
+    public boolean isTaskActive() {
+        return activeTask.get() != null;
     }
 
     public AkaiMemoryEngine getMemoryEngine() {
@@ -54,17 +262,389 @@ public class AkaiAiController {
         return processQuery(userQuery, true);
     }
 
-    public JSONObject processQuery(String userQuery, boolean speak) {
-        long startTime = System.currentTimeMillis();
-        JSONObject result = new JSONObject();
+    private static class WaitObservation {
+        final ScreenPerceptionEngine.PerceptionSnapshot snapshot;
+        final boolean verified;
+        final long elapsedMs;
+        final int snapshotCount;
 
-        if (userQuery == null || userQuery.trim().isEmpty()) {
-            String emptyReply = "Nessuna richiesta ricevuta. Dì ad esempio: 'Metti Italia 2' o 'Imposta il volume a 20'.";
-            return completeAndSpeak(result, "", emptyReply, "ERROR", null, 0, 0.0, speak, startTime);
+        WaitObservation(ScreenPerceptionEngine.PerceptionSnapshot snapshot, boolean verified, long elapsedMs, int snapshotCount) {
+            this.snapshot = snapshot;
+            this.verified = verified;
+            this.elapsedMs = elapsedMs;
+            this.snapshotCount = snapshotCount;
+        }
+    }
+
+    private WaitObservation waitForConditionOrUiChange(String successCondition, long maxWaitMs, long pollIntervalMs, TaskToken token) {
+        long waited = 0L;
+        int snaps = 0;
+        boolean hasCondition = successCondition != null && !successCondition.trim().isEmpty();
+
+        ScreenPerceptionEngine.PerceptionSnapshot snap = bridge.capture(context);
+        snaps++;
+        boolean verified = hasCondition && ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition);
+
+        while (hasCondition && !verified && waited < maxWaitMs && !isTokenCancelled(token)) {
+            long step = pollIntervalMs > 0 ? Math.min(pollIntervalMs, maxWaitMs - waited) : Math.min(50L, maxWaitMs - waited);
+            if (step <= 0L) break;
+            if (pollIntervalMs > 0) {
+                bridge.sleepMs(step);
+            }
+            waited += step;
+            snap = bridge.capture(context);
+            snaps++;
+            verified = ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition);
+        }
+        return new WaitObservation(snap, verified, waited, snaps);
+    }
+
+    private long waitForHomePackage(long maxWaitMs, long pollIntervalMs, TaskToken token) {
+        long waited = 0L;
+        while (waited < maxWaitMs && !isTokenCancelled(token)) {
+            ScreenPerceptionEngine.PerceptionSnapshot snap = bridge.capture(context);
+            if (snap != null && ("it.akai.customhome.v8".equals(snap.foregroundPackage) || "it.akai.customhome".equals(snap.foregroundPackage))) {
+                return waited;
+            }
+            long step = pollIntervalMs > 0 ? Math.min(pollIntervalMs, maxWaitMs - waited) : maxWaitMs - waited;
+            if (step <= 0L) break;
+            if (pollIntervalMs > 0) {
+                bridge.sleepMs(step);
+            }
+            waited += step;
+        }
+        return waited;
+    }
+
+    private static final class StepwiseResult {
+        final TvController.CommandResult commandResult;
+        final int snapshotCount;
+        final long waitElapsedMs;
+        final int executedSteps;
+        final boolean cancelled;
+        final ScreenPerceptionEngine.PerceptionSnapshot lastSnapshot;
+
+        StepwiseResult(TvController.CommandResult commandResult,
+                       int snapshotCount,
+                       long waitElapsedMs,
+                       int executedSteps,
+                       boolean cancelled,
+                       ScreenPerceptionEngine.PerceptionSnapshot lastSnapshot) {
+            this.commandResult = commandResult;
+            this.snapshotCount = snapshotCount;
+            this.waitElapsedMs = waitElapsedMs;
+            this.executedSteps = executedSteps;
+            this.cancelled = cancelled;
+            this.lastSnapshot = lastSnapshot;
+        }
+    }
+
+    private boolean snapshotMatchesPackage(ScreenPerceptionEngine.PerceptionSnapshot snap, String expectedPkg) {
+        if (expectedPkg == null || expectedPkg.trim().isEmpty()) return true;
+        if (snap == null || snap.foregroundPackage == null) return false;
+        String clean = expectedPkg.trim();
+        if (clean.equalsIgnoreCase(snap.foregroundPackage)) return true;
+        return ("it.akai.customhome".equalsIgnoreCase(clean) && "it.akai.customhome.v8".equalsIgnoreCase(snap.foregroundPackage))
+                || ("it.akai.customhome.v8".equalsIgnoreCase(clean) && "it.akai.customhome".equalsIgnoreCase(snap.foregroundPackage));
+    }
+
+    private boolean snapshotMatchesText(ScreenPerceptionEngine.PerceptionSnapshot snap, String expectedText) {
+        if (expectedText == null || expectedText.trim().isEmpty()) return true;
+        if (snap == null) return false;
+        String q = expectedText.trim();
+        if (snap.containsText(q, false)) return true;
+        String qLower = q.toLowerCase(Locale.US);
+        if (snap.focusedElementText != null && snap.focusedElementText.toLowerCase(Locale.US).contains(qLower)) {
+            return true;
+        }
+        if (snap.clickableElements != null) {
+            for (ScreenPerceptionEngine.ClickableElement el : snap.clickableElements) {
+                if (el != null && el.text != null && el.text.toLowerCase(Locale.US).contains(qLower)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private WaitObservation waitInterStepReady(String expectedPkg,
+                                               String expectedText,
+                                               long maxWaitMs,
+                                               long pollIntervalMs,
+                                               TaskToken token) {
+        long waited = 0L;
+        int snaps = 0;
+        boolean hasPkg = expectedPkg != null && !expectedPkg.trim().isEmpty();
+        boolean hasText = expectedText != null && !expectedText.trim().isEmpty();
+        long boundedMax = Math.max(0L, maxWaitMs);
+
+        ScreenPerceptionEngine.PerceptionSnapshot snap = bridge.capture(context);
+        snaps++;
+        boolean ready = (!hasPkg || snapshotMatchesPackage(snap, expectedPkg))
+                && (!hasText || snapshotMatchesText(snap, expectedText));
+
+        while (!ready && waited < boundedMax && !isTokenCancelled(token)) {
+            long step = pollIntervalMs > 0
+                    ? Math.min(pollIntervalMs, boundedMax - waited)
+                    : Math.min(50L, boundedMax - waited);
+            if (step <= 0L) break;
+            if (pollIntervalMs > 0) {
+                bridge.sleepMs(step);
+            }
+            waited += step;
+            snap = bridge.capture(context);
+            snaps++;
+            ready = (!hasPkg || snapshotMatchesPackage(snap, expectedPkg))
+                    && (!hasText || snapshotMatchesText(snap, expectedText));
+        }
+        return new WaitObservation(snap, ready, waited, snaps);
+    }
+
+    private StepwiseResult executeActionsStepwise(JSONArray actions, TaskToken token) {
+        if (actions == null || actions.length() == 0) {
+            return new StepwiseResult(new TvController.CommandResult(false, "Nessuna azione da eseguire"),
+                    0, 0L, 0, false, null);
+        }
+        if (actions.length() == 1) {
+            if (isTokenCancelled(token)) {
+                return new StepwiseResult(new TvController.CommandResult(false, "Operazione annullata dall'utente"),
+                        0, 0L, 0, true, null);
+            }
+            JSONObject singleStep = actions.optJSONObject(0);
+            if (singleStep != null && "wait".equalsIgnoreCase(singleStep.optString("type", ""))) {
+                long reqMs = Math.min(Math.max(0L, singleStep.optLong("ms", 300L)), 3000L);
+                WaitObservation obs = waitInterStepReady(singleStep.optString("expect_pkg", ""),
+                        singleStep.optString("expect_text", ""), reqMs, sDefaultPollIntervalMs, token);
+                if (isTokenCancelled(token)) {
+                    return new StepwiseResult(new TvController.CommandResult(false, "Operazione annullata dall'utente"),
+                            obs.snapshotCount, obs.elapsedMs, 0, true, obs.snapshot);
+                }
+                return new StepwiseResult(new TvController.CommandResult(true, "Attesa completata"),
+                        obs.snapshotCount, obs.elapsedMs, 1, false, obs.snapshot);
+            }
+            TvController.CommandResult singleRes = bridge.executeActions(actions);
+            int executedOne = (singleRes != null && singleRes.success) ? 1 : 0;
+            return new StepwiseResult(
+                    singleRes != null ? singleRes : new TvController.CommandResult(false, "Errore esecuzione"),
+                    0, 0L, executedOne, false, null);
         }
 
+        int executed = 0;
+        int snapshots = 0;
+        long waitElapsed = 0L;
+        String pendingLaunchPkg = null;
+        boolean justWaitedReadyCheck = false;
+        ScreenPerceptionEngine.PerceptionSnapshot lastSnap = null;
+
+        for (int i = 0; i < actions.length(); i++) {
+            if (isTokenCancelled(token)) {
+                return new StepwiseResult(
+                        new TvController.CommandResult(false, "Operazione annullata dall'utente allo step " + (i + 1)),
+                        snapshots, waitElapsed, executed, true, lastSnap);
+            }
+            JSONObject step = actions.optJSONObject(i);
+            if (step == null) {
+                return new StepwiseResult(
+                        new TvController.CommandResult(false, "Step non valido all'indice " + i),
+                        snapshots, waitElapsed, executed, false, lastSnap);
+            }
+            String type = step.optString("type", "").trim().toLowerCase(Locale.US);
+
+            if ("wait".equals(type)) {
+                long reqMs = Math.min(Math.max(0L, step.optLong("ms", 500L)), 3000L);
+                JSONObject nextStep = (i + 1 < actions.length()) ? actions.optJSONObject(i + 1) : null;
+                String nextType = nextStep != null ? nextStep.optString("type", "").trim().toLowerCase(Locale.US) : "";
+                String nextPkg = !step.optString("expect_pkg", "").trim().isEmpty()
+                        ? step.optString("expect_pkg", "").trim()
+                        : (nextStep != null && !nextStep.optString("expect_pkg", "").trim().isEmpty()
+                            ? nextStep.optString("expect_pkg", "").trim()
+                            : pendingLaunchPkg);
+                String nextText = !step.optString("expect_text", "").trim().isEmpty()
+                        ? step.optString("expect_text", "").trim()
+                        : (nextStep != null && !nextStep.optString("expect_text", "").trim().isEmpty()
+                            ? nextStep.optString("expect_text", "").trim()
+                            : (("click_text".equals(nextType) || "click_accessibility_node".equals(nextType))
+                                ? nextStep.optString("text", nextStep.optString("query", "")).trim()
+                                : ""));
+
+                if ((nextPkg == null || nextPkg.isEmpty()) && nextText.isEmpty() && reqMs > 0L) {
+                    long sliceBase = Math.max(15L, sDefaultPollIntervalMs);
+                    long done = 0L;
+                    while (done < reqMs && !isTokenCancelled(token)) {
+                        long slice = Math.min(sliceBase, reqMs - done);
+                        bridge.sleepMs(slice);
+                        done += slice;
+                        lastSnap = bridge.capture(context);
+                        snapshots++;
+                    }
+                    waitElapsed += done;
+                } else {
+                    WaitObservation obs = waitInterStepReady(nextPkg, nextText, reqMs, sDefaultPollIntervalMs, token);
+                    snapshots += obs.snapshotCount;
+                    waitElapsed += obs.elapsedMs;
+                    lastSnap = obs.snapshot;
+                }
+                if (isTokenCancelled(token)) {
+                    return new StepwiseResult(
+                            new TvController.CommandResult(false, "Operazione annullata dall'utente durante attesa"),
+                            snapshots, waitElapsed, executed, true, lastSnap);
+                }
+                justWaitedReadyCheck = true;
+                executed++;
+                continue;
+            }
+
+            if (i > 0) {
+                String explicitPkg = step.optString("expect_pkg", "").trim();
+                String explicitText = step.optString("expect_text", "").trim();
+                String reqPkg = !explicitPkg.isEmpty() ? explicitPkg : pendingLaunchPkg;
+                String clickTarget = ("click_text".equals(type) || "click_accessibility_node".equals(type))
+                        ? step.optString("text", step.optString("query", "")).trim()
+                        : "";
+                String reqText = !explicitText.isEmpty()
+                        ? explicitText
+                        : (pendingLaunchPkg != null ? clickTarget : "");
+
+                if ((reqPkg != null && !reqPkg.isEmpty()) || !reqText.isEmpty()) {
+                    long budgetMs = justWaitedReadyCheck
+                            ? 0L
+                            : Math.min(1500L, Math.max(sDefaultPollIntervalMs * 8L, 100L));
+                    WaitObservation gateObs = waitInterStepReady(reqPkg, reqText, budgetMs, sDefaultPollIntervalMs, token);
+                    snapshots += gateObs.snapshotCount;
+                    waitElapsed += gateObs.elapsedMs;
+                    lastSnap = gateObs.snapshot;
+                    if (isTokenCancelled(token)) {
+                        return new StepwiseResult(
+                                new TvController.CommandResult(false, "Operazione annullata dall'utente allo step " + (i + 1)),
+                                snapshots, waitElapsed, executed, true, lastSnap);
+                    }
+                    if (reqPkg != null && !reqPkg.isEmpty() && !snapshotMatchesPackage(lastSnap, reqPkg)) {
+                        String actualPkg = (lastSnap != null && lastSnap.foregroundPackage != null) ? lastSnap.foregroundPackage : "unknown";
+                        return new StepwiseResult(
+                                new TvController.CommandResult(false,
+                                        "Inter-step UI verification fallita: pacchetto atteso '" + reqPkg + "' non attivo (rilevato '" + actualPkg + "') prima dello step " + (i + 1)),
+                                snapshots, waitElapsed, executed, false, lastSnap);
+                    }
+                    if (!reqText.isEmpty() && !snapshotMatchesText(lastSnap, reqText)) {
+                        return new StepwiseResult(
+                                new TvController.CommandResult(false,
+                                        "Inter-step UI verification fallita: nodo testo '" + reqText + "' non pronto prima dello step " + (i + 1)),
+                                snapshots, waitElapsed, executed, false, lastSnap);
+                    }
+                    pendingLaunchPkg = null;
+                } else {
+                    lastSnap = bridge.capture(context);
+                    snapshots++;
+                }
+            }
+            justWaitedReadyCheck = false;
+
+            if (isTokenCancelled(token)) {
+                return new StepwiseResult(
+                        new TvController.CommandResult(false, "Operazione annullata dall'utente allo step " + (i + 1)),
+                        snapshots, waitElapsed, executed, true, lastSnap);
+            }
+
+            JSONArray single = new JSONArray();
+            single.put(step);
+            TvController.CommandResult stepRes = bridge.executeActions(single);
+            executed++;
+            if (stepRes == null || !stepRes.success) {
+                String msg = stepRes != null ? stepRes.message : "Errore esecuzione step " + (i + 1);
+                return new StepwiseResult(new TvController.CommandResult(false, msg),
+                        snapshots, waitElapsed, executed, isTokenCancelled(token), lastSnap);
+            }
+
+            if (("launch_app".equals(type) || "open_app".equals(type)) && i < actions.length() - 1) {
+                String launchedPkg = step.optString("package", step.optString("pkg", "")).trim();
+                if (!launchedPkg.isEmpty()) {
+                    pendingLaunchPkg = launchedPkg;
+                }
+            }
+        }
+        return new StepwiseResult(
+                new TvController.CommandResult(true, "Sequenza stepwise eseguita con successo (" + executed + " passi)"),
+                snapshots, waitElapsed, executed, false, lastSnap);
+    }
+
+    private String buildReflectorContext(ScreenPerceptionEngine.PerceptionSnapshot postSnap,
+                                        JSONArray previousActions,
+                                        TvController.CommandResult previousExec) {
+        try {
+            JSONObject wrapper = new JSONObject();
+            wrapper.put("replan_attempt", 1);
+            wrapper.put("previous_execution_success", previousExec != null && previousExec.success);
+            wrapper.put("previous_error", previousExec != null && previousExec.message != null ? previousExec.message : "");
+            wrapper.put("failed_actions", previousActions != null ? previousActions : new JSONArray());
+            if (postSnap != null) {
+                wrapper.put("post_screen", new JSONObject(postSnap.toRedactedMinimalContextPrompt()));
+            }
+            return wrapper.toString();
+        } catch (Exception e) {
+            return postSnap != null ? postSnap.toRedactedMinimalContextPrompt() : "{\"replan_attempt\":1}";
+        }
+    }
+
+    public JSONObject processQuery(String userQuery, boolean speak) {
+        long startTime = System.currentTimeMillis();
+
+        if (userQuery == null || userQuery.trim().isEmpty()) {
+            JSONObject emptyResult = new JSONObject();
+            String emptyReply = "Nessuna richiesta ricevuta. Dì ad esempio: 'Metti Italia 2' o 'Imposta il volume a 20'.";
+            return completeAndSpeak(emptyResult, "", emptyReply, "ERROR", null, 0, 0.0, speak, startTime);
+        }
+
+        final long generationAtEnqueue = cancelGeneration.get();
+        queuedTasks.incrementAndGet();
+        final TaskToken myToken = new TaskToken(taskSequence.incrementAndGet());
+        sessionLock.lock();
+        try {
+            queuedTasks.decrementAndGet();
+            if (sPrePublishHookForTest != null) {
+                try { sPrePublishHookForTest.run(); } catch (Throwable ignored) {}
+            }
+            cancelRequested.set(false);
+            activeTask.set(myToken);
+            if (sPostPublishHookForTest != null) {
+                try { sPostPublishHookForTest.run(); } catch (Throwable ignored) {}
+            }
+            if (generationAtEnqueue != cancelGeneration.get() || myToken.isCancelled() || cancelRequested.get()) {
+                myToken.cancel();
+                activeTask.compareAndSet(myToken, null);
+                long elapsed = System.currentTimeMillis() - startTime;
+                JSONObject cancelledRes = new JSONObject();
+                try {
+                    cancelledRes.put("success", false);
+                    cancelledRes.put("status", "CANCELLED");
+                    cancelledRes.put("execution_outcome", OUTCOME_FAILED);
+                    cancelledRes.put("verified", false);
+                    cancelledRes.put("cancelled_while_queued", true);
+                    cancelledRes.put("executed_steps", 0);
+                    cancelledRes.put("snapshot_count", 0);
+                    cancelledRes.put("wait_elapsed_ms", 0L);
+                    cancelledRes.put("cloud_calls", 0);
+                    cancelledRes.put("tokens", 0);
+                    cancelledRes.put("cost_eur", 0.0);
+                    cancelledRes.put("latency_ms", elapsed);
+                    cancelledRes.put("reply", "Operazione annullata in coda su richiesta.");
+                    cancelledRes.put("execution_mode", getExecutionMode());
+                    cancelledRes.put("strict_local_only", isStrictLocalOnly());
+                } catch (Exception ignored) {}
+                return cancelledRes;
+            }
+            return processQueryLocked(userQuery, speak, startTime, myToken);
+        } finally {
+            activeTask.compareAndSet(myToken, null);
+            cancelRequested.set(false);
+            sessionLock.unlock();
+        }
+    }
+
+    private JSONObject processQueryLocked(String userQuery, boolean speak, long startTime, TaskToken myToken) {
+        JSONObject result = new JSONObject();
+
         String query = userQuery.trim();
-        Log.i(TAG, "Processing request: \"" + query + "\" (speak=" + speak + ")");
+        Log.i(TAG, "Processing request: \"" + query + "\" (speak=" + speak + ", mode=" + getExecutionMode() + ", taskId=" + myToken.taskId + ")");
 
         // ---------------------------------------------------------------------
         // PASSO 1: VERIFICA PROCEDURA IN MEMORIA SQLITE (O COMANDO HARDWARE)
@@ -73,33 +653,63 @@ public class AkaiAiController {
 
         if (parsed.matched) {
             Log.i(TAG, "Fast-Path/SQLite match: " + parsed.intentKey + " (" + parsed.source + ")");
+            int snapshotCount = 0;
+            long waitElapsedMs = 0L;
 
             // Verifica coerenza dello stato iniziale prima dell'esecuzione
-            ScreenPerceptionEngine.PerceptionSnapshot preSnap = ScreenPerceptionEngine.capture();
+            ScreenPerceptionEngine.PerceptionSnapshot preSnap = bridge.capture(context);
+            snapshotCount++;
             if (parsed.initialState != null && !parsed.initialState.isEmpty()) {
                 try {
                     JSONObject initCond = new JSONObject(parsed.initialState);
                     String expectedPkg = initCond.optString("pkg", "");
-                    if (!expectedPkg.isEmpty() && !expectedPkg.equals(preSnap.foregroundPackage)) {
+                    boolean pkgMatches = expectedPkg.isEmpty() || expectedPkg.equals(preSnap.foregroundPackage);
+                    if (!pkgMatches && ("it.akai.customhome".equals(expectedPkg) || "it.akai.customhome.v8".equals(expectedPkg)) &&
+                            ("it.akai.customhome.v8".equals(preSnap.foregroundPackage) || "it.akai.customhome".equals(preSnap.foregroundPackage))) {
+                        pkgMatches = true;
+                    }
+                    if (!pkgMatches) {
                         Log.w(TAG, "Stato iniziale non corrispondente: atteso " + expectedPkg + ", rilevato " + preSnap.foregroundPackage);
-                        if ("it.akai.customhome".equals(expectedPkg)) {
+                        if ("it.akai.customhome".equals(expectedPkg) || "it.akai.customhome.v8".equals(expectedPkg)) {
                             Log.i(TAG, "Allineamento automatico: ritorno alla Home prima di eseguire la procedura memorizzata...");
-                            tvController.executeCommand("home");
-                            try { Thread.sleep(800); } catch (InterruptedException ignored) {}
+                            JSONArray homeSeq = new JSONArray();
+                            homeSeq.put(new JSONObject().put("type", "press_key").put("key", "home"));
+                            bridge.executeActions(homeSeq);
+                            waitElapsedMs += waitForHomePackage(800L, sDefaultPollIntervalMs, myToken);
                         }
                     }
                 } catch (Exception ignored) {}
             }
 
-            TvController.CommandResult cmdRes = tvController.executeActionSequence(parsed.actions);
+            StepwiseResult stepRes = executeActionsStepwise(parsed.actions, myToken);
+            TvController.CommandResult cmdRes = stepRes.commandResult;
+            snapshotCount += stepRes.snapshotCount;
+            waitElapsedMs += stepRes.waitElapsedMs;
 
-            // Attesa di assestamento per il rendering della UI e buffer video
-            try { Thread.sleep(1200); } catch (InterruptedException ignored) {}
+            if (stepRes.cancelled || isTokenCancelled(myToken)) {
+                try {
+                    result.put("success", false);
+                    result.put("source", parsed.source);
+                    result.put("intent_key", parsed.intentKey);
+                    result.put("execution_outcome", OUTCOME_FAILED);
+                    result.put("verified", false);
+                    result.put("snapshot_count", snapshotCount);
+                    result.put("wait_elapsed_ms", waitElapsedMs);
+                    result.put("executed_steps", stepRes.executedSteps);
+                    result.put("execution_mode", getExecutionMode());
+                    result.put("strict_local_only", isStrictLocalOnly());
+                } catch (Exception ignored) {}
+                return completeAndSpeak(result, query, "Operazione annullata su richiesta.", "CANCELLED", parsed.intentKey, 0, 0.0, false, startTime);
+            }
 
-            // Closed-loop verification con Context per AudioManager e Accessibility
-            ScreenPerceptionEngine.PerceptionSnapshot snap = ScreenPerceptionEngine.capture(context);
             boolean hasCondition = parsed.successCondition != null && !parsed.successCondition.trim().isEmpty();
-            boolean verified = hasCondition ? ScreenPerceptionEngine.evaluateSuccessCondition(snap, parsed.successCondition) : cmdRes.success;
+            boolean verified = false;
+            if (cmdRes.success) {
+                WaitObservation obs = waitForConditionOrUiChange(hasCondition ? parsed.successCondition : null, 1200L, sDefaultPollIntervalMs, myToken);
+                snapshotCount += obs.snapshotCount;
+                waitElapsedMs += obs.elapsedMs;
+                verified = hasCondition ? obs.verified : true;
+            }
 
             if (parsed.intentKey != null) {
                 if (verified && cmdRes.success) {
@@ -110,6 +720,7 @@ public class AkaiAiController {
                 }
             }
 
+            String executionOutcome = !cmdRes.success ? OUTCOME_FAILED : (verified ? OUTCOME_STATE_VERIFIED : OUTCOME_COMMAND_SENT);
             String status = (cmdRes.success && verified) ? "SUCCESS_VERIFIED" : (cmdRes.success ? "COMPLETED_UNVERIFIED" : "ERROR");
             String replyMsg;
             if (verified && cmdRes.success) {
@@ -125,7 +736,9 @@ public class AkaiAiController {
             } else if (hasCondition && !verified && cmdRes.success) {
                 replyMsg = "Non sono riuscito a sintonizzare il canale o la schermata richiesta. Il player non è attivo.";
             } else {
-                replyMsg = "Si è verificato un errore durante l'esecuzione del comando.";
+                replyMsg = cmdRes != null && cmdRes.message != null && !cmdRes.message.isEmpty()
+                        ? cmdRes.message
+                        : "Si è verificato un errore durante l'esecuzione del comando.";
             }
 
             try {
@@ -135,6 +748,15 @@ public class AkaiAiController {
                 result.put("tokens", 0);
                 result.put("cost_eur", 0.0);
                 result.put("verified", verified);
+                result.put("execution_outcome", executionOutcome);
+                result.put("replan_count", 0);
+                result.put("cloud_calls", 0);
+                result.put("snapshot_count", snapshotCount);
+                result.put("wait_elapsed_ms", waitElapsedMs);
+                result.put("executed_steps", stepRes.executedSteps);
+                result.put("execution_mode", getExecutionMode());
+                result.put("strict_local_only", isStrictLocalOnly());
+                result.put("budget_is_client_estimate", true);
                 result.put("actions_count", parsed.actions != null ? parsed.actions.length() : 0);
             } catch (Exception ignored) {}
 
@@ -145,24 +767,41 @@ public class AkaiAiController {
         // PASSO 2: PROCEDURA NON NOTA -> APPRENDIMENTO ED ESPLORAZIONE AUTONOMA
         // ---------------------------------------------------------------------
         Log.i(TAG, "No procedure found in SQLite. Initiating autonomous discovery for: \"" + query + "\"");
-        ScreenPerceptionEngine.PerceptionSnapshot initialSnap = ScreenPerceptionEngine.capture();
+        int snapshotCount = 0;
+        long totalWaitElapsedMs = 0L;
+        int cloudCalls = 0;
+        int replanCount = 0;
+        boolean replanRejectedDuplicate = false;
 
-        // Livello 4: Protezione Privacy & Sicurezza
+        ScreenPerceptionEngine.PerceptionSnapshot initialSnap = bridge.capture(context);
+        snapshotCount++;
+
+        // Livello 4: Protezione Privacy & Sicurezza (zero chiamate HTTP se campi sensibili)
         if (initialSnap.hasSensitiveFields) {
             Log.w(TAG, "Screen contains sensitive/password fields. Aborting AI processing for security.");
             JSONObject secRes = new JSONObject();
             try {
                 secRes.put("success", false);
+                secRes.put("status", "PRIVACY_BLOCKED");
+                secRes.put("execution_outcome", OUTCOME_NOT_TESTED);
+                secRes.put("privacy_blocked", true);
+                secRes.put("verified", false);
+                secRes.put("cloud_calls", 0);
+                secRes.put("snapshot_count", snapshotCount);
                 secRes.put("reply", "Operazione sospesa per sicurezza: rilevato campo sensibile o password sullo schermo.");
                 secRes.put("source", "security_guard");
                 secRes.put("tokens", 0);
                 secRes.put("cost_usd", 0);
+                secRes.put("cost_eur", 0.0);
+                secRes.put("execution_mode", getExecutionMode());
+                secRes.put("strict_local_only", isStrictLocalOnly());
             } catch (JSONException ignored) {}
             return secRes;
         }
 
         String provider = aiAdapter.getActiveProvider();
-        String apiKey = aiAdapter.getApiKey(provider);
+        String apiKey = AiProviderAdapter.PROVIDER_LOCAL.equals(provider) ? "" : aiAdapter.getApiKey(provider);
+        boolean hasConsent = aiAdapter.hasCloudContextConsent();
 
         JSONArray candidateActions = null;
         String candidateKey = null;
@@ -171,29 +810,64 @@ public class AkaiAiController {
         double costEur = 0.0;
         String planReply = null;
         String planWarning = null;
+        boolean usedCloudPlanner = false;
 
-        // Se è configurato un provider cloud (DeepSeek/Kimi) con API Key:
-        if (!AiProviderAdapter.PROVIDER_LOCAL.equals(provider) && !apiKey.isEmpty()) {
+        if (isStrictLocalOnly()) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            DiscoveryPlan plan = planLocalDiscovery(query, initialSnap);
+            if (plan != null) {
+                candidateActions = plan.actions;
+                candidateKey = generateIntentKey(query);
+                candidateCondition = plan.successCondition;
+                planReply = plan.reply;
+            } else {
+                try {
+                    result.put("success", false);
+                    result.put("status", "FAIL_CLOSED_UNSUPPORTED");
+                    result.put("execution_outcome", OUTCOME_FAILED);
+                    result.put("reply", "Comando non supportato in modalita locale esclusiva (PC spento). Comandi disponibili: volume, canali DTV, ingressi HDMI, navigazione Home/Indietro, avvio app.");
+                    result.put("source", "strict_local_guard");
+                    result.put("tokens", 0);
+                    result.put("cost_eur", 0.0);
+                    result.put("latency_ms", elapsed);
+                    result.put("verified", false);
+                    result.put("cloud_calls", 0);
+                    result.put("snapshot_count", snapshotCount);
+                    result.put("execution_mode", MODE_LOCAL_ONLY);
+                    result.put("strict_local_only", true);
+                } catch (Exception ignored) {}
+                return completeAndSpeak(result, query, "Comando non supportato in modalita locale esclusiva.", "FAIL_CLOSED_UNSUPPORTED", null, 0, 0.0, speak, startTime);
+            }
+        } else if (!AiProviderAdapter.PROVIDER_LOCAL.equals(provider) && !apiKey.isEmpty() && hasConsent) {
             if (aiAdapter.isBudgetExceeded()) {
                 long elapsed = System.currentTimeMillis() - startTime;
                 try {
                     result.put("success", false);
                     result.put("status", "BUDGET_EXCEEDED");
+                    result.put("execution_outcome", OUTCOME_FAILED);
                     result.put("reply", "Budget massimo iniziale di 5,00 € esaurito o residuo insufficiente. Richieste cloud bloccate preventivamente.");
                     result.put("source", "budget_guard");
                     result.put("tokens", 0);
                     result.put("cost_eur", 0.0);
                     result.put("latency_ms", elapsed);
                     result.put("verified", false);
+                    result.put("cloud_calls", 0);
+                    result.put("snapshot_count", snapshotCount);
+                    result.put("execution_mode", getExecutionMode());
+                    result.put("strict_local_only", false);
+                    result.put("budget_is_client_estimate", true);
                 } catch (Exception ignored) {}
                 return result;
             }
 
             JSONObject prefs = memoryEngine.getAllPreferences();
             JSONArray convHistory = memoryEngine.getRecentConversations(3);
-            AiProviderAdapter.AiResponse planRes = aiAdapter.planActionSequence(query, initialSnap.toContextPrompt(), prefs, convHistory);
+            String redactedContextPrompt = initialSnap.toRedactedMinimalContextPrompt();
+            AiProviderAdapter.AiResponse planRes = aiAdapter.planActionSequence(query, redactedContextPrompt, prefs, convHistory);
+            cloudCalls++;
 
             if (planRes.success) {
+                usedCloudPlanner = true;
                 promptTokens = planRes.promptTokens;
                 compTokens = planRes.completionTokens;
                 totalTokens = planRes.totalTokens;
@@ -201,7 +875,7 @@ public class AkaiAiController {
                 planReply = planRes.reply;
                 planWarning = planRes.warningMessage;
 
-                // Caso A: Domanda puramente conversazionale (consiglio, dialogo) -> 0 azioni hardware richieste
+                // Caso A: Domanda puramente conversazionale -> 0 azioni hardware richieste
                 if (planRes.actions == null || planRes.actions.length() == 0) {
                     Log.i(TAG, "Conversational dialog response from AI provider: " + planReply);
                     memoryEngine.incrementStat("cloud_ai_calls", 1);
@@ -213,34 +887,51 @@ public class AkaiAiController {
                         result.put("source", provider);
                         result.put("tokens", totalTokens);
                         result.put("cost_eur", costEur);
-                        result.put("verified", false); // Dialogo informativo, non uno stato TV verificato
+                        result.put("verified", false);
+                        result.put("execution_outcome", OUTCOME_NOT_TESTED);
+                        result.put("cloud_calls", cloudCalls);
+                        result.put("snapshot_count", snapshotCount);
+                        result.put("execution_mode", getExecutionMode());
+                        result.put("strict_local_only", false);
+                        result.put("budget_is_client_estimate", true);
                         result.put("actions_count", 0);
                     } catch (Exception ignored) {}
 
                     return completeAndSpeak(result, query, planReply, "ANSWERED_DIALOG", "dialog", totalTokens, costEur, speak, startTime);
                 }
 
-                // Caso B: Richiesta operativa TV con sequenza azioni
+                // Caso B: Richiesta operativa TV con sequenza azioni validata
                 candidateActions = planRes.actions;
                 candidateKey = planRes.intentKey;
                 candidateCondition = planRes.successCondition;
-            } else if (!planRes.success && planRes.error != null && planRes.error.contains("Budget")) {
+            } else {
                 long elapsed = System.currentTimeMillis() - startTime;
+                boolean budgetErr = planRes.error != null && planRes.error.contains("Budget");
+                boolean validationErr = planRes.error != null && (planRes.error.contains("SCHEMA") || planRes.error.contains("POLICY"));
                 try {
                     result.put("success", false);
-                    result.put("status", "BUDGET_EXCEEDED");
-                    result.put("reply", planRes.error);
-                    result.put("source", "budget_guard");
-                    result.put("tokens", 0);
-                    result.put("cost_eur", 0.0);
+                    result.put("status", budgetErr ? "BUDGET_EXCEEDED" : (validationErr ? "VALIDATION_BLOCKED" : "CLOUD_ERROR"));
+                    result.put("execution_outcome", OUTCOME_FAILED);
+                    result.put("validation_blocked", validationErr);
+                    result.put("error", planRes.error);
+                    result.put("reply", planRes.error != null ? planRes.error : "Risposta AI non valida o errore di rete.");
+                    result.put("source", budgetErr ? "budget_guard" : provider);
+                    result.put("tokens", planRes.totalTokens);
+                    result.put("cost_eur", planRes.costEur);
                     result.put("latency_ms", elapsed);
                     result.put("verified", false);
+                    result.put("learned_new_procedure", false);
+                    result.put("cloud_calls", cloudCalls);
+                    result.put("snapshot_count", snapshotCount);
+                    result.put("execution_mode", getExecutionMode());
+                    result.put("strict_local_only", false);
+                    result.put("budget_is_client_estimate", true);
                 } catch (Exception ignored) {}
                 return result;
             }
         }
 
-        // Fallback su Local UI Graph Planner se cloud non configurato o offline
+        // Fallback su Local UI Graph Planner se cloud non configurato o consenso assente
         if (candidateActions == null) {
             DiscoveryPlan plan = planLocalDiscovery(query, initialSnap);
             if (plan != null) {
@@ -257,63 +948,158 @@ public class AkaiAiController {
             try {
                 result.put("success", false);
                 result.put("status", "ERROR");
+                result.put("execution_outcome", OUTCOME_FAILED);
                 result.put("reply", "Impossibile trovare un percorso per '" + query + "'. " +
                         "Assicurati che la schermata iniziale sia corretta o configura una chiave DeepSeek/Kimi per l'esplorazione autonoma.");
                 result.put("source", "planner_failed");
                 result.put("tokens", 0);
                 result.put("latency_ms", elapsed);
                 result.put("verified", false);
+                result.put("cloud_calls", cloudCalls);
+                result.put("snapshot_count", snapshotCount);
+                result.put("execution_mode", getExecutionMode());
+                result.put("strict_local_only", isStrictLocalOnly());
             } catch (Exception ignored) {}
             return result;
         }
 
         // ---------------------------------------------------------------------
-        // PASSO 3: ESECUZIONE ED OSSERVAZIONE CLOSED-LOOP
+        // PASSO 3: ESECUZIONE STEPWISE, BOUNDED WAIT, REFLECTOR & MAX 1 REPLAN
         // ---------------------------------------------------------------------
         Log.i(TAG, "Executing planned actions (" + candidateActions.length() + " steps)...");
-        TvController.CommandResult execRes = tvController.executeActionSequence(candidateActions);
+        StepwiseResult stepExec = executeActionsStepwise(candidateActions, myToken);
+        TvController.CommandResult execRes = stepExec.commandResult;
+        snapshotCount += stepExec.snapshotCount;
+        totalWaitElapsedMs += stepExec.waitElapsedMs;
+        int executedStepsTotal = stepExec.executedSteps;
 
-        // Attesa stabilizzazione interfaccia
-        try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+        ScreenPerceptionEngine.PerceptionSnapshot postSnap = stepExec.lastSnapshot;
+        boolean verified = false;
+        if (!stepExec.cancelled && !isTokenCancelled(myToken)) {
+            if (execRes.success) {
+                WaitObservation firstObs = waitForConditionOrUiChange(candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                postSnap = firstObs.snapshot;
+                verified = firstObs.verified;
+                snapshotCount += firstObs.snapshotCount;
+                totalWaitElapsedMs += firstObs.elapsedMs;
+            } else if (postSnap == null) {
+                postSnap = bridge.capture(context);
+                snapshotCount++;
+            }
+        }
 
-        // Osservazione del risultato
-        ScreenPerceptionEngine.PerceptionSnapshot postSnap = ScreenPerceptionEngine.capture(context);
-        boolean verified = ScreenPerceptionEngine.evaluateSuccessCondition(postSnap, candidateCondition);
+        Log.i(TAG, "Discovery verification attempt 1: " + verified + " (execSuccess=" + execRes.success + ", postPkg=" + (postSnap != null ? postSnap.foregroundPackage : "") + ")");
 
-        Log.i(TAG, "Discovery verification: " + verified + " (postPkg=" + postSnap.foregroundPackage + ")");
+        // Reflector & singolo replanning non ripetitivo se fallito o non verificato
+        if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
+            String reflectorContext = buildReflectorContext(postSnap, candidateActions, execRes);
+            JSONObject prefs = memoryEngine.getAllPreferences();
+            JSONArray convHistory = memoryEngine.getRecentConversations(3);
+            AiProviderAdapter.AiResponse retryRes = aiAdapter.planActionSequence(
+                    query + " [RETRY_DIFFERENT_PLAN]", reflectorContext, prefs, convHistory);
+            cloudCalls++;
+            promptTokens += retryRes.promptTokens;
+            compTokens += retryRes.completionTokens;
+            totalTokens += retryRes.totalTokens;
+            costEur += retryRes.costEur;
+            if (retryRes.warningMessage != null) planWarning = retryRes.warningMessage;
+
+            if (!isTokenCancelled(myToken) && retryRes.success && retryRes.actions != null && retryRes.actions.length() > 0) {
+                String firstSerialized = candidateActions.toString();
+                String retrySerialized = retryRes.actions.toString();
+                if (firstSerialized.equals(retrySerialized)) {
+                    Log.w(TAG, "Replan rejected: identical action sequence returned by LLM.");
+                    replanRejectedDuplicate = true;
+                } else {
+                    replanCount = 1;
+                    candidateActions = retryRes.actions;
+                    candidateCondition = retryRes.successCondition;
+                    if (retryRes.intentKey != null && !retryRes.intentKey.isEmpty()) {
+                        candidateKey = retryRes.intentKey;
+                    }
+                    if (retryRes.reply != null && !retryRes.reply.isEmpty()) {
+                        planReply = retryRes.reply;
+                    }
+                    StepwiseResult replanStepExec = executeActionsStepwise(candidateActions, myToken);
+                    execRes = replanStepExec.commandResult;
+                    snapshotCount += replanStepExec.snapshotCount;
+                    totalWaitElapsedMs += replanStepExec.waitElapsedMs;
+                    executedStepsTotal += replanStepExec.executedSteps;
+                    if (replanStepExec.cancelled || isTokenCancelled(myToken)) {
+                        postSnap = replanStepExec.lastSnapshot;
+                        verified = false;
+                    } else if (execRes.success) {
+                        WaitObservation retryObs = waitForConditionOrUiChange(candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                        postSnap = retryObs.snapshot;
+                        verified = retryObs.verified;
+                        snapshotCount += retryObs.snapshotCount;
+                        totalWaitElapsedMs += retryObs.elapsedMs;
+                    } else {
+                        postSnap = replanStepExec.lastSnapshot != null ? replanStepExec.lastSnapshot : bridge.capture(context);
+                        if (replanStepExec.lastSnapshot == null) snapshotCount++;
+                        verified = false;
+                    }
+                    Log.i(TAG, "Discovery verification attempt 2 (replan): " + verified + " (execSuccess=" + execRes.success + ")");
+                }
+            }
+        }
+
+        if (stepExec.cancelled || isTokenCancelled(myToken)) {
+            try {
+                result.put("success", false);
+                result.put("source", usedCloudPlanner ? provider : "local_autonomous_planner");
+                result.put("execution_outcome", OUTCOME_FAILED);
+                result.put("verified", false);
+                result.put("learned_new_procedure", false);
+                result.put("replan_count", replanCount);
+                result.put("cloud_calls", cloudCalls);
+                result.put("snapshot_count", snapshotCount);
+                result.put("wait_elapsed_ms", totalWaitElapsedMs);
+                result.put("executed_steps", executedStepsTotal);
+                result.put("tokens", totalTokens);
+                result.put("cost_eur", costEur);
+                result.put("execution_mode", getExecutionMode());
+                result.put("strict_local_only", isStrictLocalOnly());
+            } catch (Exception ignored) {}
+            return completeAndSpeak(result, query, "Operazione annullata su richiesta.", "CANCELLED", candidateKey, totalTokens, costEur, false, startTime);
+        }
+
+        // Distinzione categorica tra COMMAND_SENT e STATE_VERIFIED
+        String executionOutcome = !execRes.success ? OUTCOME_FAILED : (verified ? OUTCOME_STATE_VERIFIED : OUTCOME_COMMAND_SENT);
 
         // ---------------------------------------------------------------------
-        // PASSO 4: SALVATAGGIO NELLA MEMORIA PROCEDURALE SQLITE (SOLO SE VERIFICATO)
+        // PASSO 4: SALVATAGGIO IN MEMORIA PROCEDURALE SQLITE (SOLO STATE_VERIFIED)
         // ---------------------------------------------------------------------
         boolean newlyLearned = false;
-        if (verified && execRes.success) {
-            if (candidateKey == null) candidateKey = generateIntentKey(query);
-            String initialState = "{\"pkg\":\"" + initialSnap.foregroundPackage + "\"}";
+        if (OUTCOME_STATE_VERIFIED.equals(executionOutcome)) {
+            if (candidateKey == null || candidateKey.trim().isEmpty()) candidateKey = generateIntentKey(query);
+            String initialState = "{\"pkg\":\"" + (initialSnap != null ? initialSnap.foregroundPackage : "") + "\"}";
 
             newlyLearned = memoryEngine.saveVerifiedProcedure(
                     candidateKey,
                     query.toLowerCase(Locale.ITALIAN),
                     query,
-                    postSnap.foregroundPackage,
+                    postSnap != null ? postSnap.foregroundPackage : "",
                     initialState,
                     candidateActions,
                     candidateCondition,
                     "1.0"
             );
-            Log.i(TAG, "SUCCESS! New procedure learned and persisted to SQLite: " + candidateKey);
+            Log.i(TAG, "SUCCESS! New verified procedure saved to SQLite: " + candidateKey);
         }
 
         // Aggiornamento statistiche d'uso
-        if (totalTokens > 0) {
-            memoryEngine.incrementStat("cloud_ai_calls", 1);
+        if (cloudCalls > 0) {
+            memoryEngine.incrementStat("cloud_ai_calls", cloudCalls);
             memoryEngine.incrementStat("prompt_tokens", promptTokens);
             memoryEngine.incrementStat("completion_tokens", compTokens);
         } else {
             memoryEngine.incrementStat("local_executions_zero_token", 1);
         }
 
-        long elapsed = System.currentTimeMillis() - startTime;
-        String status = (execRes.success && verified) ? "SUCCESS_VERIFIED" : (execRes.success ? "COMPLETED_UNVERIFIED" : "ERROR");
+        String status = OUTCOME_STATE_VERIFIED.equals(executionOutcome)
+                ? "SUCCESS_VERIFIED"
+                : (OUTCOME_COMMAND_SENT.equals(executionOutcome) ? "COMPLETED_UNVERIFIED" : "ERROR");
         String finalReply = planReply != null ? planReply : "Procedura completata.";
         if (!execRes.success) {
             finalReply = "Non sono riuscito a completare l'operazione: " + execRes.message;
@@ -322,8 +1108,8 @@ public class AkaiAiController {
         }
 
         try {
-            result.put("success", execRes.success && verified);
-            result.put("source", totalTokens > 0 ? provider : "local_autonomous_planner");
+            result.put("success", OUTCOME_STATE_VERIFIED.equals(executionOutcome));
+            result.put("source", cloudCalls > 0 ? provider : "local_autonomous_planner");
             result.put("learned_new_procedure", newlyLearned);
             result.put("intent_key", candidateKey);
             result.put("actions_count", candidateActions.length());
@@ -331,10 +1117,20 @@ public class AkaiAiController {
             result.put("cost_eur", costEur);
             result.put("budget_spent_eur", aiAdapter.getTotalSpentEur());
             result.put("budget_remaining_eur", aiAdapter.getRemainingBudgetEur());
+            result.put("budget_is_client_estimate", true);
             if (planWarning != null) {
                 result.put("budget_warning", planWarning);
             }
             result.put("verified", verified);
+            result.put("execution_outcome", executionOutcome);
+            result.put("replan_count", replanCount);
+            result.put("replan_rejected_duplicate", replanRejectedDuplicate);
+            result.put("cloud_calls", cloudCalls);
+            result.put("snapshot_count", snapshotCount);
+            result.put("wait_elapsed_ms", totalWaitElapsedMs);
+            result.put("executed_steps", executedStepsTotal);
+            result.put("execution_mode", getExecutionMode());
+            result.put("strict_local_only", isStrictLocalOnly());
         } catch (Exception ignored) {}
 
         return completeAndSpeak(result, query, finalReply, status, candidateKey, totalTokens, costEur, speak, startTime);
@@ -350,11 +1146,11 @@ public class AkaiAiController {
         } catch (Exception ignored) {}
 
         // 1. Voce TV: Pronuncia attraverso altoparlanti se richiesto
-        if (speakRequested && replyMsg != null && !replyMsg.trim().isEmpty()) {
+        if (speakRequested && context != null && replyMsg != null && !replyMsg.trim().isEmpty()) {
             try {
                 AkaiSpeechEngine speech = AkaiSpeechEngine.getInstance(context);
                 speech.speak(replyMsg, true);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 Log.w(TAG, "Speech engine playback notice: " + e.getMessage());
             }
         }
@@ -445,12 +1241,14 @@ public class AkaiAiController {
                 return new DiscoveryPlan(actions, cond, "Apertura Impostazioni TV.");
             }
 
-            // Caso D: Navigazione a elemento testuale presente attualmente a schermo
-            for (String t : snapshot.visibleTexts) {
-                if (t.length() >= 3 && clean.contains(t.toLowerCase())) {
-                    actions.put(new JSONObject().put("type", "click_text").put("text", t));
-                    String cond = "{\"type\":\"contains_text\",\"value\":\"" + t + "\"}";
-                    return new DiscoveryPlan(actions, cond, "Selezione elemento a schermo: \"" + t + "\"");
+            // Caso G: Navigazione a elemento testuale presente attualmente a schermo
+            if (snapshot != null && snapshot.visibleTexts != null) {
+                for (String t : snapshot.visibleTexts) {
+                    if (t.length() >= 3 && clean.contains(t.toLowerCase())) {
+                        actions.put(new JSONObject().put("type", "click_text").put("text", t));
+                        String cond = "{\"type\":\"contains_text\",\"value\":\"" + t + "\"}";
+                        return new DiscoveryPlan(actions, cond, "Selezione elemento a schermo: \"" + t + "\"");
+                    }
                 }
             }
         } catch (Exception e) {
