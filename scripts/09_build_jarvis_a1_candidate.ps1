@@ -283,6 +283,24 @@ if ((Test-Path $finalApk) -and (Test-Path $releaseApk)) {
     }
     Write-Host "      [PASS] Firma candidato uguale a quella TV ($actualSigner)." -ForegroundColor Green
 
+    Write-Host "`n[GATE ICONE E METADATI] Analisi badging del candidato con aapt..."
+    $aaptInspect = Join-Path $buildToolsDir 'aapt.exe'
+    if (-not (Test-Path $aaptInspect)) { $aaptInspect = $aapt2 }
+    $badgingLines = & $aaptInspect dump badging $releaseApk 2>&1
+    $badgingExit = $LASTEXITCODE
+    $badgingText = ($badgingLines | Out-String)
+    if ($badgingExit -ne 0 -or $badgingText -match '(?i)ERROR getting|value reference does not exist|No known package when getting value') {
+        throw "APK candidato rifiutato: risorse/icone Android non risolte (aapt exit=$badgingExit): $badgingText"
+    }
+    $expectedPackageRegex = "package:\s+name='it\.akai\.customremote'\s+versionCode='$VersionCode'\s+versionName='$([regex]::Escape($VersionName))'"
+    if ($badgingText -notmatch $expectedPackageRegex -or $badgingText -notmatch "sdkVersion:'21'" -or $badgingText -notmatch "targetSdkVersion:'28'") {
+        throw "APK candidato rifiutato: package/versionCode/versionName/minSDK/targetSDK non conformi: $badgingText"
+    }
+    if ($badgingText -notmatch "(?m)^application:\s+label=") {
+        throw "APK candidato rifiutato: application badging non risolto (possibile icona/label assente). $badgingText"
+    }
+    Write-Host "      [PASS] App icon/label e metadati Android risolti; versione $VersionCode ($VersionName)." -ForegroundColor Green
+
     Write-Host "`n[GATE NEGATIVO DI SICUREZZA] Verifica assenza credenziali/certificati TLS nell'APK release:"
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
     $zipTest = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $releaseApk))
