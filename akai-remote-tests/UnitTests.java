@@ -2048,9 +2048,9 @@ public class UnitTests {
                                     .put("type", "function")
                                     .put("function", new JSONObject().put("name", "plan_tv").put("arguments", argsJson)))))))
                             .toString();
-                    } else if ("INSTALLED_MEDIASET".equals(mode) || "INSTALLED_THIRD_PARTY".equals(mode) || "WRONG_MEDIASET_PACKAGE".equals(mode)) {
+                    } else if ("INSTALLED_MEDIASET".equals(mode) || "INSTALLED_THIRD_PARTY".equals(mode) || "INSTALLED_LEANBACK_ONLY".equals(mode) || "WRONG_MEDIASET_PACKAGE".equals(mode)) {
                         String pkg = "INSTALLED_MEDIASET".equals(mode) ? "it.mediaset.infinitytv"
-                                : ("INSTALLED_THIRD_PARTY".equals(mode) ? "org.example.thirdparty" : "it.mediaset.infinity");
+                                : ("INSTALLED_THIRD_PARTY".equals(mode) ? "org.example.thirdparty" : ("INSTALLED_LEANBACK_ONLY".equals(mode) ? "org.example.leanbackonly" : "it.mediaset.infinity"));
                         String contentJson = new JSONObject()
                             .put("reply", "Apro applicazione")
                             .put("actions", new JSONArray().put(new JSONObject().put("type", "launch_app").put("pkg", pkg)))
@@ -2125,6 +2125,9 @@ public class UnitTests {
             mockBehavior[0] = "INSTALLED_THIRD_PARTY";
             AiProviderAdapter.AiResponse thirdPartyInstalled = adapter.planActionSequence("apri nuova app", "{}", null, null);
             boolean anyLaunchableOk = thirdPartyInstalled.success && thirdPartyInstalled.actions.length() == 1;
+            mockBehavior[0] = "INSTALLED_LEANBACK_ONLY";
+            AiProviderAdapter.AiResponse leanbackOnlyInstalled = adapter.planActionSequence("apri app tv", "{}", null, null);
+            boolean leanbackOnlyOk = leanbackOnlyInstalled.success && leanbackOnlyInstalled.actions.length() == 1;
             mockBehavior[0] = "WRONG_MEDIASET_PACKAGE";
             AiProviderAdapter.AiResponse wrongMediaPkg = adapter.planActionSequence("apri mediaset", "{}", null, null);
             boolean wrongPkgRejected = !wrongMediaPkg.success && wrongMediaPkg.error != null &&
@@ -2181,7 +2184,7 @@ public class UnitTests {
             test36Passed = defaultEndpointsOk && cnRegionOk && localZeroHttpOk && dsOk && kimiToolOk &&
                            ok401 && ok402 && ok429 && okTimeout && okBadJson && okOversized && okMissingKey &&
                            rejectUnknown && rejectWaitRange && rejectDisallowedPkg && rejectDestructive && budgetFlagOk &&
-                           installedMediaOk && anyLaunchableOk && wrongPkgRejected;
+                           installedMediaOk && anyLaunchableOk && leanbackOnlyOk && wrongPkgRejected;
             if (!test36Passed) {
                 System.err.println("[DEBUG Test 36] def=" + defaultEndpointsOk + " cn=" + cnRegionOk + " loc=" + localZeroHttpOk +
                     " ds=" + dsOk + " (dsSuccess=" + dsResp.success + ", dsReply=" + dsResp.reply + ", dsErr=" + dsResp.error + ") kimi=" + kimiToolOk +
@@ -2189,7 +2192,7 @@ public class UnitTests {
                     " to=" + okTimeout + " bad=" + okBadJson + " (badSuccess=" + errBadJson.success + ", badErr=" + errBadJson.error + ") ov=" + okOversized + " mk=" + okMissingKey +
                     " un=" + rejectUnknown + " wr=" + rejectWaitRange + " dp=" + rejectDisallowedPkg +
                     " dk=" + rejectDestructive + " bg=" + budgetFlagOk +
-                    " installedMedia=" + installedMediaOk + " anyLaunchable=" + anyLaunchableOk + " wrongPkgBlocked=" + wrongPkgRejected);
+                    " installedMedia=" + installedMediaOk + " anyLaunchable=" + anyLaunchableOk + " leanbackOnly=" + leanbackOnlyOk + " wrongPkgBlocked=" + wrongPkgRejected);
             }
         } catch (Throwable t36) {
             System.err.println("[FAIL] Test 36 eccezione: " + t36.getMessage());
