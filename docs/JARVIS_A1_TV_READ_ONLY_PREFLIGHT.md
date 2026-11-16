@@ -63,3 +63,31 @@ Riportare soltanto questi risultati:
 `AKAI JARVIS CI` esegue Java host, SQLite reale host, JNI ARMv7, build Android 9, ispezione APK e PowerShell mock-ADB/rollback. `JARVIS Cloud Developer — Safe CI` verifica il worker Python, il blocco di chiamate senza approvazione e i limiti ai file modificabili. **Non sostituiscono** il preflight e i test Android reali.
 
 **Decisione successiva:** se firma TV verificata, individuare la keystore di rilascio già usata **sul PC privato** senza copiarla nel repo, firmare un candidato in un ambiente controllato, confrontare digest e proporre un collaudo solo dopo autorizzazione. Se firma TV non disponibile, mantenere la beta attuale senza modifiche.
+
+## Verifica backup completo TV — 16 novembre 2026, 11:04 CET
+
+Il proprietario ha eseguito **con consenso operativo esplicito**:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\akai-remote-tests\\05_safe_install_and_rollback.ps1" -Action backup -TargetTv 192.168.1.108 -BackupDir "$env:USERPROFILE\\JARVIS-backup-TV" -AllowHardwareExecution
+```
+
+**Risultato reale: SUCCESS.** Cartella sessione `C:\Users\danie\JARVIS-backup-TV\backup_20261116_110423`.
+
+- APK originale salvato e **preservato** (189782 byte).
+- Export logico `/api/ai/memory` ha risposto **HTTP 426**, previsto dalla policy HTTPS-only; backup binario proseguito correttamente. Non classificare il 426 come errore del database.
+- Processo `it.akai.customremote` fermato e verificato quiescente; database `akai_memory.db` e **WAL di 428512 byte** estratti via ADB root temporaneo. `adb unroot` ha confermato ripristino `uid=2000(shell)`.
+- Database consolidato **45056 byte**; check offline `PRAGMA wal_checkpoint(TRUNCATE)` e `PRAGMA integrity_check` superati; SHA-256 del **file database consolidato**: `9f36d5fb0023e200b138262d7d8259d98f7ceae62ab50806bdde6a8856ae1fc8`.
+- Cinque file HTTPS `server_keystore.p12`, `server_keystore.pass`, `ca.pem`, `ca.crt`, `ca_key.der` salvati cifrati e verificati tramite round-trip Windows DPAPI nel vault **fuori Git** `%LOCALAPPDATA%\AkaiTvSecureVault\it.akai.customremote\backup_20261116_110423\tls_identity`.
+- Recovery V5 del server: `PID=19880`, `/api/status=ok`, `uinput_ready=true`. Zero installazioni e zero reset.
+
+**Limitazione residua:** non è stato effettuato un test di **restore effettivo su hardware**; il log dimostra estrazione, consolidamento, cifratura e servizio ripristinato. I file DPAPI sono legati al profilo/account Windows: preservare il PC e le credenziali di recupero, evitare di copiare il solo vault su un secondo computer aspettandosi che sia decifrabile. Non condividere i file privati né pubblicarli su GitHub.
+
+### Gate per la preparazione di un APK candidato (non equivale ad autorizzazione installazione)
+
+1. Controllare **prima** `git status --short`, `git branch --show-current`, e `git rev-parse HEAD` del PC laboratorio: la compilazione deve usare davvero la PR #8 candidata, non una copia vecchia del progetto.
+2. Fare **copia separata** di eventuale cartella `akai-remote-tv/app/build` se vi sono APK locali da preservare: l'attuale `scripts/08_compile_akai_remote_apk.ps1` la elimina all'avvio e modifica gli asset in sorgente; **non eseguirlo automaticamente**.
+3. Per un nuovo build impostare `versionCode` superiore a `1` e `versionName` univoco, e firmare con la `tools/debug.keystore` locale già verificata; confrontare il **digest del certificato del candidato** con l'APK installato (`21C2C41DC4C34576CCA14AD5404E87D1C5A07ACE961C0FAB96D128C2164A51ED`). Non generare chiavi nuove, non inserire keyfile nel repository.
+4. Garantire che nell'APK non ci siano `server_keystore.p12`, `ca_key.der`, password TLS, file personali, né dipendenze Kimi/DeepSeek lato TV oltre al client Java consentito. GitHub CI firma con chiave temporanea e non produce una release distribuibile.
+5. Riesaminare tempi di rollback e stato HTTPS/port 8443 con chiave CA originale prima di pianificare un update conservativo in-place. La **nuova installazione richiede consenso distinto** e verifica su TV reale.
+
