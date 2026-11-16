@@ -370,8 +370,82 @@ public class LocalIntentParser {
             }
         }
 
+        // A2: apri una qualunque app installata tramite il nome esatto mostrato
+        // da Android, senza API e senza una whitelist scritta a mano. Le skill
+        // SQLite restano prioritarie; richieste composte non sono intercettate.
+        ParsedIntent installedApp = resolveInstalledAppLaunch(context, clean);
+        if (installedApp.matched) return installedApp;
+
         // Nessun match primitivo né procedurale trovato -> Richiede esplorazione autonoma
         return ParsedIntent.notMatched();
+    }
+
+    /**
+     * Fast local app opening by Android's own application label.
+     * Exact name and unique match only; ambiguous or compound requests remain
+     * for the existing AI planner. No network access, no persistent cache, and
+     * no Android 11+ APIs are necessary on the Android 9 TV.
+     */
+    private static ParsedIntent resolveInstalledAppLaunch(Context context, String clean) {
+        if (context == null || clean == null) return ParsedIntent.notMatched();
+        Matcher m = Pattern.compile(
+                "^(?:jarvis\\s+)?(?:apri|avvia|vai\\s+su)\\s+(?:l\\s+app\\s+|l\\s+applicazione\\s+|app\\s+|applicazione\\s+)?(.+)$"
+        ).matcher(clean);
+        if (!m.matches()) return ParsedIntent.notMatched();
+        String target = m.group(1).trim();
+        if (target.isEmpty() || target.length() > 75) return ParsedIntent.notMatched();
+
+        try {
+            android.content.pm.PackageManager pm = context.getPackageManager();
+            if (pm == null) return ParsedIntent.notMatched();
+            java.util.List<android.content.pm.ApplicationInfo> apps = pm.getInstalledApplications(0);
+            if (apps == null) return ParsedIntent.notMatched();
+            String selectedPkg = null;
+            String selectedLabel = null;
+            int scanned = 0;
+            for (android.content.pm.ApplicationInfo app : apps) {
+                if (++scanned > 300) break; // Bound work on low-RAM hardware.
+                if (app == null || app.packageName == null) continue;
+                String pkg = app.packageName;
+                if (pkg.equals("it.akai.customhome") || pkg.equals("it.akai.customhome.v8")
+                        || pkg.equals("it.akai.customremote")) continue;
+                CharSequence labelCs;
+                try {
+                    labelCs = pm.getApplicationLabel(app);
+                } catch (RuntimeException e) {
+                    continue;
+                }
+                if (labelCs == null) continue;
+                String label = labelCs.toString().trim();
+                String normalizedLabel = java.text.Normalizer.normalize(
+                        label.toLowerCase(Locale.ITALIAN), java.text.Normalizer.Form.NFD)
+                        .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
+                        .replaceAll("[^a-z0-9\\+\\s]", " ")
+                        .replaceAll("\\s+", " ").trim();
+                if (!target.equals(normalizedLabel)) continue;
+                // Do not accept a package merely because it exists on disk:
+                // the device must actually expose a launchable TV/phone entry.
+                if (pm.getLeanbackLaunchIntentForPackage(pkg) == null
+                        && pm.getLaunchIntentForPackage(pkg) == null) continue;
+                if (selectedPkg != null) {
+                    Log.w(TAG, "App launch label ambiguous; deferring to planner");
+                    return ParsedIntent.notMatched();
+                }
+                selectedPkg = pkg;
+                selectedLabel = label;
+            }
+            if (selectedPkg == null) return ParsedIntent.notMatched();
+            JSONArray actions = new JSONArray();
+            actions.put(new JSONObject().put("type", "launch_app").put("pkg", selectedPkg)
+                    .put("name", selectedLabel));
+            JSONObject cond = new JSONObject().put("type", "pkg_is").put("value", selectedPkg);
+            return new ParsedIntent(true, "launch_installed_app_" + selectedPkg,
+                    "Avvia " + selectedLabel, actions, "Apertura " + selectedLabel + " in corso...",
+                    "local_installed_app", cond.toString());
+        } catch (Exception e) {
+            Log.w(TAG, "Cannot resolve installed app name");
+            return ParsedIntent.notMatched();
+        }
     }
 
     public static JSONArray getSupportedCatalog() {
