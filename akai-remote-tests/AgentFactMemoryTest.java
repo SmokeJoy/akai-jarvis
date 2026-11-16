@@ -1,6 +1,7 @@
 package it.akai.customremote;
 
 import android.content.Context;
+import android.util.Log;
 import it.akai.customremote.ai.AgentFactMemory;
 import it.akai.customremote.ai.AkaiMemoryEngine;
 import it.akai.customremote.ai.LocalIntentParser;
@@ -30,8 +31,13 @@ public final class AgentFactMemoryTest {
         for (int i = 0; i < AgentFactMemory.MAX_FACT_CHARS + 1; i++) tooLong.append("x");
         expect(AgentFactMemory.remember(m, tooLong.toString()).contains("non salvata"), "overlong fact rejected");
 
+        Log.clearCapturedForTest();
         LocalIntentParser.ParsedIntent speechWrite =
             LocalIntentParser.parse(context, "Jarvis, ricorda che mi piace la voce italiana");
+        for (String logged : Log.capturedForTest()) {
+            expect(!logged.toLowerCase().contains("mi piace la voce italiana"),
+                    "personal fact must not be included in Android debug logs");
+        }
         expect(speechWrite.matched && "local_memory".equals(speechWrite.source), "voice/text command dispatch");
         expect(AgentFactMemory.recall(m).contains("mi piace la voce italiana"), "voice command saved fact");
         LocalIntentParser.ParsedIntent speechRead =
