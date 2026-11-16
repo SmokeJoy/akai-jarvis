@@ -2350,6 +2350,19 @@ public class UnitTests {
             boolean sc1aOk = r1a.optBoolean("success") && r1a.optInt("tokens", -1) == 0 &&
                     "STATE_VERIFIED".equals(r1a.optString("execution_outcome")) && ctrlHttpCalls.get() == 0;
 
+            // Scenario 1a-bis: no observable condition MUST NOT become STATE_VERIFIED.
+            // "alza" is a known local volume intent without a success_condition.
+            snapQueue.clear();
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8",
+                    Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false));
+            JSONObject r1aNoEvidence = ctrl37.processQuery("alza", false);
+            boolean sc1aNoEvidenceOk = !r1aNoEvidence.optBoolean("success")
+                    && !r1aNoEvidence.optBoolean("verified")
+                    && "COMMAND_SENT".equals(r1aNoEvidence.optString("execution_outcome"))
+                    && "COMPLETED_UNVERIFIED".equals(r1aNoEvidence.optString("status"))
+                    && r1aNoEvidence.optString("reply", "").contains("non posso confermare")
+                    && ctrlHttpCalls.get() == 0;
+
             // Scenario 1b: Discovery YouTube con bounded adaptive wait < 300ms e salvataggio SQLite
             ctrlScenario[0] = "DISCOVERY_YT";
             snapQueue.clear();
@@ -2663,9 +2676,9 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
-                System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
+                System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
