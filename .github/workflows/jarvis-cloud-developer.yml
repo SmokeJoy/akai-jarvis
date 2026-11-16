@@ -33,6 +33,9 @@ concurrency:
 
 jobs:
   propose:
+    # Fail closed for contributors: only repository owner may authorize a
+    # potentially billable model invocation from the manual workflow.
+    if: github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
