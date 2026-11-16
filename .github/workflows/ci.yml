@@ -116,6 +116,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/GoalEvidenceVerifier.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/UiClickTargetGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AkaiAiController.java \
             akai-remote-tests/UnitTests.java \
             akai-remote-tests/AgentSkillGateTest.java \
