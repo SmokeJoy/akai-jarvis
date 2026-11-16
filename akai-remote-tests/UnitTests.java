@@ -2605,6 +2605,22 @@ public class UnitTests {
                             "org.example.thirdparty", Collections.singletonList("Acquista!"),
                             Collections.emptyList(), null, false, false, false), "Acquista!").allowed;
 
+            // A2 dynamic local app resolver: arbitrary installed app and TV-only
+            // Leanback label, with exact-name and ambiguity protection.
+            LocalIntentParser.ParsedIntent novaApp = LocalIntentParser.parse(ctx37, "Apri Nova Player");
+            LocalIntentParser.ParsedIntent leanbackApp = LocalIntentParser.parse(ctx37, "Apri l'app Leanback Gallery");
+            LocalIntentParser.ParsedIntent duplicateApp = LocalIntentParser.parse(ctx37, "Apri App Duplicata");
+            LocalIntentParser.ParsedIntent absentApp = LocalIntentParser.parse(ctx37, "Apri App Sconosciuta");
+            LocalIntentParser.ParsedIntent compoundApp = LocalIntentParser.parse(ctx37, "Apri Nova Player e cerca un film");
+            boolean dynamicAppLocalOk = novaApp.matched
+                    && "local_installed_app".equals(novaApp.source)
+                    && novaApp.actions.length() == 1
+                    && "org.example.thirdparty".equals(novaApp.actions.optJSONObject(0).optString("pkg"))
+                    && novaApp.successCondition.contains("org.example.thirdparty")
+                    && leanbackApp.matched
+                    && "org.example.leanbackonly".equals(leanbackApp.actions.optJSONObject(0).optString("pkg"))
+                    && !duplicateApp.matched && !absentApp.matched && !compoundApp.matched;
+
             // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
             ctrlScenario[0] = "CANCEL_MULTI";
             final List<String> actionOrder = Collections.synchronizedList(new ArrayList<>());
@@ -2819,14 +2835,14 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && safeUiClicksOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && safeUiClicksOk && dynamicAppLocalOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
                 System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
                     " mediaPartial=" + scMediaPartialOk + " goalContract=" + goalContractOk +
-                    " safeUiClicks=" + safeUiClicksOk +
+                    " safeUiClicks=" + safeUiClicksOk + " localApp=" + dynamicAppLocalOk +
                     " priv=" + privacyZeroHttpOk + " red=" + redactionOk);
             }
         } catch (Throwable t37) {
