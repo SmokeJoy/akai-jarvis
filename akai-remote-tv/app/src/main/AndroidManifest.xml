@@ -48,6 +48,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Optional on-device one-shot screen capture; never remotely exported. -->
+        <activity
+            android:name=".LocalVisualCaptureActivity"
+            android:exported="false"
+            android:excludeFromRecents="true" />
+
         <!-- Internal Protected PIN Display Activity (exported=false to prevent third-party spoofing) -->
         <activity
             android:name=".PinActivity"
