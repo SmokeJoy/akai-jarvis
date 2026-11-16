@@ -7,6 +7,7 @@ import it.akai.customremote.ai.AkaiMemoryEngine;
 import it.akai.customremote.ai.KeystoreSecurityHelper;
 import it.akai.customremote.ai.LocalIntentParser;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
+import it.akai.customremote.ai.GoalEvidenceVerifier;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -2273,6 +2274,14 @@ public class UnitTests {
                                    .put("actions", new JSONArray().put(new JSONObject().put("type", "press_key").put("key", "dpad_down")))
                                    .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "SchermataInesistente"));
                         }
+                    } else if ("MEDIA_INTERMEDIATE_ONLY".equals(sc)) {
+                        payload.put("reply", "Apro Mediaset (ma non posso attestare la diretta)")
+                               .put("intent_key", "media_incomplete")
+                               .put("learn_procedure", true)
+                               .put("actions", new JSONArray().put(new JSONObject()
+                                   .put("type", "launch_app").put("pkg", "it.mediaset.infinitytv")))
+                               .put("success_condition", new JSONObject()
+                                   .put("type", "pkg_is").put("value", "it.mediaset.infinitytv"));
                     } else if ("P1_INTERSTEP_LAUNCH_CLICK".equals(sc)) {
                         payload.put("reply", "Apro YouTube e poi Cerca")
                                .put("intent_key", "p1_interstep_fail")
@@ -2510,6 +2519,54 @@ public class UnitTests {
                     clickTextInvoked37.get() && r4c.optInt("snapshot_count", 0) >= 3 &&
                     r4c.optLong("wait_elapsed_ms", 9999L) < 500L;
 
+            // A2: A model that only opens Mediaset cannot claim that Italia 2 is playing.
+            // This must stay COMMAND_SENT even when the model's own pkg_is condition matches.
+            ctrlScenario[0] = "MEDIA_INTERMEDIATE_ONLY";
+            int memBeforeMedia = mem37.getSavedProceduresCount();
+            snapQueue.clear();
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8",
+                    Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false));
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.mediaset.infinitytv",
+                    Collections.singletonList("Italia 2"), Collections.emptyList(), null, false, true, false));
+            JSONObject rMediaPartial = ctrl37.processQuery("Metti Italia 2 in diretta dall'app Mediaset Infinity", false);
+            boolean scMediaPartialOk = !rMediaPartial.optBoolean("success")
+                    && "COMMAND_SENT".equals(rMediaPartial.optString("execution_outcome"))
+                    && !rMediaPartial.optBoolean("learned_new_procedure")
+                    && "playback".equals(rMediaPartial.optString("goal_kind"))
+                    && mem37.getSavedProceduresCount() == memBeforeMedia;
+
+            // Goal-specific independent evidence contract: UI labels alone are insufficient.
+            ScreenPerceptionEngine.PerceptionSnapshot settingsMenu = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.android.tv.settings", Collections.singletonList("Audio"),
+                    Collections.emptyList(), null, false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot settingsDetail = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.android.tv.settings", Arrays.asList("Audio", "Uscita digitale"),
+                    Collections.emptyList(), null, false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot mediaPlaying = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Italia 2"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot mediaWrongTitle = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Canale 5"),
+                    Collections.emptyList(), null, false, true, true);
+            boolean goalContractOk = !GoalEvidenceVerifier.verify("apri impostazioni audio", settingsMenu).satisfied
+                    && GoalEvidenceVerifier.verify("apri impostazioni audio", settingsDetail).satisfied
+                    && !GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaWrongTitle).satisfied
+                    && GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaPlaying).satisfied
+                    && !GoalEvidenceVerifier.verify("apri YouTube e cerca video di gatti",
+                            "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}",
+                            new ScreenPerceptionEngine.PerceptionSnapshot(
+                                "com.google.android.youtube.tv", Collections.singletonList("Cerca"),
+                                Collections.emptyList(), "Cerca", false, false, false)).satisfied
+                    && !GoalEvidenceVerifier.verify("apri YouTube e cerca video di gatti",
+                            "{\"type\":\"contains_text\",\"value\":\"Cerca\"}",
+                            new ScreenPerceptionEngine.PerceptionSnapshot(
+                                "com.google.android.youtube.tv", Collections.singletonList("Cerca"),
+                                Collections.emptyList(), "Cerca", false, false, false)).satisfied
+                    && !GoalEvidenceVerifier.verify("apri YouTube", settingsDetail).satisfied
+                    && GoalEvidenceVerifier.verify("apri YouTube", new ScreenPerceptionEngine.PerceptionSnapshot(
+                        "com.google.android.youtube.tv", Collections.singletonList("Home"),
+                        Collections.emptyList(), null, false, false, false)).satisfied;
+
             // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
             ctrlScenario[0] = "CANCEL_MULTI";
             final List<String> actionOrder = Collections.synchronizedList(new ArrayList<>());
@@ -2724,12 +2781,13 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
                 System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
+                    " mediaPartial=" + scMediaPartialOk + " goalContract=" + goalContractOk +
                     " priv=" + privacyZeroHttpOk + " red=" + redactionOk);
             }
         } catch (Throwable t37) {

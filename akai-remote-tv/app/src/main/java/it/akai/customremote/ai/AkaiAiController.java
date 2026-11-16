@@ -276,14 +276,15 @@ public class AkaiAiController {
         }
     }
 
-    private WaitObservation waitForConditionOrUiChange(String successCondition, long maxWaitMs, long pollIntervalMs, TaskToken token) {
+    private WaitObservation waitForConditionOrUiChange(String goalQuery, String successCondition, long maxWaitMs, long pollIntervalMs, TaskToken token) {
         long waited = 0L;
         int snaps = 0;
         boolean hasCondition = successCondition != null && !successCondition.trim().isEmpty();
 
         ScreenPerceptionEngine.PerceptionSnapshot snap = bridge.capture(context);
         snaps++;
-        boolean verified = hasCondition && ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition);
+        boolean verified = hasCondition && ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition)
+                && GoalEvidenceVerifier.verify(goalQuery, successCondition, snap).satisfied;
 
         while (hasCondition && !verified && waited < maxWaitMs && !isTokenCancelled(token)) {
             long step = pollIntervalMs > 0 ? Math.min(pollIntervalMs, maxWaitMs - waited) : Math.min(50L, maxWaitMs - waited);
@@ -294,7 +295,8 @@ public class AkaiAiController {
             waited += step;
             snap = bridge.capture(context);
             snaps++;
-            verified = ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition);
+            verified = ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition)
+                    && GoalEvidenceVerifier.verify(goalQuery, successCondition, snap).satisfied;
         }
         return new WaitObservation(snap, verified, waited, snaps);
     }
@@ -567,12 +569,19 @@ public class AkaiAiController {
                 snapshots, waitElapsed, executed, false, lastSnap);
     }
 
-    private String buildReflectorContext(ScreenPerceptionEngine.PerceptionSnapshot postSnap,
+    private String buildReflectorContext(String userGoal,
+                                        String candidateCondition,
+                                        ScreenPerceptionEngine.PerceptionSnapshot postSnap,
                                         JSONArray previousActions,
                                         TvController.CommandResult previousExec) {
         try {
             JSONObject wrapper = new JSONObject();
             wrapper.put("replan_attempt", 1);
+            GoalEvidenceVerifier.Verdict goalEvidence = GoalEvidenceVerifier.verify(userGoal, candidateCondition, postSnap);
+            wrapper.put("final_goal_kind", goalEvidence.goalKind);
+            wrapper.put("final_goal_evidence_satisfied", goalEvidence.satisfied);
+            wrapper.put("final_goal_evidence_gap", goalEvidence.reason);
+            wrapper.put("replan_instruction", "Il goal finale prevale sulla condizione intermedia: non limitarti ad aprire l'app.");
             wrapper.put("previous_execution_success", previousExec != null && previousExec.success);
             wrapper.put("previous_error", previousExec != null && previousExec.message != null ? previousExec.message : "");
             wrapper.put("failed_actions", previousActions != null ? previousActions : new JSONArray());
@@ -725,10 +734,12 @@ public class AkaiAiController {
 
             boolean hasCondition = parsed.successCondition != null && !parsed.successCondition.trim().isEmpty();
             boolean verified = false;
+            ScreenPerceptionEngine.PerceptionSnapshot finalSnap = preSnap;
             if (cmdRes.success) {
-                WaitObservation obs = waitForConditionOrUiChange(hasCondition ? parsed.successCondition : null, 1200L, sDefaultPollIntervalMs, myToken);
+                WaitObservation obs = waitForConditionOrUiChange(query, hasCondition ? parsed.successCondition : null, 1200L, sDefaultPollIntervalMs, myToken);
                 snapshotCount += obs.snapshotCount;
                 waitElapsedMs += obs.elapsedMs;
+                finalSnap = obs.snapshot;
                 // A successful hardware dispatch is NOT proof that the requested
                 // state changed. Without observable evidence the truthful outcome
                 // must remain COMMAND_SENT, never STATE_VERIFIED.
@@ -775,6 +786,9 @@ public class AkaiAiController {
                 result.put("cost_eur", 0.0);
                 result.put("verified", verified);
                 result.put("execution_outcome", executionOutcome);
+                GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(query, parsed.successCondition, finalSnap);
+                result.put("goal_kind", evidence.goalKind);
+                result.put("goal_evidence_reason", evidence.reason);
                 result.put("replan_count", 0);
                 result.put("cloud_calls", 0);
                 result.put("snapshot_count", snapshotCount);
@@ -1010,7 +1024,7 @@ public class AkaiAiController {
         boolean verified = false;
         if (!stepExec.cancelled && !isTokenCancelled(myToken)) {
             if (execRes.success) {
-                WaitObservation firstObs = waitForConditionOrUiChange(candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                WaitObservation firstObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
                 postSnap = firstObs.snapshot;
                 verified = firstObs.verified;
                 snapshotCount += firstObs.snapshotCount;
@@ -1025,7 +1039,7 @@ public class AkaiAiController {
 
         // Reflector & singolo replanning non ripetitivo se fallito o non verificato
         if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
-            String reflectorContext = buildReflectorContext(postSnap, candidateActions, execRes);
+            String reflectorContext = buildReflectorContext(query, candidateCondition, postSnap, candidateActions, execRes);
             JSONObject prefs = memoryEngine.getAllPreferences();
             try {
                 prefs.put("agent_relevant_facts",
@@ -1066,7 +1080,7 @@ public class AkaiAiController {
                         postSnap = replanStepExec.lastSnapshot;
                         verified = false;
                     } else if (execRes.success) {
-                        WaitObservation retryObs = waitForConditionOrUiChange(candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                        WaitObservation retryObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
                         postSnap = retryObs.snapshot;
                         verified = retryObs.verified;
                         snapshotCount += retryObs.snapshotCount;
@@ -1161,6 +1175,9 @@ public class AkaiAiController {
             }
             result.put("verified", verified);
             result.put("execution_outcome", executionOutcome);
+            GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(query, candidateCondition, postSnap);
+            result.put("goal_kind", evidence.goalKind);
+            result.put("goal_evidence_reason", evidence.reason);
             result.put("replan_count", replanCount);
             result.put("replan_rejected_duplicate", replanRejectedDuplicate);
             result.put("cloud_calls", cloudCalls);
