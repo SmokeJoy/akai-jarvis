@@ -2048,6 +2048,18 @@ public class UnitTests {
                                     .put("type", "function")
                                     .put("function", new JSONObject().put("name", "plan_tv").put("arguments", argsJson)))))))
                             .toString();
+                    } else if ("INSTALLED_MEDIASET".equals(mode) || "INSTALLED_THIRD_PARTY".equals(mode) || "INSTALLED_LEANBACK_ONLY".equals(mode) || "WRONG_MEDIASET_PACKAGE".equals(mode)) {
+                        String pkg = "INSTALLED_MEDIASET".equals(mode) ? "it.mediaset.infinitytv"
+                                : ("INSTALLED_THIRD_PARTY".equals(mode) ? "org.example.thirdparty" : ("INSTALLED_LEANBACK_ONLY".equals(mode) ? "org.example.leanbackonly" : "it.mediaset.infinity"));
+                        String contentJson = new JSONObject()
+                            .put("reply", "Apro applicazione")
+                            .put("actions", new JSONArray().put(new JSONObject().put("type", "launch_app").put("pkg", pkg)))
+                            .put("success_condition", new JSONObject().put("type", "pkg_is").put("value", pkg))
+                            .toString();
+                        respBody = new JSONObject()
+                            .put("usage", new JSONObject().put("prompt_tokens", 90).put("completion_tokens", 20).put("total_tokens", 110))
+                            .put("choices", new JSONArray().put(new JSONObject().put("message", new JSONObject().put("content", contentJson))))
+                            .toString();
                     } else {
                         String contentJson = new JSONObject()
                             .put("reply", "Pianificazione eseguita con " + (reqStr.contains("deepseek-chat") ? "deepseek-chat" : "model"))
@@ -2105,6 +2117,22 @@ public class UnitTests {
             AiProviderAdapter.AiResponse kimiResp = adapter.planActionSequence("apri youtube", "{}", null, null);
             boolean kimiToolOk = kimiResp.success && kimiResp.actions.length() == 1 && "call_kimi_01".equals(kimiResp.toolCallId);
 
+            // Dynamic launch allowlist regression: real installable TV package, arbitrary third-party app,
+            // and model-hallucinated wrong package must be handled distinctly.
+            mockBehavior[0] = "INSTALLED_MEDIASET";
+            AiProviderAdapter.AiResponse mediaInstalled = adapter.planActionSequence("apri mediaset", "{}", null, null);
+            boolean installedMediaOk = mediaInstalled.success && mediaInstalled.actions.length() == 1;
+            mockBehavior[0] = "INSTALLED_THIRD_PARTY";
+            AiProviderAdapter.AiResponse thirdPartyInstalled = adapter.planActionSequence("apri nuova app", "{}", null, null);
+            boolean anyLaunchableOk = thirdPartyInstalled.success && thirdPartyInstalled.actions.length() == 1;
+            mockBehavior[0] = "INSTALLED_LEANBACK_ONLY";
+            AiProviderAdapter.AiResponse leanbackOnlyInstalled = adapter.planActionSequence("apri app tv", "{}", null, null);
+            boolean leanbackOnlyOk = leanbackOnlyInstalled.success && leanbackOnlyInstalled.actions.length() == 1;
+            mockBehavior[0] = "WRONG_MEDIASET_PACKAGE";
+            AiProviderAdapter.AiResponse wrongMediaPkg = adapter.planActionSequence("apri mediaset", "{}", null, null);
+            boolean wrongPkgRejected = !wrongMediaPkg.success && wrongMediaPkg.error != null &&
+                    wrongMediaPkg.error.contains("App non installata");
+
             // 3. Errori HTTP 401/402/429, bad JSON, oversized > 64KB, timeout, missing key
             mockBehavior[0] = "HTTP_401";
             AiProviderAdapter.AiResponse err401 = adapter.planActionSequence("x", "{}", null, null);
@@ -2155,14 +2183,16 @@ public class UnitTests {
 
             test36Passed = defaultEndpointsOk && cnRegionOk && localZeroHttpOk && dsOk && kimiToolOk &&
                            ok401 && ok402 && ok429 && okTimeout && okBadJson && okOversized && okMissingKey &&
-                           rejectUnknown && rejectWaitRange && rejectDisallowedPkg && rejectDestructive && budgetFlagOk;
+                           rejectUnknown && rejectWaitRange && rejectDisallowedPkg && rejectDestructive && budgetFlagOk &&
+                           installedMediaOk && anyLaunchableOk && leanbackOnlyOk && wrongPkgRejected;
             if (!test36Passed) {
                 System.err.println("[DEBUG Test 36] def=" + defaultEndpointsOk + " cn=" + cnRegionOk + " loc=" + localZeroHttpOk +
                     " ds=" + dsOk + " (dsSuccess=" + dsResp.success + ", dsReply=" + dsResp.reply + ", dsErr=" + dsResp.error + ") kimi=" + kimiToolOk +
                     " 401=" + ok401 + " 402=" + ok402 + " 429=" + ok429 +
                     " to=" + okTimeout + " bad=" + okBadJson + " (badSuccess=" + errBadJson.success + ", badErr=" + errBadJson.error + ") ov=" + okOversized + " mk=" + okMissingKey +
                     " un=" + rejectUnknown + " wr=" + rejectWaitRange + " dp=" + rejectDisallowedPkg +
-                    " dk=" + rejectDestructive + " bg=" + budgetFlagOk);
+                    " dk=" + rejectDestructive + " bg=" + budgetFlagOk +
+                    " installedMedia=" + installedMediaOk + " anyLaunchable=" + anyLaunchableOk + " leanbackOnly=" + leanbackOnlyOk + " wrongPkgBlocked=" + wrongPkgRejected);
             }
         } catch (Throwable t36) {
             System.err.println("[FAIL] Test 36 eccezione: " + t36.getMessage());
@@ -2343,9 +2373,10 @@ public class UnitTests {
             AkaiAiController ctrl37 = AkaiAiController.createForTest(ctx37, new TvController(), mem37, adapter37, bridge);
             ctrlHolder[0] = ctrl37;
 
-            // Scenario 1a: fast-path "apri YouTube" (0 tokens, 0 HTTP)
+            // Scenario 1a: fast-path app launch requires OBSERVABLE foreground transition (0 tokens, 0 HTTP).
             snapQueue.clear();
             snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.emptyList(), Collections.emptyList(), null, false, false, false));
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("com.google.android.youtube.tv", Collections.singletonList("YouTube"), Collections.emptyList(), null, false, false, false));
             JSONObject r1a = ctrl37.processQuery("apri YouTube", false);
             boolean sc1aOk = r1a.optBoolean("success") && r1a.optInt("tokens", -1) == 0 &&
                     "STATE_VERIFIED".equals(r1a.optString("execution_outcome")) && ctrlHttpCalls.get() == 0;
@@ -2940,9 +2971,13 @@ public class UnitTests {
             int cloudCallsBeforeP2 = e2eCloudCalls.get();
             MockHttpResponse rKnownAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"alza il volume\"}", "192.168.1.55", true);
 
-            boolean part2Ok = (rKnownAi.statusCode == 200) &&
+            // Volume key dispatch has no observable volume readback in this mock:
+            // the router must report COMMAND_SENT / HTTP 400, never claim STATE_VERIFIED.
+            boolean part2Ok = (rKnownAi.statusCode == 400) &&
                               rKnownAi.json != null &&
-                              rKnownAi.json.optBoolean("success") &&
+                              !rKnownAi.json.optBoolean("success") &&
+                              "COMMAND_SENT".equals(rKnownAi.json.optString("execution_outcome")) &&
+                              "COMPLETED_UNVERIFIED".equals(rKnownAi.json.optString("status")) &&
                               rKnownAi.json.optInt("tokens", -1) == 0 &&
                               rKnownAi.json.optInt("cloud_calls", -1) == 0 &&
                               rKnownAi.json.optString("source", "").contains("local") &&

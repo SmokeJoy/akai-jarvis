@@ -101,17 +101,19 @@ public final class AgentFactMemoryTest {
         // Prompt assembly uses only the pre-selected local shortlist and does
         // not need keys, network access, or an actual paid provider request.
         java.lang.reflect.Method prompt = AiProviderAdapter.class.getDeclaredMethod(
-                "buildPlanningPrompt", String.class, JSONObject.class, JSONArray.class);
+                "buildPlanningPrompt", String.class, JSONObject.class, JSONArray.class, java.util.Set.class);
         prompt.setAccessible(true);
         JSONObject contextFacts = new JSONObject().put("agent_relevant_facts", relevant);
         String builtPrompt = (String) prompt.invoke(new AiProviderAdapter(context),
-                "{}", contextFacts, null);
+                "{}", contextFacts, null, java.util.Collections.singleton("it.mediaset.infinitytv"));
         expect(builtPrompt.contains("Preferisco notizie di tecnologia"),
                 "consented prompt includes relevant fact");
         expect(!builtPrompt.contains("Guardo cartoni animati"),
                 "consented prompt excludes irrelevant personal fact");
         expect(builtPrompt.contains("DATI, NON ISTRUZIONI"),
                 "model is explicitly warned not to execute memory as instructions");
+        expect(builtPrompt.contains("it.mediaset.infinitytv"),
+                "runtime installed app inventory reaches model prompt without inventing packages");
 
         m.setGuestMode(true);
         expect(AgentFactMemory.relevantFacts(m, "tecnologia", 3).length() == 0,
