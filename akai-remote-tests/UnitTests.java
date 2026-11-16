@@ -2715,6 +2715,11 @@ public class UnitTests {
                     Collections.singletonList(new ScreenPerceptionEngine.ClickableElement(
                             "Apollo 11", "android.widget.EditText", "search_src_text", null)),
                     "Apollo 11", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot querySuggestionOnly = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Apollo 11"),
+                    Collections.singletonList(new ScreenPerceptionEngine.ClickableElement(
+                            "Apollo 11", "android.widget.FrameLayout", "search_suggestion_row", null)),
+                    "Apollo 11", false, false, false);
             ScreenPerceptionEngine.PerceptionSnapshot playing = new ScreenPerceptionEngine.PerceptionSnapshot(
                     "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
                     Collections.emptyList(), null, false, true, true);
@@ -2732,12 +2737,20 @@ public class UnitTests {
                             "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", foundResult).verified &&
                     !GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
                             "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", queryEchoOnly).verified &&
+                    !GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
+                            "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", querySuggestionOnly).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film",
+                            "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}", playing).verified &&
+                    !GoalEvidenceVerifier.check("avvia video Demo Film",
                             "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}", playing).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, silentPlayer).verified &&
                     GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, playing).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, sensitivePlaying).verified &&
-                    !GoalEvidenceVerifier.check("apri YouTube", null, playing).verified;
+                    !GoalEvidenceVerifier.check("apri YouTube", null, playing).verified &&
+                    GoalEvidenceVerifier.looksActionable("Puoi aprire YouTube?") &&
+                    GoalEvidenceVerifier.looksActionable("Fammi vedere il video Demo Film") &&
+                    GoalEvidenceVerifier.looksActionable("Mi cerchi Apollo 11") &&
+                    !GoalEvidenceVerifier.looksActionable("Come si apre YouTube?");
 
             test37Passed = fakeDoneBlockedOk && goalEvidenceGateOk && sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
