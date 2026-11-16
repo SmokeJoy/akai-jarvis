@@ -132,16 +132,31 @@ public final class GoalEvidenceVerifier {
                 || goal.startsWith("cosa ") || goal.startsWith("che cosa")
                 || goal.startsWith("qual ") || goal.startsWith("quali ")
                 || goal.startsWith("spiegami ") || goal.startsWith("quando ")) return false;
-        for (String prefix : new String[]{"jarvis ", "per favore ", "puoi ", "potresti ",
-                "vorrei che tu ", "mi puoi "}) {
-            if (goal.startsWith(prefix)) {
-                goal = goal.substring(prefix.length()).trim();
+        // Conversational Italian commonly uses infinitives after "puoi",
+        // and informal requests such as "mi apri" or "fammi vedere".
+        for (int i = 0; i < 3; i++) {
+            boolean stripped = false;
+            for (String prefix : new String[]{"jarvis ", "per favore ", "per cortesia ",
+                    "puoi ", "potresti ", "vorrei che tu ", "mi puoi ", "mi potresti "}) {
+                if (goal.startsWith(prefix)) {
+                    goal = goal.substring(prefix.length()).trim();
+                    stripped = true;
+                    break;
+                }
             }
+            if (!stripped) break;
         }
-        for (String verb : new String[]{"apri", "avvia", "riproduci", "cerca", "trova",
-                "imposta", "cambia", "sintonizza", "naviga", "seleziona",
-                "alza", "abbassa", "vai", "torna", "metti", "accendi",
-                "spegni", "pausa", "ferma", "premi"}) {
+        if (goal.startsWith("fammi vedere ") || goal.startsWith("mostrami ")
+                || goal.startsWith("mi apri ") || goal.startsWith("mi avvii ")
+                || goal.startsWith("mi metti ") || goal.startsWith("mi cerchi ")) return true;
+        for (String verb : new String[]{"apri", "aprire", "avvia", "avviare",
+                "riproduci", "riprodurre", "cerca", "cercare", "trova", "trovare",
+                "imposta", "impostare", "cambia", "cambiare", "sintonizza", "sintonizzare",
+                "naviga", "navigare", "seleziona", "selezionare",
+                "alza", "alzare", "abbassa", "abbassare",
+                "vai", "andare", "torna", "tornare", "metti", "mettere",
+                "accendi", "accendere", "spegni", "spegnere",
+                "pausa", "ferma", "fermare", "premi", "premere"}) {
             if (goal.startsWith(verb + " ") || goal.equals(verb)) return true;
         }
         return false;
@@ -153,7 +168,10 @@ public final class GoalEvidenceVerifier {
                 || goal.contains("fai partire") || goal.contains("guarda ")
                 || goal.contains("metti un video") || goal.contains("metti il video")
                 || goal.contains("ascolta ") || goal.contains("avvia la riproduzione")
-                || goal.contains("avviare un video");
+                || goal.contains("avviare un video") || goal.contains("avvia video")
+                || goal.contains("avviare video") || goal.contains("fai partire il film")
+                || goal.contains("fammi vedere il video") || goal.contains("fammi vedere il film")
+                || goal.contains("metti la canzone") || goal.contains("metti la musica");
     }
 
     private static boolean requiresSearchResult(String goal) {
@@ -189,6 +207,12 @@ public final class GoalEvidenceVerifier {
             if (item == null || item.text == null) continue;
             String className = item.className == null ? "" : item.className.toLowerCase(Locale.ITALIAN);
             if (className.contains("edittext") || className.contains("searchview")) continue;
+            String resId = item.resId == null ? "" : item.resId.toLowerCase(Locale.ITALIAN);
+            // Suggestions and query echoes can be clickable, but are not
+            // confirmed search results.
+            if (resId.contains("suggest") || resId.contains("search_field")
+                    || resId.contains("search_input") || resId.contains("search_query")
+                    || resId.contains("search_src_text")) continue;
             if (item.text.toLowerCase(Locale.ITALIAN).contains(needle)) return true;
         }
         return false;
