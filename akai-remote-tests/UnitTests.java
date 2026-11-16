@@ -2202,7 +2202,11 @@ public class UnitTests {
                     String reqBody = new String(reqBytes, StandardCharsets.UTF_8);
                     JSONObject payload = new JSONObject();
                     String sc = ctrlScenario[0];
-                    if ("DISCOVERY_YT".equals(sc)) {
+                    if ("DIALOG_ONLY".equals(sc)) {
+                        payload.put("reply", "Fatto, completato tutto senza azioni.")
+                               .put("intent_key", "fake_dialog_completion")
+                               .put("actions", new JSONArray());
+                    } else if ("DISCOVERY_YT".equals(sc)) {
                         payload.put("reply", "Apro app YouTube TV")
                                .put("intent_key", "discover_youtube_music")
                                .put("learn_procedure", true)
@@ -2363,6 +2367,23 @@ public class UnitTests {
                     && "COMPLETED_UNVERIFIED".equals(r1aNoEvidence.optString("status"))
                     && r1aNoEvidence.optString("reply", "").contains("non posso confermare")
                     && ctrlHttpCalls.get() == 0;
+
+            // Scenario A2: a model saying "Fatto" without TV actions must
+            // NEVER count as having completed an actionable user goal.
+            ctrlScenario[0] = "DIALOG_ONLY";
+            snapQueue.clear();
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8",
+                    Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false));
+            JSONObject rFakeDone = ctrl37.processQuery("apri impostazioni avanzate e cambia audio", false);
+            JSONObject rRealDialog = ctrl37.processQuery("che cos'e una Smart TV", false);
+            boolean fakeDoneBlockedOk = !rFakeDone.optBoolean("success")
+                    && !rFakeDone.optBoolean("verified")
+                    && "NO_ACTION_PLAN".equals(rFakeDone.optString("status"))
+                    && "FAILED".equals(rFakeDone.optString("execution_outcome"))
+                    && rFakeDone.optString("reply", "").contains("Non ho eseguito")
+                    && rRealDialog.optBoolean("success")
+                    && "ANSWERED_DIALOG".equals(rRealDialog.optString("status"))
+                    && !rRealDialog.optBoolean("verified");
 
             // Scenario 1b: Discovery YouTube con bounded adaptive wait < 300ms e salvataggio SQLite
             ctrlScenario[0] = "DISCOVERY_YT";
@@ -2707,9 +2728,9 @@ public class UnitTests {
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, sensitivePlaying).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube", null, playing).verified;
 
-            test37Passed = goalEvidenceGateOk && sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = fakeDoneBlockedOk && goalEvidenceGateOk && sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
-                System.err.println("[DEBUG Test 37] goalEvidence=" + goalEvidenceGateOk + " sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
+                System.err.println("[DEBUG Test 37] fakeDoneBlocked=" + fakeDoneBlockedOk + " goalEvidence=" + goalEvidenceGateOk + " sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
