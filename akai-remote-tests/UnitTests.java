@@ -2241,7 +2241,7 @@ public class UnitTests {
                         }
                         payload.put("reply", "Controllo obiettivo finale alla prova " + attempt)
                                .put("intent_key", "a2_two_replans")
-                               .put("learn_procedure", true)
+                               .put("learn_procedure", false)
                                .put("actions", actions)
                                .put("success_condition", new JSONObject()
                                        .put("type", "pkg_is").put("value", "com.android.tv.settings"));
