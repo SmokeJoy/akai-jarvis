@@ -91,3 +91,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\akai-remote-tests\\0
 4. Garantire che nell'APK non ci siano `server_keystore.p12`, `ca_key.der`, password TLS, file personali, né dipendenze Kimi/DeepSeek lato TV oltre al client Java consentito. GitHub CI firma con chiave temporanea e non produce una release distribuibile.
 5. Riesaminare tempi di rollback e stato HTTPS/port 8443 con chiave CA originale prima di pianificare un update conservativo in-place. La **nuova installazione richiede consenso distinto** e verifica su TV reale.
 
+
+## Nuovo builder Windows A1 isolato (16/11/2026)
+
+L'utente ha confermato il checkout locale **pulito** del ramo \`feat/jarvis-a1-integration-candidate\` al commit \`3d48646\`. Lo storico \`scripts/08_compile_akai_remote_apk.ps1\` **NON VA USATO** per A1: cancella \`app/build\`, tocca \`app/src/main/assets\` e fissa versione APK a 1.
+
+Sviluppato il nuovo \`scripts/09_build_jarvis_a1_candidate.ps1\`: versione APK candidata \`versionCode=2\`, \`versionName=1.1.0-a1\` di default; verifica branch A1 e working tree pulita; genera tutti gli artefatti in una cartella univoca **fuori repository**, \`%LOCALAPPDATA%\AkaiJarvisBuilds\A1-v2-<timestamp>\`; copia asset pubblici in staging senza modificare sorgenti; firma solo sul **PC del proprietario** con \`tools/debug.keystore\`, e controlla che la firma candidata sia identica alla firma della TV \`21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed\`; blocca l'uscita per APK con assets TLS vietati. **Non esegue ADB, né installazione, né connessioni alla TV.** 
+
+La CI \`.github/workflows/ci.yml\` contiene ora un gate \`pwsh\` di parsing sintattico e invariante statica; la compilazione Android in CI usa una firma **effimera non distribuibile** e non valida il funzionamento del nuovo builder su Windows. Il builder non è ancora stato eseguito sul PC del proprietario; non dichiarare APK pronto finché non si vede output reale validato.
+
+Comandi proprietario, **soltanto dopo CI verde sul nuovo HEAD**:
+
+\`\`\`powershell
+git pull --ff-only origin feat/jarvis-a1-integration-candidate
+git status --short
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\09_build_jarvis_a1_candidate.ps1"
+\`\`\`
+
+La build non installa l'APK. Se script fallisce, fermarsi e raccogliere output, **non eseguire** vecchio \`08_compile\` come fallback, non usare \`adb install\` senza piano distinto e consenso esplicito. Il backup di APK + SQLite consolidato + TLS DPAPI di sessione \`backup_20261116_110423\` è stato già verificato.
