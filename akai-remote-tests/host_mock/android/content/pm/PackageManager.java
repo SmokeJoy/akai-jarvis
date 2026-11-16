@@ -12,7 +12,8 @@ public class PackageManager {
             "com.google.android.youtube.tv",
             "com.android.tv.settings",
             "it.mediaset.infinitytv",
-            "org.example.thirdparty"
+            "org.example.thirdparty",
+            "org.example.leanbackonly"
     ));
 
     public List<ApplicationInfo> getInstalledApplications(int flags) {
@@ -24,6 +25,10 @@ public class PackageManager {
     }
 
     public Object getLaunchIntentForPackage(String pkg) {
+        return installed.contains(pkg) && !"org.example.leanbackonly".equals(pkg) ? new Object() : null;
+    }
+
+    public Object getLeanbackLaunchIntentForPackage(String pkg) {
         return installed.contains(pkg) ? new Object() : null;
     }
 }
