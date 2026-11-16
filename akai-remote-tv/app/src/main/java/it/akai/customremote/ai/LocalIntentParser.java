@@ -56,7 +56,7 @@ public class LocalIntentParser {
 
     private static String appActiveCondition(String pkg) {
         // Verified only if Accessibility actually observes this app in foreground.
-        return "{\\"type\\":\\"pkg_is\\",\\"value\\":\\"" + pkg + "\\"}";
+        return "{\"type\":\"pkg_is\",\"value\":\"" + pkg + "\"}";
     }
 
     public static ParsedIntent parse(Context context, String query) {
