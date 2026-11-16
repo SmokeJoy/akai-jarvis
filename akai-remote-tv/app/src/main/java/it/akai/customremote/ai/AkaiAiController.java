@@ -284,7 +284,7 @@ public class AkaiAiController {
         ScreenPerceptionEngine.PerceptionSnapshot snap = bridge.capture(context);
         snaps++;
         boolean verified = hasCondition && ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition)
-                && GoalEvidenceVerifier.verify(goalQuery, snap).satisfied;
+                && GoalEvidenceVerifier.verify(goalQuery, successCondition, snap).satisfied;
 
         while (hasCondition && !verified && waited < maxWaitMs && !isTokenCancelled(token)) {
             long step = pollIntervalMs > 0 ? Math.min(pollIntervalMs, maxWaitMs - waited) : Math.min(50L, maxWaitMs - waited);
@@ -296,7 +296,7 @@ public class AkaiAiController {
             snap = bridge.capture(context);
             snaps++;
             verified = ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition)
-                    && GoalEvidenceVerifier.verify(goalQuery, snap).satisfied;
+                    && GoalEvidenceVerifier.verify(goalQuery, successCondition, snap).satisfied;
         }
         return new WaitObservation(snap, verified, waited, snaps);
     }
@@ -570,13 +570,14 @@ public class AkaiAiController {
     }
 
     private String buildReflectorContext(String userGoal,
+                                        String candidateCondition,
                                         ScreenPerceptionEngine.PerceptionSnapshot postSnap,
                                         JSONArray previousActions,
                                         TvController.CommandResult previousExec) {
         try {
             JSONObject wrapper = new JSONObject();
             wrapper.put("replan_attempt", 1);
-            GoalEvidenceVerifier.Verdict goalEvidence = GoalEvidenceVerifier.verify(userGoal, postSnap);
+            GoalEvidenceVerifier.Verdict goalEvidence = GoalEvidenceVerifier.verify(userGoal, candidateCondition, postSnap);
             wrapper.put("final_goal_kind", goalEvidence.goalKind);
             wrapper.put("final_goal_evidence_satisfied", goalEvidence.satisfied);
             wrapper.put("final_goal_evidence_gap", goalEvidence.reason);
@@ -785,7 +786,7 @@ public class AkaiAiController {
                 result.put("cost_eur", 0.0);
                 result.put("verified", verified);
                 result.put("execution_outcome", executionOutcome);
-                GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(query, finalSnap);
+                GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(query, parsed.successCondition, finalSnap);
                 result.put("goal_kind", evidence.goalKind);
                 result.put("goal_evidence_reason", evidence.reason);
                 result.put("replan_count", 0);
@@ -1038,7 +1039,7 @@ public class AkaiAiController {
 
         // Reflector & singolo replanning non ripetitivo se fallito o non verificato
         if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
-            String reflectorContext = buildReflectorContext(query, postSnap, candidateActions, execRes);
+            String reflectorContext = buildReflectorContext(query, candidateCondition, postSnap, candidateActions, execRes);
             JSONObject prefs = memoryEngine.getAllPreferences();
             try {
                 prefs.put("agent_relevant_facts",
@@ -1174,7 +1175,7 @@ public class AkaiAiController {
             }
             result.put("verified", verified);
             result.put("execution_outcome", executionOutcome);
-            GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(query, postSnap);
+            GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(query, candidateCondition, postSnap);
             result.put("goal_kind", evidence.goalKind);
             result.put("goal_evidence_reason", evidence.reason);
             result.put("replan_count", replanCount);
