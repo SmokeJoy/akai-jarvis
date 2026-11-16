@@ -54,6 +54,7 @@ public final class LocalVisualCaptureActivity extends Activity {
     private HandlerThread captureThread;
     private Handler captureHandler;
     private Runnable timeout;
+    private final java.util.concurrent.atomic.AtomicBoolean frameQueued = new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile boolean completed = true;
     private volatile boolean destroyed = false;
     private long startedAt;
@@ -122,6 +123,7 @@ public final class LocalVisualCaptureActivity extends Activity {
     private void requestProjection() {
         if (!completed || destroyed) return;
         clearPreview();
+        frameQueued.set(false);
         projectionManager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         if (projectionManager == null) {
             status.setText("MediaProjection non disponibile su questa TV.");
@@ -229,7 +231,6 @@ public final class LocalVisualCaptureActivity extends Activity {
             frame = source.acquireLatestImage();
             if (frame == null || completed) return;
             long elapsed = SystemClock.elapsedRealtime() - startedAt;
-            if (elapsed < 300L) return;
             if (!VisionCapturePolicy.withinBudget(frameWidth, frameHeight, elapsed)) return;
             if (!VisionCapturePolicy.mayCapture(true, ScreenPerceptionEngine.capture(this))) {
                 ui.post(new Runnable() {
@@ -244,12 +245,14 @@ public final class LocalVisualCaptureActivity extends Activity {
             int stride = plane.getRowStride();
             int pixelStride = plane.getPixelStride();
             if (pixelStride <= 0 || stride < frameWidth * pixelStride) return;
+            if (!frameQueued.compareAndSet(false, true)) return;
             int paddedWidth = frameWidth + (stride - frameWidth * pixelStride) / pixelStride;
             if (paddedWidth < frameWidth || paddedWidth > frameWidth + 256) return;
             full = Bitmap.createBitmap(paddedWidth, frameHeight, Bitmap.Config.ARGB_8888);
             ByteBuffer pixels = plane.getBuffer();
             full.copyPixelsFromBuffer(pixels);
             cropped = Bitmap.createBitmap(full, 0, 0, frameWidth, frameHeight);
+            if (cropped == full) full = null; // Bitmap.createBitmap may return its source.
             final Bitmap result = cropped;
             cropped = null;
             final boolean dark = isMostlyBlack(result);
