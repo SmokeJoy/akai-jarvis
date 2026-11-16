@@ -426,7 +426,9 @@ public class AkaiAiController {
                         obs.snapshotCount, obs.elapsedMs, 1, false, obs.snapshot);
             }
             TvController.CommandResult singleRes = bridge.executeActions(actions);
-            int executedOne = (singleRes != null && singleRes.success) ? 1 : 0;
+            // Count attempted actions even when the driver reports failure;
+            // otherwise retries can undercount the per-task step budget.
+            int executedOne = 1;
             return new StepwiseResult(
                     singleRes != null ? singleRes : new TvController.CommandResult(false, "Errore esecuzione"),
                     0, 0L, executedOne, false, null);
