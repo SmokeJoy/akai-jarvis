@@ -378,7 +378,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                 return parseProcedureCursor(c);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error fetching procedure " + intentKey + ": " + e.getMessage());
+            Log.e(TAG, "Error fetching procedure (key redacted): " + e.getMessage());
         } finally {
             if (c != null) c.close();
         }
@@ -464,10 +464,10 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             cv.put(COL_CREATED_AT, now);
 
             long row = db.insertWithOnConflict(TABLE_PROCEDURES, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
-            Log.i(TAG, "New procedure saved to SQLite: " + intentKey + " (personal=" + isPersonal + ", row=" + row + ")");
+            Log.i(TAG, "New procedure saved to SQLite (key redacted; personal=" + isPersonal + ", row=" + row + ")");
             return row != -1;
         } catch (Exception e) {
-            Log.e(TAG, "Error saving verified procedure " + intentKey + ": " + e.getMessage());
+            Log.e(TAG, "Error saving verified procedure (key redacted): " + e.getMessage());
             return false;
         }
     }
@@ -503,7 +503,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             int rows = db.delete(TABLE_PROCEDURES, COL_INTENT_KEY + "=?", new String[]{intentKey});
             return rows > 0;
         } catch (Exception e) {
-            Log.e(TAG, "Error deleting procedure " + intentKey + ": " + e.getMessage());
+            Log.e(TAG, "Error deleting procedure (key redacted): " + e.getMessage());
             return false;
         }
     }
