@@ -37,6 +37,9 @@ public class AkaiAiController {
 
     private static final String PREFS_NAME = "akai_ai_secure_prefs";
     private static final String PREF_EXECUTION_MODE = "execution_mode";
+    private static final int MAX_CLOUD_REPLANS_PER_TASK = 2;
+    private static final int MAX_TASK_ACTION_STEPS = 24;
+    private static final long MAX_REPLAN_ELAPSED_MS = 45_000L;
 
     // Modalita configurabile: CLOUD_OPTIONAL (default, false) vs LOCAL_ONLY (true)
     private static volatile boolean sStrictLocalOnly = false;
@@ -569,10 +572,15 @@ public class AkaiAiController {
 
     private String buildReflectorContext(ScreenPerceptionEngine.PerceptionSnapshot postSnap,
                                         JSONArray previousActions,
-                                        TvController.CommandResult previousExec) {
+                                        TvController.CommandResult previousExec,
+                                        String finalCondition,
+                                        String goal,
+                                        int attemptNumber) {
         try {
             JSONObject wrapper = new JSONObject();
-            wrapper.put("replan_attempt", 1);
+            wrapper.put("replan_attempt", attemptNumber);
+            wrapper.put("final_goal_verification_reason", GoalEvidenceVerifier.check(goal, finalCondition, postSnap).reason);
+            wrapper.put("requested_final_condition", finalCondition != null ? finalCondition : "");
             wrapper.put("previous_execution_success", previousExec != null && previousExec.success);
             wrapper.put("previous_error", previousExec != null && previousExec.message != null ? previousExec.message : "");
             wrapper.put("failed_actions", previousActions != null ? previousActions : new JSONArray());
@@ -1042,9 +1050,24 @@ public class AkaiAiController {
 
         Log.i(TAG, "Discovery verification attempt 1: " + verified + " (execSuccess=" + execRes.success + ", postPkg=" + (postSnap != null ? postSnap.foregroundPackage : "") + ")");
 
-        // Reflector & singolo replanning non ripetitivo se fallito o non verificato
-        if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
-            String reflectorContext = buildReflectorContext(postSnap, candidateActions, execRes);
+        // A2: bounded self-correction. The goal verifier, not the LLM,
+        // determines whether the FINAL requested state was observed.
+        // Never repeat an identical action sequence, and limit cost/work.
+        java.util.Set<String> attemptedPlans = new java.util.HashSet<>();
+        attemptedPlans.add(candidateActions.toString());
+        for (int attemptNumber = 1; attemptNumber <= MAX_CLOUD_REPLANS_PER_TASK; attemptNumber++) {
+            if (!usedCloudPlanner || stepExec.cancelled || isTokenCancelled(myToken)
+                    || (execRes.success && verified) || aiAdapter.isBudgetExceeded()) {
+                break;
+            }
+            if (System.currentTimeMillis() - startTime >= MAX_REPLAN_ELAPSED_MS
+                    || executedStepsTotal >= MAX_TASK_ACTION_STEPS) {
+                Log.w(TAG, "A2 replan aborted: elapsed time or action-step budget exceeded.");
+                break;
+            }
+
+            String reflectorContext = buildReflectorContext(
+                    postSnap, candidateActions, execRes, candidateCondition, query, attemptNumber);
             JSONObject prefs = memoryEngine.getAllPreferences();
             try {
                 prefs.put("agent_relevant_facts",
@@ -1060,45 +1083,59 @@ public class AkaiAiController {
             costEur += retryRes.costEur;
             if (retryRes.warningMessage != null) planWarning = retryRes.warningMessage;
 
-            if (!isTokenCancelled(myToken) && retryRes.success && retryRes.actions != null && retryRes.actions.length() > 0) {
-                String firstSerialized = candidateActions.toString();
-                String retrySerialized = retryRes.actions.toString();
-                if (firstSerialized.equals(retrySerialized)) {
-                    Log.w(TAG, "Replan rejected: identical action sequence returned by LLM.");
-                    replanRejectedDuplicate = true;
-                } else {
-                    replanCount = 1;
-                    candidateActions = retryRes.actions;
-                    candidateCondition = retryRes.successCondition;
-                    allowProcedureLearning = retryRes.learnProcedure;
-                    if (retryRes.intentKey != null && !retryRes.intentKey.isEmpty()) {
-                        candidateKey = retryRes.intentKey;
-                    }
-                    if (retryRes.reply != null && !retryRes.reply.isEmpty()) {
-                        planReply = retryRes.reply;
-                    }
-                    StepwiseResult replanStepExec = executeActionsStepwise(candidateActions, myToken);
-                    execRes = replanStepExec.commandResult;
-                    snapshotCount += replanStepExec.snapshotCount;
-                    totalWaitElapsedMs += replanStepExec.waitElapsedMs;
-                    executedStepsTotal += replanStepExec.executedSteps;
-                    if (replanStepExec.cancelled || isTokenCancelled(myToken)) {
-                        postSnap = replanStepExec.lastSnapshot;
-                        verified = false;
-                    } else if (execRes.success) {
-                        WaitObservation retryObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
-                        postSnap = retryObs.snapshot;
-                        verified = retryObs.verified;
-                        snapshotCount += retryObs.snapshotCount;
-                        totalWaitElapsedMs += retryObs.elapsedMs;
-                    } else {
-                        postSnap = replanStepExec.lastSnapshot != null ? replanStepExec.lastSnapshot : bridge.capture(context);
-                        if (replanStepExec.lastSnapshot == null) snapshotCount++;
-                        verified = false;
-                    }
-                    Log.i(TAG, "Discovery verification attempt 2 (replan): " + verified + " (execSuccess=" + execRes.success + ")");
-                }
+            if (isTokenCancelled(myToken) || !retryRes.success
+                    || retryRes.actions == null || retryRes.actions.length() == 0) {
+                break;
             }
+
+            String retrySerialized = retryRes.actions.toString();
+            if (!attemptedPlans.add(retrySerialized)) {
+                Log.w(TAG, "A2 replan rejected: already attempted identical action sequence.");
+                replanRejectedDuplicate = true;
+                break;
+            }
+            if (executedStepsTotal + retryRes.actions.length() > MAX_TASK_ACTION_STEPS
+                    || System.currentTimeMillis() - startTime >= MAX_REPLAN_ELAPSED_MS) {
+                Log.w(TAG, "A2 replan rejected: total action/time budget exceeded.");
+                break;
+            }
+
+            replanCount++;
+            candidateActions = retryRes.actions;
+            candidateCondition = retryRes.successCondition;
+            allowProcedureLearning = retryRes.learnProcedure;
+            if (retryRes.intentKey != null && !retryRes.intentKey.isEmpty()) {
+                candidateKey = retryRes.intentKey;
+            }
+            if (retryRes.reply != null && !retryRes.reply.isEmpty()) {
+                planReply = retryRes.reply;
+            }
+
+            StepwiseResult retryStepExec = executeActionsStepwise(candidateActions, myToken);
+            execRes = retryStepExec.commandResult;
+            snapshotCount += retryStepExec.snapshotCount;
+            totalWaitElapsedMs += retryStepExec.waitElapsedMs;
+            executedStepsTotal += retryStepExec.executedSteps;
+            if (retryStepExec.cancelled || isTokenCancelled(myToken)) {
+                postSnap = retryStepExec.lastSnapshot;
+                verified = false;
+                break;
+            }
+            if (execRes.success) {
+                WaitObservation retryObs = waitForConditionOrUiChange(
+                        query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                postSnap = retryObs.snapshot;
+                verified = retryObs.verified;
+                snapshotCount += retryObs.snapshotCount;
+                totalWaitElapsedMs += retryObs.elapsedMs;
+            } else {
+                postSnap = retryStepExec.lastSnapshot != null
+                        ? retryStepExec.lastSnapshot : bridge.capture(context);
+                if (retryStepExec.lastSnapshot == null) snapshotCount++;
+                verified = false;
+            }
+            Log.i(TAG, "A2 goal verification after replan " + attemptNumber
+                    + ": " + verified + " (execSuccess=" + execRes.success + ")");
         }
 
         if (stepExec.cancelled || isTokenCancelled(myToken)) {
