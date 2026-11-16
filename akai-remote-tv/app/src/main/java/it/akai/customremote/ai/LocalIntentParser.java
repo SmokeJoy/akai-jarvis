@@ -474,6 +474,7 @@ public class LocalIntentParser {
         arr.put("launch_raiplay");
         arr.put("launch_mediaset");
         arr.put("launch_browser");
+        arr.put("launch_installed_app_by_label");
         return arr;
     }
 }
