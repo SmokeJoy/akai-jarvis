@@ -120,7 +120,10 @@ if (Test-Path $clang) {
 
     # Il backup deve essere il pacchetto noto della beta, non un altro APK firmato dalla stessa chiave.
     $aapt = Join-Path $buildToolsDir 'aapt.exe'
-    if (-not (Test-Path $aapt)) { throw "aapt.exe mancante: non posso validare il pacchetto del backup." }
+    if (-not (Test-Path $aapt)) {
+        $aapt = $aapt2
+        Write-Host "      aapt.exe assente: uso aapt2 dump badging." -ForegroundColor Yellow
+    }
     $badging = (& $aapt dump badging $baselineApk 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0 -or $badging -notmatch "package:\s+name='it\.akai\.customremote'\s+versionCode='1'") {
         throw "APK originale non e' il pacchetto/versionCode 1 atteso: fallback bloccato."
