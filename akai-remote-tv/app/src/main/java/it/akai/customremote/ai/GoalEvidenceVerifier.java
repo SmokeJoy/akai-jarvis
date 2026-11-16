@@ -116,6 +116,34 @@ public final class GoalEvidenceVerifier {
                 "screen_condition_observed");
     }
 
+    /**
+     * Minimal fail-closed distinction: an instruction that asks JARVIS to
+     * change TV state cannot be satisfied by a cloud answer with zero actions.
+     * This is intentionally conservative and does not classify questions.
+     */
+    public static boolean looksActionable(String userGoal) {
+        if (userGoal == null) return false;
+        String goal = userGoal.trim().toLowerCase(Locale.ITALIAN);
+        if (goal.isEmpty()) return false;
+        if (goal.startsWith("come ") || goal.startsWith("perche") || goal.startsWith("perché")
+                || goal.startsWith("cosa ") || goal.startsWith("che cosa")
+                || goal.startsWith("qual ") || goal.startsWith("quali ")
+                || goal.startsWith("spiegami ") || goal.startsWith("quando ")) return false;
+        for (String prefix : new String[]{"jarvis ", "per favore ", "puoi ", "potresti ",
+                "vorrei che tu ", "mi puoi "}) {
+            if (goal.startsWith(prefix)) {
+                goal = goal.substring(prefix.length()).trim();
+            }
+        }
+        for (String verb : new String[]{"apri", "avvia", "riproduci", "cerca", "trova",
+                "imposta", "cambia", "sintonizza", "naviga", "seleziona",
+                "alza", "abbassa", "vai", "torna", "metti", "accendi",
+                "spegni", "pausa", "ferma", "premi"}) {
+            if (goal.startsWith(verb + " ") || goal.equals(verb)) return true;
+        }
+        return false;
+    }
+
     private static boolean requiresPlayback(String goal) {
         return goal.contains("riproduc") || goal.contains("riparti il video")
                 || goal.contains("avvia un video") || goal.contains("avvia il video")
