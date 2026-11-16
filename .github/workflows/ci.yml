@@ -55,6 +55,9 @@ jobs:
           if ($src -notmatch 'AkaiJarvisBuilds') { throw "Out-of-tree build output missing" }
           if ($src -match 'Remove-Item\s+\$buildDir') { throw "Builder must not delete build directories" }
           if ($src -match '\badb\s+(install|root|push|pull|connect)\b') { throw "Builder must not touch TV" }
+          if ($src -notmatch 'ffe04f6b6861cf1e253bbfbf113cbb8364c22f9b') { throw "Fallback JNI provenance gate missing" }
+          if ($src -notmatch 'ExtractToFile\(\$entry,\s*\$soTarget\)') { throw "Fallback extraction gate missing" }
+          if ($src -notmatch 'verify --print-certs \$baselineApk') { throw "Original APK signer verification missing" }
           Write-Host "A1 Windows candidate script parses and static release guards pass (no Windows hardware build in CI)."
 
       - name: 2. Secrets Leak Detection
