@@ -122,6 +122,32 @@ public class ScreenPerceptionEngine {
                 }
                 ctx.put("player_active", isPlayerActive || isMusicActive);
 
+                // A2: Give the cloud planner actual accessibility labels to target.
+                // No screenshots, coordinates, view hierarchy dumps or raw secrets.
+                JSONArray actionableLabels = new JSONArray();
+                List<String> seenLabels = new ArrayList<>();
+                int clickableLimit = clickableElements != null ? Math.min(clickableElements.size(), 12) : 0;
+                for (int i = 0; i < clickableLimit; i++) {
+                    ClickableElement el = clickableElements.get(i);
+                    if (el == null) continue;
+                    String label = sanitizeAndRedact(el.text, 56);
+                    if (label.isEmpty() || "[FILTERED]".equals(label)
+                            || label.contains("[REDACTED_SECRET]")
+                            || label.contains("[REDACTED_EMAIL]")
+                            || label.contains("[REDACTED_NUM]")
+                            || seenLabels.contains(label)) {
+                        continue;
+                    }
+                    actionableLabels.put(label);
+                    ctx.put("clickable_labels", actionableLabels);
+                    if (ctx.toString().length() > 760) {
+                        actionableLabels.remove(actionableLabels.length() - 1);
+                        break;
+                    }
+                    seenLabels.add(label);
+                }
+                ctx.put("clickable_labels", actionableLabels);
+
                 JSONArray arr = new JSONArray();
                 int limit = visibleTexts != null ? Math.min(20, visibleTexts.size()) : 0;
                 for (int i = 0; i < limit; i++) {
