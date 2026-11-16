@@ -303,24 +303,32 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             if (guest) where1 += " AND " + COL_IS_PERSONAL + "=0";
             c = db.query(TABLE_PROCEDURES, null, where1, new String[]{clean}, null, null, null);
             if (c != null && c.moveToFirst()) {
-                return parseProcedureCursor(c);
+                JSONObject candidate = parseProcedureCursor(c);
+                if (AgentSkillGate.shouldReplay(candidate.optInt("success_count", 0),
+                        candidate.optInt("failure_count", 0))) {
+                    return candidate;
+                }
             }
-            if (c != null) c.close();
+            if (c != null) { c.close(); c = null; }
 
             // Check 2: Match su goal_intent (filtrando procedure personali in Guest Mode)
             String where2 = COL_GOAL_INTENT + "=?";
             if (guest) where2 += " AND " + COL_IS_PERSONAL + "=0";
             c = db.query(TABLE_PROCEDURES, null, where2, new String[]{clean}, null, null, null);
             if (c != null && c.moveToFirst()) {
-                return parseProcedureCursor(c);
+                JSONObject candidate = parseProcedureCursor(c);
+                if (AgentSkillGate.shouldReplay(candidate.optInt("success_count", 0),
+                        candidate.optInt("failure_count", 0))) {
+                    return candidate;
+                }
             }
-            if (c != null) c.close();
+            if (c != null) { c.close(); c = null; }
 
             // Check 3: Match se la query contiene l'intent_key memorizzato (es. "metti italia 2")
             String cleanNoSpace = clean.replaceAll("\\s+", "");
             String where3 = guest ? (COL_IS_PERSONAL + "=0") : null;
-            Cursor allProcs = db.query(TABLE_PROCEDURES, null, where3, null, null, null, COL_SUCCESS_COUNT + " DESC");
-            if (allProcs != null && allProcs.moveToFirst()) {
+            try (Cursor allProcs = db.query(TABLE_PROCEDURES, null, where3, null, null, null, COL_SUCCESS_COUNT + " DESC")) {
+                if (allProcs != null && allProcs.moveToFirst()) {
                 do {
                     String ik = allProcs.getString(allProcs.getColumnIndex(COL_INTENT_KEY));
                     String gi = allProcs.getString(allProcs.getColumnIndex(COL_GOAL_INTENT));
@@ -329,8 +337,10 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                         String ikNoSpace = ik.toLowerCase(Locale.ITALIAN).replaceAll("[_\\s]+", "");
                         if (clean.contains(ikClean) || (!ikNoSpace.isEmpty() && cleanNoSpace.contains(ikNoSpace))) {
                             JSONObject res = parseProcedureCursor(allProcs);
-                            allProcs.close();
-                            return res;
+                            if (AgentSkillGate.shouldReplay(res.optInt("success_count", 0),
+                                    res.optInt("failure_count", 0))) {
+                                return res;
+                            }
                         }
                     }
                     if (gi != null) {
@@ -338,12 +348,14 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                         String giNoSpace = gi.toLowerCase(Locale.ITALIAN).replaceAll("[_\\s]+", "");
                         if (clean.contains(giClean) || giClean.contains(clean) || (!giNoSpace.isEmpty() && cleanNoSpace.contains(giNoSpace))) {
                             JSONObject res = parseProcedureCursor(allProcs);
-                            allProcs.close();
-                            return res;
+                            if (AgentSkillGate.shouldReplay(res.optInt("success_count", 0),
+                                    res.optInt("failure_count", 0))) {
+                                return res;
+                            }
                         }
                     }
                 } while (allProcs.moveToNext());
-                allProcs.close();
+                }
             }
         } catch (Exception e) {
             Log.e(TAG, "Error in findProcedureByGoal: " + e.getMessage());
@@ -366,7 +378,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                 return parseProcedureCursor(c);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error fetching procedure " + intentKey + ": " + e.getMessage());
+            Log.e(TAG, "Error fetching procedure (key redacted): " + e.getMessage());
         } finally {
             if (c != null) c.close();
         }
@@ -452,10 +464,10 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             cv.put(COL_CREATED_AT, now);
 
             long row = db.insertWithOnConflict(TABLE_PROCEDURES, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
-            Log.i(TAG, "New procedure saved to SQLite: " + intentKey + " (personal=" + isPersonal + ", row=" + row + ")");
+            Log.i(TAG, "New procedure saved to SQLite (key redacted; personal=" + isPersonal + ", row=" + row + ")");
             return row != -1;
         } catch (Exception e) {
-            Log.e(TAG, "Error saving verified procedure " + intentKey + ": " + e.getMessage());
+            Log.e(TAG, "Error saving verified procedure (key redacted): " + e.getMessage());
             return false;
         }
     }
@@ -491,7 +503,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             int rows = db.delete(TABLE_PROCEDURES, COL_INTENT_KEY + "=?", new String[]{intentKey});
             return rows > 0;
         } catch (Exception e) {
-            Log.e(TAG, "Error deleting procedure " + intentKey + ": " + e.getMessage());
+            Log.e(TAG, "Error deleting procedure (key redacted): " + e.getMessage());
             return false;
         }
     }

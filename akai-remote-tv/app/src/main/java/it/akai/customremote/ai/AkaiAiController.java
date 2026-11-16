@@ -644,7 +644,7 @@ public class AkaiAiController {
         JSONObject result = new JSONObject();
 
         String query = userQuery.trim();
-        Log.i(TAG, "Processing request: \"" + query + "\" (speak=" + speak + ", mode=" + getExecutionMode() + ", taskId=" + myToken.taskId + ")");
+        Log.i(TAG, "Processing request (length=" + query.length() + ", speak=" + speak + ", mode=" + getExecutionMode() + ", taskId=" + myToken.taskId + ")");
 
         // ---------------------------------------------------------------------
         // PASSO 1: VERIFICA PROCEDURA IN MEMORIA SQLITE (O COMANDO HARDWARE)
@@ -652,7 +652,28 @@ public class AkaiAiController {
         LocalIntentParser.ParsedIntent parsed = LocalIntentParser.parse(context, query);
 
         if (parsed.matched) {
-            Log.i(TAG, "Fast-Path/SQLite match: " + parsed.intentKey + " (" + parsed.source + ")");
+            // Local memory commands have NO TV action. Do not run the stepwise
+            // executor (which correctly rejects empty plans) or take snapshots.
+            if ("local_memory".equals(parsed.source)
+                    && (parsed.actions == null || parsed.actions.length() == 0)) {
+                try {
+                    result.put("success", true);  // handled, not a hardware result
+                    result.put("source", "local_memory");
+                    result.put("intent_key", parsed.intentKey);
+                    result.put("verified", false);
+                    result.put("execution_outcome", OUTCOME_NOT_TESTED);
+                    result.put("actions_count", 0);
+                    result.put("executed_steps", 0);
+                    result.put("cloud_calls", 0);
+                    result.put("tokens", 0);
+                    result.put("cost_eur", 0.0);
+                    result.put("snapshot_count", 0);
+                    result.put("execution_mode", getExecutionMode());
+                } catch (Exception ignored) {}
+                return completeAndSpeak(result, query, parsed.responseMessage,
+                        "MEMORY_HANDLED", parsed.intentKey, 0, 0.0, speak, startTime);
+            }
+            Log.i(TAG, "Fast-Path/SQLite match (key redacted; source=" + parsed.source + ")");
             int snapshotCount = 0;
             long waitElapsedMs = 0L;
 
@@ -715,7 +736,7 @@ public class AkaiAiController {
                 if (verified && cmdRes.success) {
                     memoryEngine.recordProcedureSuccess(parsed.intentKey);
                 } else {
-                    Log.w(TAG, "Verification failed for procedure: " + parsed.intentKey);
+                    Log.w(TAG, "Verification failed for procedural skill (key redacted)");
                     memoryEngine.recordProcedureFailure(parsed.intentKey);
                 }
             }
@@ -766,7 +787,7 @@ public class AkaiAiController {
         // ---------------------------------------------------------------------
         // PASSO 2: PROCEDURA NON NOTA -> APPRENDIMENTO ED ESPLORAZIONE AUTONOMA
         // ---------------------------------------------------------------------
-        Log.i(TAG, "No procedure found in SQLite. Initiating autonomous discovery for: \"" + query + "\"");
+        Log.i(TAG, "No procedure found in SQLite. Initiating autonomous discovery (request contents redacted)");
         int snapshotCount = 0;
         long totalWaitElapsedMs = 0L;
         int cloudCalls = 0;
@@ -861,6 +882,13 @@ public class AkaiAiController {
             }
 
             JSONObject prefs = memoryEngine.getAllPreferences();
+            // Retain only relevant explicitly remembered facts; do not upload
+            // the entire preference database. Reached only after owner enabled
+            // cloud context consent and configured the provider.
+            try {
+                prefs.put("agent_relevant_facts",
+                        AgentFactMemory.relevantFacts(memoryEngine, query, 3));
+            } catch (Exception ignored) {}
             JSONArray convHistory = memoryEngine.getRecentConversations(3);
             String redactedContextPrompt = initialSnap.toRedactedMinimalContextPrompt();
             AiProviderAdapter.AiResponse planRes = aiAdapter.planActionSequence(query, redactedContextPrompt, prefs, convHistory);
@@ -877,7 +905,7 @@ public class AkaiAiController {
 
                 // Caso A: Domanda puramente conversazionale -> 0 azioni hardware richieste
                 if (planRes.actions == null || planRes.actions.length() == 0) {
-                    Log.i(TAG, "Conversational dialog response from AI provider: " + planReply);
+                    Log.i(TAG, "Conversational dialog response received (content redacted)");
                     memoryEngine.incrementStat("cloud_ai_calls", 1);
                     memoryEngine.incrementStat("prompt_tokens", promptTokens);
                     memoryEngine.incrementStat("completion_tokens", compTokens);
@@ -994,6 +1022,10 @@ public class AkaiAiController {
         if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
             String reflectorContext = buildReflectorContext(postSnap, candidateActions, execRes);
             JSONObject prefs = memoryEngine.getAllPreferences();
+            try {
+                prefs.put("agent_relevant_facts",
+                        AgentFactMemory.relevantFacts(memoryEngine, query, 3));
+            } catch (Exception ignored) {}
             JSONArray convHistory = memoryEngine.getRecentConversations(3);
             AiProviderAdapter.AiResponse retryRes = aiAdapter.planActionSequence(
                     query + " [RETRY_DIFFERENT_PLAN]", reflectorContext, prefs, convHistory);
@@ -1071,7 +1103,8 @@ public class AkaiAiController {
         // PASSO 4: SALVATAGGIO IN MEMORIA PROCEDURALE SQLITE (SOLO STATE_VERIFIED)
         // ---------------------------------------------------------------------
         boolean newlyLearned = false;
-        if (OUTCOME_STATE_VERIFIED.equals(executionOutcome)) {
+        if (OUTCOME_STATE_VERIFIED.equals(executionOutcome)
+                && AgentSkillGate.canLearn(verified, candidateActions, candidateCondition)) {
             if (candidateKey == null || candidateKey.trim().isEmpty()) candidateKey = generateIntentKey(query);
             String initialState = "{\"pkg\":\"" + (initialSnap != null ? initialSnap.foregroundPackage : "") + "\"}";
 
@@ -1085,7 +1118,7 @@ public class AkaiAiController {
                     candidateCondition,
                     "1.0"
             );
-            Log.i(TAG, "SUCCESS! New verified procedure saved to SQLite: " + candidateKey);
+            Log.i(TAG, "Verified procedural skill saved to SQLite (key redacted)");
         }
 
         // Aggiornamento statistiche d'uso
@@ -1156,7 +1189,11 @@ public class AkaiAiController {
         }
 
         // 2. Persistenza memoria conversazionale SQLite (budget 15 MB)
-        if (query != null && !query.isEmpty()) {
+        // Remember/forget/recall is stored exclusively in the explicit-fact
+        // vault. Do not duplicate the sensitive request in conversation history:
+        // a later "dimentica che" must not leave a second copy behind.
+        boolean explicitPersonalMemory = intentKey != null && intentKey.startsWith("agent_fact_");
+        if (!explicitPersonalMemory && query != null && !query.isEmpty()) {
             try {
                 memoryEngine.saveConversationExchange(query, replyMsg, status, intentKey, tokens, costEur);
             } catch (Exception e) {

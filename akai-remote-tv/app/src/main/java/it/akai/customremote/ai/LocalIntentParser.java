@@ -64,7 +64,32 @@ public class LocalIntentParser {
                 .replaceAll("\\s+", " ")
                 .trim();
 
-        Log.d(TAG, "Parsing query: \"" + clean + "\"");
+        Log.d(TAG, "Parsing query (length=" + query.length() + ")");
+
+        // A0: Personal memory is opt-in, local and bounded; never infer facts
+        // from ordinary conversation. Handle it before any command matching.
+        if (context != null) {
+            String memoryPhrase = query.trim().replaceFirst("(?i)^jarvis[,\\s:.!]+", "").trim();
+            String memoryCommand = memoryPhrase.toLowerCase(Locale.ITALIAN);
+            if (memoryCommand.startsWith("ricorda che ")) {
+                String fact = memoryPhrase.substring("ricorda che ".length()).trim();
+                String reply = AgentFactMemory.remember(AkaiMemoryEngine.getInstance(context), fact);
+                return new ParsedIntent(true, "agent_fact_remember", "Memoria personale esplicita",
+                        new JSONArray(), reply, "local_memory", null);
+            }
+            if (memoryCommand.equals("cosa ricordi di me") || memoryCommand.equals("cosa ti ricordi di me")
+                    || memoryCommand.equals("quali cose ricordi di me")) {
+                String reply = AgentFactMemory.recall(AkaiMemoryEngine.getInstance(context));
+                return new ParsedIntent(true, "agent_fact_recall", "Consultazione memoria personale",
+                        new JSONArray(), reply, "local_memory", null);
+            }
+            if (memoryCommand.startsWith("dimentica che ")) {
+                String fact = memoryPhrase.substring("dimentica che ".length()).trim();
+                String reply = AgentFactMemory.forget(AkaiMemoryEngine.getInstance(context), fact);
+                return new ParsedIntent(true, "agent_fact_forget", "Rimozione memoria personale",
+                        new JSONArray(), reply, "local_memory", null);
+            }
+        }
 
         // -------------------------------------------------------------
         // 1. PRIMITIVE HARDWARE & SISTEMA (SOLO COMANDI FONDAMENTALI)
@@ -338,7 +363,7 @@ public class LocalIntentParser {
                 String initState = proc.optString("initial_state", null);
                 int successes = proc.optInt("success_count", 1);
 
-                Log.i(TAG, "Procedural memory matched dynamically from SQLite: " + intentKey + " (" + successes + " previous successes)");
+                Log.i(TAG, "Procedural memory matched (key redacted; success_count=" + successes + ")");
 
                 return new ParsedIntent(true, intentKey, desc, actions,
                         "Esecuzione procedura memorizzata: " + desc, "procedural_memory", succCond, initState);

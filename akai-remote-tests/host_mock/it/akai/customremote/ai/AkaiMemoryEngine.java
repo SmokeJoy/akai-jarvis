@@ -59,6 +59,10 @@ public class AkaiMemoryEngine {
         setPreference(key, value, "general", 0);
     }
 
+    public synchronized boolean deletePreference(String key) {
+        return key != null && mPreferences.remove(key) != null;
+    }
+
     public synchronized void clearPersonalPreferencesOnly() {
         // No-op in minimal host mock unless needed
     }

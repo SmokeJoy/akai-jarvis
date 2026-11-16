@@ -58,6 +58,7 @@ jobs:
         run: |
           echo "=== Running Real SQLite Database & Migration Tests ==="
           python3 akai-remote-tests/test_sqlite_memory.py
+          python3 akai-remote-tests/test_agent_sqlite_a0.py
           echo "=== Running Offline Rollback & 15MB Storage Budget Simulation ==="
           python3 akai-remote-tests/test_rollback_offline_simulation.py
           echo "SQLite persistence, v5->v6 migration, offline rollback, and budget enforcement verified on real engine."
@@ -86,13 +87,19 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/TlsCertificateManager.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/RestApiRouter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/LocalIntentParser.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AgentSkillGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AgentFactMemory.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/KeystoreSecurityHelper.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AkaiAiController.java \
-            akai-remote-tests/UnitTests.java
+            akai-remote-tests/UnitTests.java \
+            akai-remote-tests/AgentSkillGateTest.java \
+            akai-remote-tests/AgentFactMemoryTest.java
 
           java -cp test_bin it.akai.customremote.UnitTests
+          java -cp test_bin it.akai.customremote.AgentSkillGateTest
+          java -cp test_bin it.akai.customremote.AgentFactMemoryTest
           echo "All 40 Java unit tests passed with 100% success."
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
