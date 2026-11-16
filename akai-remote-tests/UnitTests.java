@@ -2619,8 +2619,8 @@ public class UnitTests {
                     t2ResHolder[0] != null && "CANCELLED".equals(t2ResHolder[0].optString("status")) &&
                     t2ResHolder[0].optBoolean("cancelled_while_queued") &&
                     t2ResHolder[0].optInt("executed_steps", -1) == 0 &&
-                    rT3 != null && !rT3.optBoolean("success") &&
-                    "COMMAND_SENT".equals(rT3.optString("execution_outcome")) &&
+                    rT3 != null && rT3.optBoolean("success") &&
+                    "STATE_VERIFIED".equals(rT3.optString("execution_outcome")) &&
                     rCancelQueuedOnly.statusCode == 200 && rCancelQueuedOnly.json != null &&
                     !rCancelQueuedOnly.json.optBoolean("active_task_cancelled") &&
                     rCancelQueuedOnly.json.optInt("queued_tasks_invalidated", 0) >= 1 &&
@@ -2634,8 +2634,8 @@ public class UnitTests {
                     "CANCELLED".equals(rPostHookCancel.optString("status")) &&
                     rPostHookCancel.optBoolean("cancelled_while_queued") &&
                     rPostHookCancel.optInt("executed_steps", -1) == 0 &&
-                    rT3Final != null && !rT3Final.optBoolean("success") &&
-                    "COMMAND_SENT".equals(rT3Final.optString("execution_outcome")) &&
+                    rT3Final != null && rT3Final.optBoolean("success") &&
+                    "STATE_VERIFIED".equals(rT3Final.optString("execution_outcome")) &&
                     actionOrder.size() == 3 && "T1:dpad_up".equals(actionOrder.get(0)) &&
                     "YT_EXEC_1:launch_youtube".equals(actionOrder.get(1)) &&
                     "YT_EXEC_2:launch_youtube".equals(actionOrder.get(2)) &&
