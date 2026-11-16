@@ -2553,7 +2553,7 @@ public class UnitTests {
                     && !GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaWrongTitle).satisfied
                     && GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaPlaying).satisfied
                     && !GoalEvidenceVerifier.verify("apri YouTube e cerca video di gatti",
-                            "{\\"type\\":\\"pkg_is\\",\\"value\\":\\"com.google.android.youtube.tv\\"}",
+                            "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}",
                             new ScreenPerceptionEngine.PerceptionSnapshot(
                                 "com.google.android.youtube.tv", Collections.singletonList("Cerca"),
                                 Collections.emptyList(), "Cerca", false, false, false)).satisfied
