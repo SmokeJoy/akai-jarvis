@@ -9,6 +9,7 @@ import it.akai.customremote.ai.LocalIntentParser;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.GoalEvidenceVerifier;
 import it.akai.customremote.ai.UiClickTargetGate;
+import it.akai.customremote.ai.VisionCapturePolicy;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -2621,6 +2622,26 @@ public class UnitTests {
                     && "org.example.leanbackonly".equals(leanbackApp.actions.optJSONObject(0).optString("pkg"))
                     && !duplicateApp.matched && !absentApp.matched && !compoundApp.matched;
 
+            // A2 MediaProjection privacy: only a one-shot capture after Android's
+            // explicit OS consent, never on PIN/password or JARVIS pairing screens.
+            ScreenPerceptionEngine.PerceptionSnapshot normalTv = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Home"),
+                    Collections.emptyList(), null, false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot pinUi = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.akai.customremote", Collections.singletonList("PIN"),
+                    Collections.emptyList(), null, false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot passwordUi = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "org.example.auth", Collections.singletonList("Login"),
+                    Collections.emptyList(), null, true, false, false);
+            boolean oneShotCapturePolicyOk = VisionCapturePolicy.mayCapture(true, normalTv)
+                    && !VisionCapturePolicy.mayCapture(false, normalTv)
+                    && !VisionCapturePolicy.mayCapture(true, pinUi)
+                    && !VisionCapturePolicy.mayCapture(true, passwordUi)
+                    && !VisionCapturePolicy.mayCapture(true, null)
+                    && VisionCapturePolicy.withinBudget(960, 540, 4000)
+                    && !VisionCapturePolicy.withinBudget(1920, 1080, 100)
+                    && !VisionCapturePolicy.withinBudget(960, 540, 5000);
+
             // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
             ctrlScenario[0] = "CANCEL_MULTI";
             final List<String> actionOrder = Collections.synchronizedList(new ArrayList<>());
@@ -2835,14 +2856,14 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && safeUiClicksOk && dynamicAppLocalOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && safeUiClicksOk && dynamicAppLocalOk && oneShotCapturePolicyOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
                 System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
                     " mediaPartial=" + scMediaPartialOk + " goalContract=" + goalContractOk +
-                    " safeUiClicks=" + safeUiClicksOk + " localApp=" + dynamicAppLocalOk +
+                    " safeUiClicks=" + safeUiClicksOk + " localApp=" + dynamicAppLocalOk + " capturePolicy=" + oneShotCapturePolicyOk +
                     " priv=" + privacyZeroHttpOk + " red=" + redactionOk);
             }
         } catch (Throwable t37) {
