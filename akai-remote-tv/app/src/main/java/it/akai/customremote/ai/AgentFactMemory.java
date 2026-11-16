@@ -5,6 +5,11 @@ import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.Locale;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.List;
+import java.util.Comparator;
 
 /**
  * Explicit, bounded long-lived facts stored in the existing user_preferences
@@ -43,6 +48,72 @@ public final class AgentFactMemory {
         }
         return count;
     }
+
+
+    /**
+     * Retrieve only query-relevant, explicitly remembered facts. This is a
+     * bounded local shortlist, not semantic embeddings or an automatic cloud
+     * upload. Caller must check cloud-consent before sending any result.
+     */
+    public static org.json.JSONArray relevantFacts(AkaiMemoryEngine memory, String query, int maxFacts) {
+        org.json.JSONArray out = new org.json.JSONArray();
+        if (memory == null || memory.isGuestMode() || query == null
+                || query.trim().isEmpty() || maxFacts < 1) return out;
+        final Set<String> queryWords = meaningfulWords(query);
+        if (queryWords.isEmpty()) return out;
+        JSONObject prefs = memory.getAllPreferences();
+        if (prefs == null) return out;
+        List<ScoredFact> matches = new ArrayList<>();
+        Iterator<String> keys = prefs.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if (!key.startsWith(KEY_PREFIX)) continue;
+            String fact = prefs.optString(key, "");
+            if (fact.isEmpty() || fact.length() > MAX_FACT_CHARS) continue;
+            Set<String> factWords = meaningfulWords(fact);
+            int score = 0;
+            for (String word : queryWords) if (factWords.contains(word)) score++;
+            if (score > 0) matches.add(new ScoredFact(fact, score));
+        }
+        matches.sort(Comparator.comparingInt((ScoredFact f) -> f.score)
+                .reversed().thenComparing(f -> f.text));
+        int count = Math.min(3, Math.max(1, maxFacts));
+        int budget = 550; // upper bound on private context sent to LLM
+        for (ScoredFact match : matches) {
+            if (out.length() >= count || match.text.length() > budget) break;
+            out.put(match.text);
+            budget -= match.text.length();
+        }
+        return out;
+    }
+
+    private static final class ScoredFact {
+        final String text;
+        final int score;
+        ScoredFact(String text, int score) {
+            this.text = text;
+            this.score = score;
+        }
+    }
+
+    private static Set<String> meaningfulWords(String text) {
+        Set<String> result = new HashSet<>();
+        String folded = java.text.Normalizer.normalize(
+                text.toLowerCase(Locale.ITALIAN), java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
+        for (String word : folded.split("[^a-z0-9]+")) {
+            if (word.length() >= 4 && !COMMON_WORDS.contains(word)) result.add(word);
+        }
+        return result;
+    }
+
+    private static final Set<String> COMMON_WORDS =
+            new HashSet<>(java.util.Arrays.asList(
+                "sono", "della", "delle", "degli", "nella", "nelle", "come",
+                "quando", "quale", "quali", "questo", "questa", "anche", "perche",
+                "ricorda", "ricordi", "jarvis", "vorrei", "potresti", "sempre",
+                "dimentica", "favore", "puoi", "fatto", "avere", "essere"
+            ));
 
     public static String remember(AkaiMemoryEngine memory, String rawFact) {
         if (memory == null) return "Memoria non disponibile.";
