@@ -652,6 +652,27 @@ public class AkaiAiController {
         LocalIntentParser.ParsedIntent parsed = LocalIntentParser.parse(context, query);
 
         if (parsed.matched) {
+            // Local memory commands have NO TV action. Do not run the stepwise
+            // executor (which correctly rejects empty plans) or take snapshots.
+            if ("local_memory".equals(parsed.source)
+                    && (parsed.actions == null || parsed.actions.length() == 0)) {
+                try {
+                    result.put("success", true);  // handled, not a hardware result
+                    result.put("source", "local_memory");
+                    result.put("intent_key", parsed.intentKey);
+                    result.put("verified", false);
+                    result.put("execution_outcome", OUTCOME_NOT_TESTED);
+                    result.put("actions_count", 0);
+                    result.put("executed_steps", 0);
+                    result.put("cloud_calls", 0);
+                    result.put("tokens", 0);
+                    result.put("cost_eur", 0.0);
+                    result.put("snapshot_count", 0);
+                    result.put("execution_mode", getExecutionMode());
+                } catch (Exception ignored) {}
+                return completeAndSpeak(result, query, parsed.responseMessage,
+                        "MEMORY_HANDLED", parsed.intentKey, 0, 0.0, speak, startTime);
+            }
             Log.i(TAG, "Fast-Path/SQLite match: " + parsed.intentKey + " (" + parsed.source + ")");
             int snapshotCount = 0;
             long waitElapsedMs = 0L;
@@ -1157,7 +1178,11 @@ public class AkaiAiController {
         }
 
         // 2. Persistenza memoria conversazionale SQLite (budget 15 MB)
-        if (query != null && !query.isEmpty()) {
+        // Remember/forget/recall is stored exclusively in the explicit-fact
+        // vault. Do not duplicate the sensitive request in conversation history:
+        // a later "dimentica che" must not leave a second copy behind.
+        boolean explicitPersonalMemory = intentKey != null && intentKey.startsWith("agent_fact_");
+        if (!explicitPersonalMemory && query != null && !query.isEmpty()) {
             try {
                 memoryEngine.saveConversationExchange(query, replyMsg, status, intentKey, tokens, costEur);
             } catch (Exception e) {
