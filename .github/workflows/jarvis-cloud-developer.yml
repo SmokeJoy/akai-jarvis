@@ -14,9 +14,14 @@ on:
         default: deepseek
         options: [deepseek, kimi]
       target:
-        description: "Exact AI Java source path: agent will touch no other file"
+        description: "Exact isolated AI Java skill path (core files forbidden)"
         required: true
         type: string
+      approve_paid_api:
+        description: "I explicitly authorize ONE potentially billable API request for this run"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -51,10 +56,16 @@ jobs:
           TASK: ${{ inputs.task }}
           PROVIDER: ${{ inputs.provider }}
           TARGET: ${{ inputs.target }}
+          PAID_APPROVAL: ${{ inputs.approve_paid_api }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
           MOONSHOT_MODEL: ${{ vars.MOONSHOT_MODEL }}
-        run: python jarvis-cloud-agent/developer.py --root . --task "$TASK" --provider "$PROVIDER" --target "$TARGET"
+        run: |
+          if [ "$PAID_APPROVAL" != "true" ]; then
+            echo "BLOCKED: no explicit owner consent to a potentially billable API call"
+            exit 2
+          fi
+          python jarvis-cloud-agent/developer.py --root . --task "$TASK" --provider "$PROVIDER" --target "$TARGET" --approve-paid-api
       - name: Check generated change without executing model code
         shell: bash
         env:
