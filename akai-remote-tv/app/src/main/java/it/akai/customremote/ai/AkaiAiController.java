@@ -729,7 +729,10 @@ public class AkaiAiController {
                 WaitObservation obs = waitForConditionOrUiChange(hasCondition ? parsed.successCondition : null, 1200L, sDefaultPollIntervalMs, myToken);
                 snapshotCount += obs.snapshotCount;
                 waitElapsedMs += obs.elapsedMs;
-                verified = hasCondition ? obs.verified : true;
+                // A successful hardware dispatch is NOT proof that the requested
+                // state changed. Without observable evidence the truthful outcome
+                // must remain COMMAND_SENT, never STATE_VERIFIED.
+                verified = hasCondition && obs.verified;
             }
 
             if (parsed.intentKey != null) {
@@ -754,8 +757,10 @@ public class AkaiAiController {
                 } else {
                     replyMsg = "Comando completato con successo.";
                 }
-            } else if (hasCondition && !verified && cmdRes.success) {
-                replyMsg = "Non sono riuscito a sintonizzare il canale o la schermata richiesta. Il player non è attivo.";
+            } else if (cmdRes.success && !hasCondition) {
+                replyMsg = "Comando inviato alla TV, ma non posso confermare il risultato: nessuna verifica disponibile per questa azione.";
+            } else if (cmdRes.success) {
+                replyMsg = "Comando inviato, ma la condizione richiesta non risulta verificata sullo schermo.";
             } else {
                 replyMsg = cmdRes != null && cmdRes.message != null && !cmdRes.message.isEmpty()
                         ? cmdRes.message
@@ -1136,7 +1141,7 @@ public class AkaiAiController {
         String finalReply = planReply != null ? planReply : "Procedura completata.";
         if (!execRes.success) {
             finalReply = "Non sono riuscito a completare l'operazione: " + execRes.message;
-        } else if (!verified && candidateCondition != null) {
+        } else if (!verified) {
             finalReply = "Azioni inviate, ma il risultato non è stato verificato con certezza sullo schermo.";
         }
 

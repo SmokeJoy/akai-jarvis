@@ -2533,14 +2533,23 @@ switch ($Action) {
             throw "ERRORE FAIL-CLOSED: Installazione fallita da adb (exit=$LASTEXITCODE): $installRes"
         }
 
-        # 4. Avvio servizio compatibile Android 9 (.RemoteServerService / fallback .MainActivity)
-        Write-Host "[5/6] Avvio servizio RemoteServerService..."
-        $startSvcOut = & $adb -s $TargetAdb shell "am startservice -n $PackageName/.RemoteServerService" 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $startSvcOut -match "Error:|Exception") {
-            $cmdSvcOut = & $adb -s $TargetAdb shell "cmd activity start-service $PackageName/.RemoteServerService" 2>&1 | Out-String
-            if ($LASTEXITCODE -ne 0 -or $cmdSvcOut -match "Error:|Exception") {
-                & $adb -s $TargetAdb shell "am start -n $PackageName/.MainActivity" 2>&1 | Out-Null
-            }
+        # 4. Avvio Android 9 attraverso l'Activity ESPORTATA.
+        # RemoteServerService ha android:exported="false": adb shell (uid 2000)
+        # NON puo' invocarla direttamente; MainActivity avvia il servizio nel proprio UID.
+        # Non lasciare che stderr nativo faccia uscire da PowerShell prima del watchdog.
+        Write-Host "[5/6] Avvio MainActivity (RemoteServerService interno non esportato)..."
+        $previousEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $startActivityOutput = (& $adb -s $TargetAdb shell "am start -n $PackageName/.MainActivity" 2>&1 | Out-String).Trim()
+            $startActivityExit = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousEap
+        }
+        if ($startActivityExit -ne 0 -or $startActivityOutput -match "Error:|Exception|Permission Denial") {
+            Write-Host "      Avvio Activity non confermato (exit=$startActivityExit): $startActivityOutput. Proseguo al watchdog per valutare lo stato reale." -ForegroundColor Yellow
+        } else {
+            Write-Host "      Intent Activity inviato: $startActivityOutput" -ForegroundColor Green
         }
 
         # 5. Multi-Point Health Check Watchdog (30s)

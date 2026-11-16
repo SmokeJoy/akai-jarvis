@@ -2343,12 +2343,26 @@ public class UnitTests {
             AkaiAiController ctrl37 = AkaiAiController.createForTest(ctx37, new TvController(), mem37, adapter37, bridge);
             ctrlHolder[0] = ctrl37;
 
-            // Scenario 1a: fast-path "apri YouTube" (0 tokens, 0 HTTP)
+            // Scenario 1a: app launch is STATE_VERIFIED only after observable foreground transition.
             snapQueue.clear();
             snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.emptyList(), Collections.emptyList(), null, false, false, false));
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("com.google.android.youtube.tv", Collections.singletonList("YouTube"), Collections.emptyList(), null, false, false, false));
             JSONObject r1a = ctrl37.processQuery("apri YouTube", false);
             boolean sc1aOk = r1a.optBoolean("success") && r1a.optInt("tokens", -1) == 0 &&
                     "STATE_VERIFIED".equals(r1a.optString("execution_outcome")) && ctrlHttpCalls.get() == 0;
+
+            // Scenario 1a-bis: no observable condition MUST NOT become STATE_VERIFIED.
+            // "alza" is a known local volume intent without a success_condition.
+            snapQueue.clear();
+            snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8",
+                    Collections.singletonList("Home"), Collections.emptyList(), null, false, false, false));
+            JSONObject r1aNoEvidence = ctrl37.processQuery("alza", false);
+            boolean sc1aNoEvidenceOk = !r1aNoEvidence.optBoolean("success")
+                    && !r1aNoEvidence.optBoolean("verified")
+                    && "COMMAND_SENT".equals(r1aNoEvidence.optString("execution_outcome"))
+                    && "COMPLETED_UNVERIFIED".equals(r1aNoEvidence.optString("status"))
+                    && r1aNoEvidence.optString("reply", "").contains("non posso confermare")
+                    && ctrlHttpCalls.get() == 0;
 
             // Scenario 1b: Discovery YouTube con bounded adaptive wait < 300ms e salvataggio SQLite
             ctrlScenario[0] = "DISCOVERY_YT";
@@ -2663,9 +2677,9 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
-                System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
+                System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
@@ -2927,9 +2941,13 @@ public class UnitTests {
             int cloudCallsBeforeP2 = e2eCloudCalls.get();
             MockHttpResponse rKnownAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"alza il volume\"}", "192.168.1.55", true);
 
-            boolean part2Ok = (rKnownAi.statusCode == 200) &&
+            // A volume key dispatch has no observed volume readback.
+            // HTTP 400 / COMMAND_SENT is truthful; 0 tokens and 0 cloud calls.
+            boolean part2Ok = (rKnownAi.statusCode == 400) &&
                               rKnownAi.json != null &&
-                              rKnownAi.json.optBoolean("success") &&
+                              !rKnownAi.json.optBoolean("success") &&
+                              "COMMAND_SENT".equals(rKnownAi.json.optString("execution_outcome")) &&
+                              "COMPLETED_UNVERIFIED".equals(rKnownAi.json.optString("status")) &&
                               rKnownAi.json.optInt("tokens", -1) == 0 &&
                               rKnownAi.json.optInt("cloud_calls", -1) == 0 &&
                               rKnownAi.json.optString("source", "").contains("local") &&

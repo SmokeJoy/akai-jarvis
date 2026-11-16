@@ -23,12 +23,14 @@ import android.os.Handler;
 import android.os.Looper;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 public class MainActivity extends Activity {
     private static final String TAG = "AKAI_MainActivity";
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
     private final Handler retryHandler = new Handler(Looper.getMainLooper());
     private final java.util.concurrent.atomic.AtomicLong uiGenToken = new java.util.concurrent.atomic.AtomicLong(0);
+    private volatile boolean activityDestroyed = false;
     private int retryCount = 0;
     private static final int MAX_RETRIES = 15;
     private ServiceStateListener stateListener = null;
@@ -37,6 +39,7 @@ public class MainActivity extends Activity {
     private final Runnable retryRunnable = new Runnable() {
         @Override
         public void run() {
+            if (activityDestroyed || isFinishing() || isDestroyed()) return;
             RemoteServerService s = RemoteServerService.getInstance();
             boolean ready = (s != null && s.isReady());
             String ip = (s != null) ? s.getLocalIpAddress() : getLocalIpAddress();
@@ -117,6 +120,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        if (activityDestroyed) return;
                         if (tvCaFingerprint != null) {
                             tvCaFingerprint.setText("ATTENZIONE: Servizio HTTPS non pronto (" + reason + "). Nuovo tentativo in corso...");
                         }
@@ -205,7 +209,7 @@ public class MainActivity extends Activity {
 
                 // Disabilita temporaneamente il bottone durante il retrieval asincrono su worker thread
                 btnShowPin.setEnabled(false);
-                bgExecutor.execute(new Runnable() {
+                if (!submitBackgroundTask(new Runnable() {
                     @Override
                     public void run() {
                         try {
@@ -236,7 +240,9 @@ public class MainActivity extends Activity {
                             });
                         }
                     }
-                });
+                })) {
+                    btnShowPin.setEnabled(true);
+                }
             }
         });
 
@@ -269,6 +275,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        // Invalidate queued UI callbacks and QR work before shutting down the executor.
+        activityDestroyed = true;
+        uiGenToken.incrementAndGet();
+        retryHandler.removeCallbacksAndMessages(null);
         super.onDestroy();
         if (stateListener != null) {
             RemoteServerService.unregisterStateListener(stateListener);
@@ -287,7 +297,20 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    // Late network/service callbacks must not submit to the executor after teardown.
+    private boolean submitBackgroundTask(Runnable task) {
+        if (activityDestroyed || bgExecutor.isShutdown()) return false;
+        try {
+            bgExecutor.execute(task);
+            return true;
+        } catch (RejectedExecutionException e) {
+            Log.i(TAG, "Skipping background UI task: Activity executor has stopped.");
+            return false;
+        }
+    }
+
     private void updateUI() {
+        if (activityDestroyed || isFinishing() || isDestroyed()) return;
         RemoteServerService s = RemoteServerService.getInstance();
         boolean serviceReady = (s != null && s.isReady());
 
@@ -357,10 +380,10 @@ public class MainActivity extends Activity {
         final long token = uiGenToken.incrementAndGet();
 
         // Calcolo asincrono serializzato su worker thread per non bloccare il rendering UI su architettura TV ARMv7
-        bgExecutor.execute(new Runnable() {
+        submitBackgroundTask(new Runnable() {
             @Override
             public void run() {
-                if (token != uiGenToken.get()) {
+                if (activityDestroyed || token != uiGenToken.get()) {
                     return; // Richiesta obsoleta: token generazionale superato
                 }
                 try {
