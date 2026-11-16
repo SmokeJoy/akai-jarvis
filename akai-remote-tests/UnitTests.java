@@ -2600,7 +2600,10 @@ public class UnitTests {
                     !UiClickTargetGate.check(uiExact, "Apri impostazioni").allowed &&
                     !UiClickTargetGate.check(new ScreenPerceptionEngine.PerceptionSnapshot(
                             "org.example.thirdparty", Collections.singletonList("Elimina account"),
-                            Collections.emptyList(), null, false, false, false), "Elimina account").allowed;
+                            Collections.emptyList(), null, false, false, false), "Elimina account").allowed &&
+                    !UiClickTargetGate.check(new ScreenPerceptionEngine.PerceptionSnapshot(
+                            "org.example.thirdparty", Collections.singletonList("Acquista!"),
+                            Collections.emptyList(), null, false, false, false), "Acquista!").allowed;
 
             // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
             ctrlScenario[0] = "CANCEL_MULTI";
