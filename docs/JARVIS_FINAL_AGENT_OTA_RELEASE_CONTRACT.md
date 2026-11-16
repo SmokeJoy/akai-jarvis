@@ -29,6 +29,16 @@
 8. **Test reale finale:** scenari italiani (Nova Player/YouTube/Mediaset Infinity Italia 2, impostazioni audio, app non installata, UI ambigua, schermata protetta, assenza rete/provider, reboot e cancel). Rapporto PASS/FAIL per comportamento effettivamente osservato.
 9. **Rilascio:** build Android 9 ARMv7 da HEAD revisionato, firma originale locale, zero keystore TLS nell'APK, CI verde, backup aggiornato APK+SQLite+TLS, piano di recupero, approvazione esplicita prima dell'unico deploy finale.
 
+## Incremento implementato in PR #18 — Inferenza soltanto DeepSeek/Kimi
+
+- `CloudProviderPolicy.java` autorizza esclusivamente endpoint ufficiali DeepSeek (`api.deepseek.com/chat/completions`) e Kimi (`api.moonshot.ai/.cn/v1/chat/completions`), lega le credenziali al provider e blocca redirect dell'header Bearer. La modalità senza cloud è soltanto esecuzione di regole deterministiche: **mai LLM locale**.
+- `CloudVisionRequestPolicy.java` impone tre prerequisiti distinti prima di trasferire un JPEG: consenso MediaProjection Android, consenso esplicito **all'invio cloud di questa immagine**, e consenso cloud nelle preferenze. Blocca schermate sensibili e payload oltre 256 KiB/960×540. Solo `deepseek-flash` o `kimi-k2.6` per immagini; ogni altro modello rifiutato.
+- `AiProviderAdapter.describeScreenJpegOnce` invia via HTTPS un singolo JPEG base64 in RAM, con prenotazione conservativa del budget condiviso, e restituisce **testo non attendibile**: l'AI non clicca né apprende procedure dalla descrizione visiva.
+- `LocalVisualCaptureActivity` espone, dopo una cattura locale, un pulsante separato con conferma per inviare a DeepSeek/Kimi. Nessun servizio di AI residente, upload automatico, screenshot persistente o nuovo processo stabile.
+- Compilazione/unit test host e Android CI in verifica sulla SHA esatta. Nessuna chiamata API fatturabile eseguita e nessuna modifica alla TV. **Non dichiarare l'agente visuale autonomo completo**: la prossima fase dovrà integrare le evidenze visive nel planner in modo verificabile, senza click ciechi e con consenso distinto.
+
+Riferimenti: [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/), [Kimi K2.6](https://huggingface.co/moonshotai/Kimi-K2.6) (modello ufficiale Moonshot, supporto image input).
+
 ## OTA — sicurezza e implementazione per release finale
 
 **Componente già committato:** `OtaCandidateGate.java`, puro Java, zero processo/servizio/network. Non installa nulla: verifica *solo metadati* (package `it.akai.customremote`, versionCode > installato, fingerprint certificato A1/A2 esatto, release `stable`, minSdk compatibile API28, ABI `armeabi-v7a`, SHA-256 di APK, dimensione massima 25 MiB, HTTPS e hostname in allowlist locale). Il relativo test JVM esamina bypass comuni.
