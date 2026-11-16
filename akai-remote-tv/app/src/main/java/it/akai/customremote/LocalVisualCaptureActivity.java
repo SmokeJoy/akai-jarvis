@@ -1,6 +1,7 @@
 package it.akai.customremote;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
@@ -28,8 +29,12 @@ import android.widget.TextView;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.VisionCapturePolicy;
 import it.akai.customremote.ai.RgbaFramePacker;
+import it.akai.customremote.ai.AiProviderAdapter;
+import it.akai.customremote.ai.CloudProviderPolicy;
 
 import java.nio.ByteBuffer;
+import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 
 /**
  * Android 9 / API 28 local-only MediaProjection diagnostic.
@@ -44,6 +49,10 @@ public final class LocalVisualCaptureActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private Button captureButton;
+    private Button cloudVisionButton;
+    private TextView cloudVisionResult;
+    private volatile boolean cloudVisionInFlight = false;
+    private boolean capturedNonSensitiveFrame = false;
     private TextView status;
     private ImageView preview;
     private Bitmap previewBitmap;
@@ -109,6 +118,22 @@ public final class LocalVisualCaptureActivity extends Activity {
         preview.setMaxWidth(960);
         preview.setMaxHeight(540);
         content.addView(preview);
+
+        // Deliberate second consent, separate from the Android screen capture
+        // grant. Never automatically uploads a screenshot or runs a local LLM.
+        cloudVisionButton = new Button(this);
+        cloudVisionButton.setText("Analizza con DeepSeek/Kimi (consenso cloud separato)");
+        cloudVisionButton.setEnabled(false);
+        content.addView(cloudVisionButton);
+        cloudVisionButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { confirmCloudVision(); }
+        });
+
+        cloudVisionResult = new TextView(this);
+        cloudVisionResult.setTextColor(Color.LTGRAY);
+        cloudVisionResult.setTextSize(13);
+        cloudVisionResult.setPadding(0, pad / 2, 0, pad / 2);
+        content.addView(cloudVisionResult);
 
         Button clearButton = new Button(this);
         clearButton.setText("Cancella anteprima e chiudi");
@@ -296,6 +321,8 @@ public final class LocalVisualCaptureActivity extends Activity {
             clearPreview();
             previewBitmap = image;
             preview.setImageBitmap(image);
+            capturedNonSensitiveFrame = !isMostlyBlack(image);
+            cloudVisionButton.setEnabled(capturedNonSensitiveFrame && !cloudVisionInFlight);
         }
         status.setText(message);
         captureButton.setEnabled(true);
@@ -308,7 +335,91 @@ public final class LocalVisualCaptureActivity extends Activity {
         } catch (RuntimeException ignored) {}
     }
 
+    /**
+     * UI-only diagnostic: explicit separate permission BEFORE any image is
+     * transferred to the selected DeepSeek or Kimi API. The AI response is
+     * displayed as untrusted text and NEVER executed as a TV command.
+     */
+    private void confirmCloudVision() {
+        if (destroyed || !completed || !capturedNonSensitiveFrame || previewBitmap == null
+                || cloudVisionInFlight) return;
+        final AiProviderAdapter adapter = new AiProviderAdapter(getApplicationContext());
+        final String provider = adapter.getActiveProvider();
+        if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+            status.setText("Seleziona DeepSeek o Kimi. Nessun modello AI locale.");
+            return;
+        }
+        if (!adapter.hasCloudContextConsent()) {
+            status.setText("Consenso dati AI cloud disabilitato. Attivalo nelle impostazioni JARVIS.");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Invio volontario immagine a " + provider)
+                .setMessage("Stai per inviare UN fotogramma della TV a " + provider
+                        + " tramite API esterna. Non inviare account, messaggi privati,"
+                        + " password, PIN, QR, pagamenti o dati personali."
+                        + " La richiesta puo' consumare credito API."
+                        + " Il risultato non eseguira' comandi automaticamente. Confermi?")
+                .setNegativeButton("Annulla", null)
+                .setPositiveButton("Confermo l'invio", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                        sendCloudVisionOnce(adapter);
+                    }
+                })
+                .show();
+    }
+
+    private void sendCloudVisionOnce(final AiProviderAdapter adapter) {
+        if (destroyed || previewBitmap == null || !capturedNonSensitiveFrame
+                || cloudVisionInFlight) return;
+        // JPEG encoding operates locally and never persists to filesystem.
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        if (!previewBitmap.compress(Bitmap.CompressFormat.JPEG, 58, out)) {
+            status.setText("Errore di compressione JPEG.");
+            return;
+        }
+        final byte[] jpeg = out.toByteArray();
+        final int width = previewBitmap.getWidth();
+        final int height = previewBitmap.getHeight();
+        cloudVisionInFlight = true;
+        cloudVisionButton.setEnabled(false);
+        captureButton.setEnabled(false);
+        status.setText("Invio volontario a DeepSeek/Kimi, attesa risposta...");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                AiProviderAdapter.VisionCloudResult result;
+                try {
+                    result = adapter.describeScreenJpegOnce(jpeg, width, height,
+                            true, true, false);
+                } catch (Exception ignored) {
+                    result = AiProviderAdapter.VisionCloudResult.blocked("REQUEST_FAILED");
+                } finally {
+                    Arrays.fill(jpeg, (byte) 0);
+                }
+                final AiProviderAdapter.VisionCloudResult answer = result;
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        cloudVisionInFlight = false;
+                        if (destroyed) return;
+                        captureButton.setEnabled(true);
+                        cloudVisionButton.setEnabled(previewBitmap != null && capturedNonSensitiveFrame);
+                        if (answer.success) {
+                            cloudVisionResult.setText(answer.description);
+                            status.setText("Descrizione AI remota, NON verificata; "
+                                    + "nessun comando eseguito. Token: " + answer.tokens);
+                        } else {
+                            status.setText("Analisi non eseguita: " + answer.error);
+                        }
+                    }
+                });
+            }
+        }, "jarvis-approved-cloud-vision").start();
+    }
+
     private void clearPreview() {
+        capturedNonSensitiveFrame = false;
+        if (cloudVisionButton != null) cloudVisionButton.setEnabled(false);
+        if (cloudVisionResult != null) cloudVisionResult.setText("");
         if (preview != null) preview.setImageBitmap(null);
         if (previewBitmap != null) {
             previewBitmap.recycle();
