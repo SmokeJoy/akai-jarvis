@@ -644,7 +644,7 @@ public class AkaiAiController {
         JSONObject result = new JSONObject();
 
         String query = userQuery.trim();
-        Log.i(TAG, "Processing request: \"" + query + "\" (speak=" + speak + ", mode=" + getExecutionMode() + ", taskId=" + myToken.taskId + ")");
+        Log.i(TAG, "Processing request (length=" + query.length() + ", speak=" + speak + ", mode=" + getExecutionMode() + ", taskId=" + myToken.taskId + ")");
 
         // ---------------------------------------------------------------------
         // PASSO 1: VERIFICA PROCEDURA IN MEMORIA SQLITE (O COMANDO HARDWARE)
@@ -766,7 +766,7 @@ public class AkaiAiController {
         // ---------------------------------------------------------------------
         // PASSO 2: PROCEDURA NON NOTA -> APPRENDIMENTO ED ESPLORAZIONE AUTONOMA
         // ---------------------------------------------------------------------
-        Log.i(TAG, "No procedure found in SQLite. Initiating autonomous discovery for: \"" + query + "\"");
+        Log.i(TAG, "No procedure found in SQLite. Initiating autonomous discovery (request contents redacted)");
         int snapshotCount = 0;
         long totalWaitElapsedMs = 0L;
         int cloudCalls = 0;
