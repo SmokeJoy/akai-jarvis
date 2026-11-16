@@ -2557,6 +2557,11 @@ public class UnitTests {
                             new ScreenPerceptionEngine.PerceptionSnapshot(
                                 "com.google.android.youtube.tv", Collections.singletonList("Cerca"),
                                 Collections.emptyList(), "Cerca", false, false, false)).satisfied
+                    && !GoalEvidenceVerifier.verify("apri YouTube e cerca video di gatti",
+                            "{\"type\":\"contains_text\",\"value\":\"Cerca\"}",
+                            new ScreenPerceptionEngine.PerceptionSnapshot(
+                                "com.google.android.youtube.tv", Collections.singletonList("Cerca"),
+                                Collections.emptyList(), "Cerca", false, false, false)).satisfied
                     && !GoalEvidenceVerifier.verify("apri YouTube", settingsDetail).satisfied
                     && GoalEvidenceVerifier.verify("apri YouTube", new ScreenPerceptionEngine.PerceptionSnapshot(
                         "com.google.android.youtube.tv", Collections.singletonList("Home"),
