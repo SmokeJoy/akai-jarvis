@@ -2694,14 +2694,14 @@ public class UnitTests {
             ScreenPerceptionEngine.PerceptionSnapshot sensitivePlaying = new ScreenPerceptionEngine.PerceptionSnapshot(
                     "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
                     Collections.emptyList(), null, true, true, true);
-            String playingCondition = "{\\"type\\":\\"player_active\\",\\"expected_text\\":\\"Demo Film\\"}";
+            String playingCondition = "{\"type\":\"player_active\",\"expected_text\":\"Demo Film\"}";
             boolean goalEvidenceGateOk =
                     !GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
-                            "{\\"type\\":\\"contains_text\\",\\"value\\":\\"Cerca\\"}", searchUiOnly).verified &&
+                            "{\"type\":\"contains_text\",\"value\":\"Cerca\"}", searchUiOnly).verified &&
                     GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
-                            "{\\"type\\":\\"contains_text\\",\\"value\\":\\"Apollo 11\\"}", foundResult).verified &&
+                            "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", foundResult).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film",
-                            "{\\"type\\":\\"pkg_is\\",\\"value\\":\\"com.google.android.youtube.tv\\"}", playing).verified &&
+                            "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}", playing).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, silentPlayer).verified &&
                     GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, playing).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, sensitivePlaying).verified &&
