@@ -25,6 +25,7 @@ public abstract class Context {
 
     public File getFilesDir() { return new File("."); }
     public Context getApplicationContext() { return this; }
+    public android.content.pm.PackageManager getPackageManager() { return new android.content.pm.PackageManager(); }
     public Object getSystemService(String name) { return null; }
 
     private static class InMemorySharedPreferences implements SharedPreferences {
