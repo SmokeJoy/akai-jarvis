@@ -66,6 +66,31 @@ public class LocalIntentParser {
 
         Log.d(TAG, "Parsing query: \"" + clean + "\"");
 
+        // A0: Personal memory is opt-in, local and bounded; never infer facts
+        // from ordinary conversation. Handle it before any command matching.
+        if (context != null) {
+            String memoryPhrase = query.trim().replaceFirst("(?i)^jarvis[,\\s:.!]+", "").trim();
+            String memoryCommand = memoryPhrase.toLowerCase(Locale.ITALIAN);
+            if (memoryCommand.startsWith("ricorda che ")) {
+                String fact = memoryPhrase.substring("ricorda che ".length()).trim();
+                String reply = AgentFactMemory.remember(AkaiMemoryEngine.getInstance(context), fact);
+                return new ParsedIntent(true, "agent_fact_remember", "Memoria personale esplicita",
+                        new JSONArray(), reply, "local_memory", null);
+            }
+            if (memoryCommand.equals("cosa ricordi di me") || memoryCommand.equals("cosa ti ricordi di me")
+                    || memoryCommand.equals("quali cose ricordi di me")) {
+                String reply = AgentFactMemory.recall(AkaiMemoryEngine.getInstance(context));
+                return new ParsedIntent(true, "agent_fact_recall", "Consultazione memoria personale",
+                        new JSONArray(), reply, "local_memory", null);
+            }
+            if (memoryCommand.startsWith("dimentica che ")) {
+                String fact = memoryPhrase.substring("dimentica che ".length()).trim();
+                String reply = AgentFactMemory.forget(AkaiMemoryEngine.getInstance(context), fact);
+                return new ParsedIntent(true, "agent_fact_forget", "Rimozione memoria personale",
+                        new JSONArray(), reply, "local_memory", null);
+            }
+        }
+
         // -------------------------------------------------------------
         // 1. PRIMITIVE HARDWARE & SISTEMA (SOLO COMANDI FONDAMENTALI)
         // -------------------------------------------------------------
