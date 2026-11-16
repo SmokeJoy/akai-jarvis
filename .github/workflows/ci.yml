@@ -38,6 +38,25 @@ jobs:
           node --check akai-remote-web/sw.js
           echo "JavaScript syntax check passed."
 
+      - name: 1b. Parse and safety-audit Windows A1 candidate build script
+        shell: pwsh
+        run: |
+          $path = Join-Path $PWD "scripts/09_build_jarvis_a1_candidate.ps1"
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          $src = Get-Content $path -Raw
+          if ($src -notmatch '--version-code\s+\$VersionCode\s+--version-name\s+\$VersionName') { throw "Versioned APK link missing" }
+          if ($src -notmatch '21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed') { throw "Expected on-TV signer missing" }
+          if ($src -notmatch 'AkaiJarvisBuilds') { throw "Out-of-tree build output missing" }
+          if ($src -match 'Remove-Item\s+\$buildDir') { throw "Builder must not delete build directories" }
+          if ($src -match '\badb\s+(install|root|push|pull|connect)\b') { throw "Builder must not touch TV" }
+          Write-Host "A1 Windows candidate script parses and static release guards pass (no Windows hardware build in CI)."
+
       - name: 2. Secrets Leak Detection
         run: |
           echo "=== Scanning for leaked private keys or hardcoded API credentials ==="
