@@ -75,8 +75,13 @@ public final class AgentFactMemory {
             for (String word : queryWords) if (factWords.contains(word)) score++;
             if (score > 0) matches.add(new ScoredFact(fact, score));
         }
-        matches.sort(Comparator.comparingInt((ScoredFact f) -> f.score)
-                .reversed().thenComparing(f -> f.text));
+        java.util.Collections.sort(matches, new Comparator<ScoredFact>() {
+            @Override
+            public int compare(ScoredFact first, ScoredFact second) {
+                int byScore = Integer.compare(second.score, first.score);
+                return byScore != 0 ? byScore : first.text.compareTo(second.text);
+            }
+        });
         int count = Math.min(3, Math.max(1, maxFacts));
         int budget = 550; // upper bound on private context sent to LLM
         for (ScoredFact match : matches) {
