@@ -841,6 +841,7 @@ public class AkaiAiController {
         String planReply = null;
         String planWarning = null;
         boolean usedCloudPlanner = false;
+        boolean allowProcedureLearning = false;
 
         if (isStrictLocalOnly()) {
             long elapsed = System.currentTimeMillis() - startTime;
@@ -850,6 +851,7 @@ public class AkaiAiController {
                 candidateKey = generateIntentKey(query);
                 candidateCondition = plan.successCondition;
                 planReply = plan.reply;
+                allowProcedureLearning = true;
             } else {
                 try {
                     result.put("success", false);
@@ -911,6 +913,7 @@ public class AkaiAiController {
                 costEur = planRes.costEur;
                 planReply = planRes.reply;
                 planWarning = planRes.warningMessage;
+                allowProcedureLearning = planRes.learnProcedure;
 
                 // Caso A: Domanda puramente conversazionale -> 0 azioni hardware richieste
                 if (planRes.actions == null || planRes.actions.length() == 0) {
@@ -987,6 +990,7 @@ public class AkaiAiController {
                 candidateKey = generateIntentKey(query);
                 candidateCondition = plan.successCondition;
                 planReply = plan.reply;
+                allowProcedureLearning = true;
             }
         }
 
@@ -1066,6 +1070,7 @@ public class AkaiAiController {
                     replanCount = 1;
                     candidateActions = retryRes.actions;
                     candidateCondition = retryRes.successCondition;
+                    allowProcedureLearning = retryRes.learnProcedure;
                     if (retryRes.intentKey != null && !retryRes.intentKey.isEmpty()) {
                         candidateKey = retryRes.intentKey;
                     }
@@ -1124,6 +1129,7 @@ public class AkaiAiController {
         // ---------------------------------------------------------------------
         boolean newlyLearned = false;
         if (OUTCOME_STATE_VERIFIED.equals(executionOutcome)
+                && allowProcedureLearning
                 && AgentSkillGate.canLearn(verified, candidateActions, candidateCondition)) {
             if (candidateKey == null || candidateKey.trim().isEmpty()) candidateKey = generateIntentKey(query);
             String initialState = "{\"pkg\":\"" + (initialSnap != null ? initialSnap.foregroundPackage : "") + "\"}";
