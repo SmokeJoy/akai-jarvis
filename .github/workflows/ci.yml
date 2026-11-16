@@ -129,6 +129,15 @@ jobs:
           java -cp test_bin it.akai.customremote.AgentFactMemoryTest
           echo "All 40 Java unit tests passed with 100% success."
 
+      - name: 4b. Final-release OTA candidate metadata safety gates (JDK 8 compatible)
+        run: |
+          mkdir -p test_ota
+          javac -encoding UTF-8 -source 8 -target 8 -d test_ota \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaCandidateGate.java \
+            akai-remote-tests/OtaCandidateGateTest.java
+          java -cp test_ota it.akai.customremote.OtaCandidateGateTest
+          echo "OTA remains disabled: these tests only validate release metadata; no network, installer, or device actions."
+
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |
           echo "=== Compiling Native JNI Driver (uinput_jni.c) for ARMv7 ==="
