@@ -7,6 +7,7 @@ import it.akai.customremote.ai.AkaiMemoryEngine;
 import it.akai.customremote.ai.KeystoreSecurityHelper;
 import it.akai.customremote.ai.LocalIntentParser;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
+import it.akai.customremote.ai.GoalEvidenceVerifier;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
