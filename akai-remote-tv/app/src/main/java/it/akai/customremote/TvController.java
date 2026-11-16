@@ -280,7 +280,9 @@ public class TvController {
     public CommandResult launchAppPackage(String pkg, String appName) {
         try {
             PackageManager pm = context.getPackageManager();
-            Intent intent = pm.getLaunchIntentForPackage(pkg);
+            // TV-native applications may expose only LEANBACK_LAUNCHER, not a phone launcher.
+            Intent intent = pm.getLeanbackLaunchIntentForPackage(pkg);
+            if (intent == null) intent = pm.getLaunchIntentForPackage(pkg);
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 context.startActivity(intent);
