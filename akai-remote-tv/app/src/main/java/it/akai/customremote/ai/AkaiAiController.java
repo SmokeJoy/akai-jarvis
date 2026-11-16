@@ -882,6 +882,13 @@ public class AkaiAiController {
             }
 
             JSONObject prefs = memoryEngine.getAllPreferences();
+            // Retain only relevant explicitly remembered facts; do not upload
+            // the entire preference database. Reached only after owner enabled
+            // cloud context consent and configured the provider.
+            try {
+                prefs.put("agent_relevant_facts",
+                        AgentFactMemory.relevantFacts(memoryEngine, query, 3));
+            } catch (Exception ignored) {}
             JSONArray convHistory = memoryEngine.getRecentConversations(3);
             String redactedContextPrompt = initialSnap.toRedactedMinimalContextPrompt();
             AiProviderAdapter.AiResponse planRes = aiAdapter.planActionSequence(query, redactedContextPrompt, prefs, convHistory);
@@ -1015,6 +1022,10 @@ public class AkaiAiController {
         if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
             String reflectorContext = buildReflectorContext(postSnap, candidateActions, execRes);
             JSONObject prefs = memoryEngine.getAllPreferences();
+            try {
+                prefs.put("agent_relevant_facts",
+                        AgentFactMemory.relevantFacts(memoryEngine, query, 3));
+            } catch (Exception ignored) {}
             JSONArray convHistory = memoryEngine.getRecentConversations(3);
             AiProviderAdapter.AiResponse retryRes = aiAdapter.planActionSequence(
                     query + " [RETRY_DIFFERENT_PLAN]", reflectorContext, prefs, convHistory);
