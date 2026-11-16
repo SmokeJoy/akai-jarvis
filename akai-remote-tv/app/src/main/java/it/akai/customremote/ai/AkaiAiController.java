@@ -673,7 +673,7 @@ public class AkaiAiController {
                 return completeAndSpeak(result, query, parsed.responseMessage,
                         "MEMORY_HANDLED", parsed.intentKey, 0, 0.0, speak, startTime);
             }
-            Log.i(TAG, "Fast-Path/SQLite match: " + parsed.intentKey + " (" + parsed.source + ")");
+            Log.i(TAG, "Fast-Path/SQLite match (key redacted; source=" + parsed.source + ")");
             int snapshotCount = 0;
             long waitElapsedMs = 0L;
 
@@ -736,7 +736,7 @@ public class AkaiAiController {
                 if (verified && cmdRes.success) {
                     memoryEngine.recordProcedureSuccess(parsed.intentKey);
                 } else {
-                    Log.w(TAG, "Verification failed for procedure: " + parsed.intentKey);
+                    Log.w(TAG, "Verification failed for procedural skill (key redacted)");
                     memoryEngine.recordProcedureFailure(parsed.intentKey);
                 }
             }
@@ -905,7 +905,7 @@ public class AkaiAiController {
 
                 // Caso A: Domanda puramente conversazionale -> 0 azioni hardware richieste
                 if (planRes.actions == null || planRes.actions.length() == 0) {
-                    Log.i(TAG, "Conversational dialog response from AI provider: " + planReply);
+                    Log.i(TAG, "Conversational dialog response received (content redacted)");
                     memoryEngine.incrementStat("cloud_ai_calls", 1);
                     memoryEngine.incrementStat("prompt_tokens", promptTokens);
                     memoryEngine.incrementStat("completion_tokens", compTokens);
@@ -1118,7 +1118,7 @@ public class AkaiAiController {
                     candidateCondition,
                     "1.0"
             );
-            Log.i(TAG, "SUCCESS! New verified procedure saved to SQLite: " + candidateKey);
+            Log.i(TAG, "Verified procedural skill saved to SQLite (key redacted)");
         }
 
         // Aggiornamento statistiche d'uso
