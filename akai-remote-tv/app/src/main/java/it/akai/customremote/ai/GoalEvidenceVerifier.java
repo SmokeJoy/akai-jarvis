@@ -66,7 +66,7 @@ public final class GoalEvidenceVerifier {
         Verdict observed = verify(goal, snapshot);
         if (!observed.satisfied) return observed;
         String q = normalize(goal);
-        boolean compound = has(q, "poi") || (has(q, " e ")
+        boolean compound = has(q, "poi") || (has(q, "e")
                 && (has(q, "apri") || has(q, "avvia") || has(q, "vai su")));
         if (compound && successCondition != null) {
             try {
