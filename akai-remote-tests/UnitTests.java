@@ -2705,7 +2705,14 @@ public class UnitTests {
                     Collections.emptyList(), "Cerca", false, false, false);
             ScreenPerceptionEngine.PerceptionSnapshot foundResult = new ScreenPerceptionEngine.PerceptionSnapshot(
                     "com.google.android.youtube.tv", Arrays.asList("Apollo 11 missione"),
-                    Collections.emptyList(), "Apollo 11 missione", false, false, false);
+                    Collections.singletonList(new ScreenPerceptionEngine.ClickableElement(
+                            "Apollo 11 missione", "android.widget.FrameLayout", "youtube_result_tile", null)),
+                    "Apollo 11 missione", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot queryEchoOnly = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Apollo 11"),
+                    Collections.singletonList(new ScreenPerceptionEngine.ClickableElement(
+                            "Apollo 11", "android.widget.EditText", "search_src_text", null)),
+                    "Apollo 11", false, false, false);
             ScreenPerceptionEngine.PerceptionSnapshot playing = new ScreenPerceptionEngine.PerceptionSnapshot(
                     "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
                     Collections.emptyList(), null, false, true, true);
@@ -2721,6 +2728,8 @@ public class UnitTests {
                             "{\"type\":\"contains_text\",\"value\":\"Cerca\"}", searchUiOnly).verified &&
                     GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
                             "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", foundResult).verified &&
+                    !GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
+                            "{\"type\":\"contains_text\",\"value\":\"Apollo 11\"}", queryEchoOnly).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film",
                             "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}", playing).verified &&
                     !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, silentPlayer).verified &&
