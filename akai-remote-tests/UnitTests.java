@@ -2347,8 +2347,8 @@ public class UnitTests {
             snapQueue.clear();
             snapQueue.add(new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8", Collections.emptyList(), Collections.emptyList(), null, false, false, false));
             JSONObject r1a = ctrl37.processQuery("apri YouTube", false);
-            boolean sc1aOk = r1a.optBoolean("success") && r1a.optInt("tokens", -1) == 0 &&
-                    "STATE_VERIFIED".equals(r1a.optString("execution_outcome")) && ctrlHttpCalls.get() == 0;
+            boolean sc1aOk = !r1a.optBoolean("success") && r1a.optInt("tokens", -1) == 0 &&
+                    "COMMAND_SENT".equals(r1a.optString("execution_outcome")) && ctrlHttpCalls.get() == 0;
 
             // Scenario 1a-bis: no observable condition MUST NOT become STATE_VERIFIED.
             // "alza" is a known local volume intent without a success_condition.
@@ -2597,8 +2597,8 @@ public class UnitTests {
                     t2ResHolder[0] != null && "CANCELLED".equals(t2ResHolder[0].optString("status")) &&
                     t2ResHolder[0].optBoolean("cancelled_while_queued") &&
                     t2ResHolder[0].optInt("executed_steps", -1) == 0 &&
-                    rT3 != null && rT3.optBoolean("success") &&
-                    "STATE_VERIFIED".equals(rT3.optString("execution_outcome")) &&
+                    rT3 != null && !rT3.optBoolean("success") &&
+                    "COMMAND_SENT".equals(rT3.optString("execution_outcome")) &&
                     rCancelQueuedOnly.statusCode == 200 && rCancelQueuedOnly.json != null &&
                     !rCancelQueuedOnly.json.optBoolean("active_task_cancelled") &&
                     rCancelQueuedOnly.json.optInt("queued_tasks_invalidated", 0) >= 1 &&
@@ -2612,8 +2612,8 @@ public class UnitTests {
                     "CANCELLED".equals(rPostHookCancel.optString("status")) &&
                     rPostHookCancel.optBoolean("cancelled_while_queued") &&
                     rPostHookCancel.optInt("executed_steps", -1) == 0 &&
-                    rT3Final != null && rT3Final.optBoolean("success") &&
-                    "STATE_VERIFIED".equals(rT3Final.optString("execution_outcome")) &&
+                    rT3Final != null && !rT3Final.optBoolean("success") &&
+                    "COMMAND_SENT".equals(rT3Final.optString("execution_outcome")) &&
                     actionOrder.size() == 3 && "T1:dpad_up".equals(actionOrder.get(0)) &&
                     "YT_EXEC_1:launch_youtube".equals(actionOrder.get(1)) &&
                     "YT_EXEC_2:launch_youtube".equals(actionOrder.get(2)) &&
@@ -2942,7 +2942,8 @@ public class UnitTests {
 
             boolean part2Ok = (rKnownAi.statusCode == 200) &&
                               rKnownAi.json != null &&
-                              rKnownAi.json.optBoolean("success") &&
+                              !rKnownAi.json.optBoolean("success") &&
+                              "COMMAND_SENT".equals(rKnownAi.json.optString("execution_outcome")) &&
                               rKnownAi.json.optInt("tokens", -1) == 0 &&
                               rKnownAi.json.optInt("cloud_calls", -1) == 0 &&
                               rKnownAi.json.optString("source", "").contains("local") &&
