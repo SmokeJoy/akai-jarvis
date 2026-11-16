@@ -10,6 +10,7 @@ import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.GoalEvidenceVerifier;
 import it.akai.customremote.ai.UiClickTargetGate;
 import it.akai.customremote.ai.VisionCapturePolicy;
+import it.akai.customremote.ai.RgbaFramePacker;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -2642,6 +2643,27 @@ public class UnitTests {
                     && !VisionCapturePolicy.withinBudget(1920, 1080, 100)
                     && !VisionCapturePolicy.withinBudget(960, 540, 5000);
 
+            // ImageReader may omit last-row padding: the screenshot row
+            // packer must copy visible RGBA bytes only, within fixed memory bounds.
+            byte[] imagePlane37 = new byte[24]; // 2x2 pixels, rowStride=16, pixelStride=4.
+            for (int i = 0; i < 8; i++) {
+                imagePlane37[i] = (byte) (i + 1);
+                imagePlane37[16 + i] = (byte) (i + 9);
+            }
+            java.nio.ByteBuffer rgba37 = RgbaFramePacker.pack(
+                    java.nio.ByteBuffer.wrap(imagePlane37), 2, 2, 16, 4);
+            boolean rgbaFrameOk = rgba37.remaining() == 16;
+            for (int i = 0; i < 16 && rgbaFrameOk; i++) {
+                rgbaFrameOk = (rgba37.get(i) & 0xff) == (i + 1);
+            }
+            boolean truncatedFrameRejected = false;
+            try {
+                RgbaFramePacker.pack(java.nio.ByteBuffer.allocate(23), 2, 2, 16, 4);
+            } catch (IllegalArgumentException expected) {
+                truncatedFrameRejected = true;
+            }
+            boolean rgbaPackerOk = rgbaFrameOk && truncatedFrameRejected;
+
             // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
             ctrlScenario[0] = "CANCEL_MULTI";
             final List<String> actionOrder = Collections.synchronizedList(new ArrayList<>());
@@ -2856,14 +2878,14 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && safeUiClicksOk && dynamicAppLocalOk && oneShotCapturePolicyOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && safeUiClicksOk && dynamicAppLocalOk && oneShotCapturePolicyOk && rgbaPackerOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
                 System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
                     " mediaPartial=" + scMediaPartialOk + " goalContract=" + goalContractOk +
-                    " safeUiClicks=" + safeUiClicksOk + " localApp=" + dynamicAppLocalOk + " capturePolicy=" + oneShotCapturePolicyOk +
+                    " safeUiClicks=" + safeUiClicksOk + " localApp=" + dynamicAppLocalOk + " capturePolicy=" + oneShotCapturePolicyOk + " rgbaRows=" + rgbaPackerOk +
                     " priv=" + privacyZeroHttpOk + " red=" + redactionOk);
             }
         } catch (Throwable t37) {
