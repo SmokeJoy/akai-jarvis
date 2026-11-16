@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Local Android 5.0+ VectorDrawable: avoid unresolved @android:drawable references in APK badging. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <path
+        android:fillColor="#142C46"
+        android:pathData="M12,12 L84,12 L84,73 L12,73 Z" />
+    <path
+        android:fillColor="#20C9C3"
+        android:pathData="M20,21 L76,21 L76,64 L20,64 Z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M48,73 L48,84 M32,84 L64,84" />
+</vector>
