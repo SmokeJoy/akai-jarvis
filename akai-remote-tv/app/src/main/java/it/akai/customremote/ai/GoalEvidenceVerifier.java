@@ -89,7 +89,9 @@ public final class GoalEvidenceVerifier {
             }
             if ("contains_text".equals(type)) {
                 String expected = condition.optString("value", "");
-                if (isGenericNavigationText(expected) || !titleHasGoalEvidence(goal, expected)) {
+                if (isGenericNavigationText(expected)
+                        || !titleHasGoalEvidence(goal, expected)
+                        || !hasClickableResult(snapshot, expected)) {
                     return no("SEARCH_RESULT_NOT_EVIDENCED");
                 }
             } else if ("any_of_texts".equals(type)) {
@@ -100,7 +102,8 @@ public final class GoalEvidenceVerifier {
                         String expected = values.optString(i, "");
                         if (!isGenericNavigationText(expected)
                                 && titleHasGoalEvidence(goal, expected)
-                                && snapshot.containsText(expected, false)) {
+                                && snapshot.containsText(expected, false)
+                                && hasClickableResult(snapshot, expected)) {
                             targetObserved = true;
                             break;
                         }
@@ -167,16 +170,40 @@ public final class GoalEvidenceVerifier {
         return v.isEmpty() || v.equals("cerca") || v.equals("search")
                 || v.equals("youtube") || v.equals("home") || v.equals("video")
                 || v.equals("risultati") || v.equals("ricerca")
-                || v.equals("play") || v.equals("riproduci");
+                || v.equals("play") || v.equals("riproduci")
+                || v.equals("film") || v.equals("musica")
+                || v.equals("canzone") || v.equals("titolo")
+                || v.equals("diretta") || v.equals("risultato");
+    }
+
+    /**
+     * Search-field echoes are not search results. Require an accessible,
+     * clickable, non-EditText result tile matching the requested content.
+     * When an app exposes no result nodes, report UNVERIFIED.
+     */
+    private static boolean hasClickableResult(ScreenPerceptionEngine.PerceptionSnapshot snapshot, String expected) {
+        if (snapshot.clickableElements == null || expected == null) return false;
+        String needle = expected.toLowerCase(Locale.ITALIAN).trim();
+        if (needle.isEmpty()) return false;
+        for (ScreenPerceptionEngine.ClickableElement item : snapshot.clickableElements) {
+            if (item == null || item.text == null) continue;
+            String className = item.className == null ? "" : item.className.toLowerCase(Locale.ITALIAN);
+            if (className.contains("edittext") || className.contains("searchview")) continue;
+            if (item.text.toLowerCase(Locale.ITALIAN).contains(needle)) return true;
+        }
+        return false;
     }
 
     /** At least one substantial content word in the expected title must be in the actual goal. */
     private static boolean titleHasGoalEvidence(String goal, String title) {
         if (title == null || goal == null) return false;
-        String[] words = title.toLowerCase(Locale.ITALIAN).split("[^\\p{L}\\p{N}]+");
-        for (String word : words) {
-            if (word.length() >= 4 && !isGenericNavigationText(word)
-                    && goal.contains(word)) return true;
+        String[] expectedWords = title.toLowerCase(Locale.ITALIAN).split("[^\\p{L}\\p{N}]+");
+        String[] goalWords = goal.toLowerCase(Locale.ITALIAN).split("[^\\p{L}\\p{N}]+");
+        for (String expected : expectedWords) {
+            if (expected.length() < 4 || isGenericNavigationText(expected)) continue;
+            for (String observed : goalWords) {
+                if (expected.equals(observed)) return true;
+            }
         }
         return false;
     }
