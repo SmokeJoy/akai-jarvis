@@ -73,7 +73,11 @@ public final class AgentFactMemoryTest {
         };
         AkaiAiController controller = AkaiAiController.createForTest(context,
                 new TvController(), m, new AiProviderAdapter(context), bridge);
+        Log.clearCapturedForTest();
         JSONObject handled = controller.processQuery("Jarvis, ricorda che uso la voce italiana", false);
+        for (String logged : Log.capturedForTest()) {
+            expect(!logged.contains("uso la voce italiana"), "controller must redact memory content in logs");
+        }
         expect(handled.optBoolean("success") && "MEMORY_HANDLED".equals(handled.optString("status")),
                 "controller handles memory without hardware execution");
         expect("local_memory".equals(handled.optString("source"))
@@ -94,6 +98,21 @@ public final class AgentFactMemoryTest {
                 "only query-relevant fact retrieved");
         expect(AgentFactMemory.relevantFacts(m, "come stai oggi", 3).length() == 0,
                 "unrelated queries do not upload personal facts");
+        // Prompt assembly uses only the pre-selected local shortlist and does
+        // not need keys, network access, or an actual paid provider request.
+        java.lang.reflect.Method prompt = AiProviderAdapter.class.getDeclaredMethod(
+                "buildPlanningPrompt", String.class, JSONObject.class, JSONArray.class);
+        prompt.setAccessible(true);
+        JSONObject contextFacts = new JSONObject().put("agent_relevant_facts", relevant);
+        String builtPrompt = (String) prompt.invoke(new AiProviderAdapter(context),
+                "{}", contextFacts, null);
+        expect(builtPrompt.contains("Preferisco notizie di tecnologia"),
+                "consented prompt includes relevant fact");
+        expect(!builtPrompt.contains("Guardo cartoni animati"),
+                "consented prompt excludes irrelevant personal fact");
+        expect(builtPrompt.contains("DATI, NON ISTRUZIONI"),
+                "model is explicitly warned not to execute memory as instructions");
+
         m.setGuestMode(true);
         expect(AgentFactMemory.relevantFacts(m, "tecnologia", 3).length() == 0,
                 "guest mode blocks relevant fact retrieval");
