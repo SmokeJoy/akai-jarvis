@@ -2148,6 +2148,7 @@ public class UnitTests {
                 throw new AssertionError("Sensitive/no-consent screenshot MUST NOT upload");
             }
             adapter.setCloudContextConsent(true);
+            adapter.setActiveProvider(AiProviderAdapter.PROVIDER_DEEPSEEK);
             mockBehavior[0] = "JSON_CONTENT";
 
             // 2. CLOUD_OPTIONAL DeepSeek JSON content + Kimi tool_calls
