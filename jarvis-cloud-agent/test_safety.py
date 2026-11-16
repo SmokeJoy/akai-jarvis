@@ -29,6 +29,16 @@ class SafetyTests(unittest.TestCase):
                 with self.subTest(path=path), self.assertRaises(DeveloperError):
                     target_path(Path(directory), path)
 
+    def test_reject_nested_and_malformed_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for path in (
+                "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/nested/TestSkill.java",
+                "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/Bad-Name.java",
+                "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/Untrusted\\nName.java",
+            ):
+                with self.subTest(path=path), self.assertRaises(DeveloperError):
+                    target_path(Path(directory), path)
+
     def test_generated_source_must_use_exact_package_and_class(self):
         def proposal(source):
             return {"changes": [{"path": self.TARGET, "content": source}]}
