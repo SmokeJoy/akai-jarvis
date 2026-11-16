@@ -91,6 +91,7 @@ jobs:
           mkdir -p test_bin
           javac -encoding UTF-8 -d test_bin \
             akai-remote-tests/host_mock/android/content/*.java \
+            akai-remote-tests/host_mock/android/content/pm/*.java \
             akai-remote-tests/host_mock/android/graphics/*.java \
             akai-remote-tests/host_mock/android/media/*.java \
             akai-remote-tests/host_mock/android/security/keystore/*.java \
