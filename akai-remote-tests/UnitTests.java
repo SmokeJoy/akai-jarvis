@@ -5,6 +5,7 @@ import it.akai.customremote.ai.AiProviderAdapter;
 import it.akai.customremote.ai.AkaiAiController;
 import it.akai.customremote.ai.AkaiMemoryEngine;
 import it.akai.customremote.ai.KeystoreSecurityHelper;
+import it.akai.customremote.ai.GoalEvidenceVerifier;
 import it.akai.customremote.ai.LocalIntentParser;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.qr.QrCode;
@@ -2676,9 +2677,39 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
+            // Scenario A2: even a planner-claimed valid condition is insufficient
+            // if it proves only navigation rather than the requested final goal.
+            ScreenPerceptionEngine.PerceptionSnapshot searchUiOnly = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Cerca", "YouTube"),
+                    Collections.emptyList(), "Cerca", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot foundResult = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Apollo 11 missione"),
+                    Collections.emptyList(), "Apollo 11 missione", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot playing = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot silentPlayer = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
+                    Collections.emptyList(), null, false, true, false);
+            ScreenPerceptionEngine.PerceptionSnapshot sensitivePlaying = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "com.google.android.youtube.tv", Arrays.asList("Demo Film"),
+                    Collections.emptyList(), null, true, true, true);
+            String playingCondition = "{\\"type\\":\\"player_active\\",\\"expected_text\\":\\"Demo Film\\"}";
+            boolean goalEvidenceGateOk =
+                    !GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
+                            "{\\"type\\":\\"contains_text\\",\\"value\\":\\"Cerca\\"}", searchUiOnly).verified &&
+                    GoalEvidenceVerifier.check("cerca Apollo 11 su youtube",
+                            "{\\"type\\":\\"contains_text\\",\\"value\\":\\"Apollo 11\\"}", foundResult).verified &&
+                    !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film",
+                            "{\\"type\\":\\"pkg_is\\",\\"value\\":\\"com.google.android.youtube.tv\\"}", playing).verified &&
+                    !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, silentPlayer).verified &&
+                    GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, playing).verified &&
+                    !GoalEvidenceVerifier.check("apri YouTube e riproduci Demo Film", playingCondition, sensitivePlaying).verified &&
+                    !GoalEvidenceVerifier.check("apri YouTube", null, playing).verified;
+
+            test37Passed = goalEvidenceGateOk && sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
-                System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
+                System.err.println("[DEBUG Test 37] goalEvidence=" + goalEvidenceGateOk + " sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
