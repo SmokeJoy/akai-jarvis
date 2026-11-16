@@ -1071,7 +1071,8 @@ public class AkaiAiController {
         // PASSO 4: SALVATAGGIO IN MEMORIA PROCEDURALE SQLITE (SOLO STATE_VERIFIED)
         // ---------------------------------------------------------------------
         boolean newlyLearned = false;
-        if (OUTCOME_STATE_VERIFIED.equals(executionOutcome)) {
+        if (OUTCOME_STATE_VERIFIED.equals(executionOutcome)
+                && AgentSkillGate.canLearn(verified, candidateActions, candidateCondition)) {
             if (candidateKey == null || candidateKey.trim().isEmpty()) candidateKey = generateIntentKey(query);
             String initialState = "{\"pkg\":\"" + (initialSnap != null ? initialSnap.foregroundPackage : "") + "\"}";
 
