@@ -83,15 +83,63 @@ New-Item -ItemType Directory -Force -Path $libDir | Out-Null
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 New-Item -ItemType Directory -Force -Path $releaseOutputDir | Out-Null
 
-# 2. Compilazione Driver JNI nativo ARMv7
-Write-Host "[2/8] Compilazione Driver nativo C (libakai_uinput.so) con Clang NDK..."
+# 2. Driver JNI ARMv7 (NDK se presente; fallback dal backup APK firmato e verificato)
+Write-Host "[2/8] Preparazione driver JNI ARMv7..."
 $soTarget = Join-Path $libDir "libakai_uinput.so"
-& cmd.exe /c "`"$clang`" -shared -fPIC -O2 -llog `"$jniSrc`" -o `"$soTarget`""
-if (-not (Test-Path $soTarget)) {
-    Write-Host "ERRORE durante la compilazione del driver JNI nativo." -ForegroundColor Red
-    exit 1
+if (Test-Path $clang) {
+    Write-Host "      NDK rilevato: compilo driver da sorgente..."
+    & cmd.exe /c "`"$clang`" -shared -fPIC -O2 -llog `"$jniSrc`" -o `"$soTarget`""
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $soTarget) -or (Get-Item $soTarget).Length -lt 1024) {
+        throw 'Driver JNI: compilazione NDK fallita; non uso un fallback implicito a compilazione fallita.'
+    }
+} else {
+    Write-Host "      NDK assente: riuso il driver del backup originale, solo se sorgente invariato." -ForegroundColor Yellow
+
+    # Identita' esatta di sorgente C tra beta testata PR #1 e A1.
+    $expectedJniBlob = "ffe04f6b6861cf1e253bbfbf113cbb8364c22f9b"
+    $jniBlob = (& git -C $workspace hash-object -- $jniSrc 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $jniBlob -ne $expectedJniBlob) {
+        throw "Driver JNI sorgente cambiato ($jniBlob): fallback APK non consentito."
+    }
+
+    if (-not $env:USERPROFILE) { throw "USERPROFILE assente: backup APK non localizzabile." }
+    $baselineApk = Join-Path (Join-Path $env:USERPROFILE "JARVIS-backup-TV") "jarvis-originale.apk"
+    if (-not (Test-Path $baselineApk) -or (Get-Item $baselineApk).Length -lt 1024) {
+        throw "APK originale non trovato/valido: $baselineApk. Non scaricare DLL/SO casuali."
+    }
+
+    # Verifica crittografica dell'APK originale prima di estrarre librerie.
+    $verifyBaseline = & $java -jar $apksignerJar verify --print-certs $baselineApk 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Firma APK originale NON verificata: $verifyBaseline" }
+    $signerLine = ($verifyBaseline | Select-String 'Signer #1 certificate SHA-256 digest:\s*([a-fA-F0-9]{64})' | Select-Object -First 1)
+    if (-not $signerLine) { throw "Certificato APK originale non riconosciuto." }
+    $expectedSigner = "21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed"
+    if ($signerLine.Matches[0].Groups[1].Value.ToLowerInvariant() -ne $expectedSigner) {
+        throw "Firma dell'APK di backup DIVERSA da quella della TV: fallback bloccato."
+    }
+
+    # Il backup deve essere il pacchetto noto della beta, non un altro APK firmato dalla stessa chiave.
+    $aapt = Join-Path $buildToolsDir 'aapt.exe'
+    if (-not (Test-Path $aapt)) { throw "aapt.exe mancante: non posso validare il pacchetto del backup." }
+    $badging = (& $aapt dump badging $baselineApk 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0 -or $badging -notmatch "package:\s+name='it\.akai\.customremote'\s+versionCode='1'") {
+        throw "APK originale non e' il pacchetto/versionCode 1 atteso: fallback bloccato."
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($baselineApk)
+    try {
+        $entry = $zip.GetEntry('lib/armeabi-v7a/libakai_uinput.so')
+        if ($null -eq $entry -or $entry.Length -lt 1024 -or $entry.Length -gt 5000000) {
+            throw "Driver libakai_uinput.so ARMv7 mancante o dimensione anomala nel backup."
+        }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $soTarget)
+    } finally {
+        $zip.Dispose()
+    }
+    Write-Host "      Driver JNI riutilizzato dal backup firmato; sorgente C invariato." -ForegroundColor Green
 }
-Write-Host "      Libreria prodotta: $soTarget ($((Get-Item $soTarget).Length) bytes)" -ForegroundColor Green
+Write-Host "      Driver pronto: $soTarget ($((Get-Item $soTarget).Length) bytes)" -ForegroundColor Green
 
 # 3. Compilazione risorse aapt2
 Write-Host "[3/8] Compilazione risorse con aapt2..."
