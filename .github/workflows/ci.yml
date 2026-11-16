@@ -259,6 +259,8 @@ jobs:
           # Ensure the AndroidManifest app icon/label can actually resolve, not only package/version.
           "$AAPT2" dump badging build_ci/app-ci-test-nondistributable.apk > build_ci/ci_badging.txt
           grep -q "package: name='it.akai.customremote'" build_ci/ci_badging.txt
+          grep -q "versionCode='3'" build_ci/ci_badging.txt || (echo "FATAL: A2 preview must have versionCode 3" && exit 1)
+          grep -q "versionName='1.2.0-a2-preview'" build_ci/ci_badging.txt || (echo "FATAL: wrong A2 versionName" && exit 1)
           grep -q "^application: label=" build_ci/ci_badging.txt
           echo "APK manifest package and application icon resources resolve successfully."
 
