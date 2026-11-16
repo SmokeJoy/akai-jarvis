@@ -13,7 +13,9 @@ public class PackageManager {
             "com.android.tv.settings",
             "it.mediaset.infinitytv",
             "org.example.thirdparty",
-            "org.example.leanbackonly"
+            "org.example.leanbackonly",
+            "org.example.duplicateone",
+            "org.example.duplicatetwo"
     ));
 
     public List<ApplicationInfo> getInstalledApplications(int flags) {
@@ -30,5 +32,19 @@ public class PackageManager {
 
     public Object getLeanbackLaunchIntentForPackage(String pkg) {
         return installed.contains(pkg) ? new Object() : null;
+    }
+
+    public CharSequence getApplicationLabel(ApplicationInfo app) {
+        if (app == null || app.packageName == null) return "";
+        switch (app.packageName) {
+            case "org.example.thirdparty": return "Nova Player";
+            case "org.example.leanbackonly": return "Leanback Gallery";
+            case "org.example.duplicateone":
+            case "org.example.duplicatetwo": return "App Duplicata";
+            case "com.google.android.youtube.tv": return "YouTube";
+            case "it.mediaset.infinitytv": return "Mediaset Infinity";
+            case "com.android.tv.settings": return "Impostazioni";
+            default: return app.packageName;
+        }
     }
 }
