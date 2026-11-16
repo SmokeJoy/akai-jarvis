@@ -76,6 +76,32 @@ public final class GoalEvidenceVerifier {
                         || "any_of_pkgs".equals(type)) {
                     return denied("multi_step", "L'apertura dell'app e' soltanto uno step intermedio del compito");
                 }
+                // A visible Search button does NOT prove that the requested
+                // search ran or returned results.
+                if (has(q, "cerca") && "contains_text".equals(type)) {
+                    String value = normalize(condition.optString("value", ""));
+                    if ("cerca".equals(value) || "search".equals(value)
+                            || "cerca su youtube".equals(value)) {
+                        return denied("search_results", "Il pulsante Cerca visibile non prova risultati della ricerca");
+                    }
+                }
+                if (has(q, "cerca") && "any_of_texts".equals(type)) {
+                    org.json.JSONArray values = condition.optJSONArray("values");
+                    if (values != null && values.length() > 0) {
+                        boolean onlySearchLabels = true;
+                        for (int i = 0; i < values.length(); i++) {
+                            String value = normalize(values.optString(i, ""));
+                            if (!"cerca".equals(value) && !"search".equals(value)
+                                    && !"cerca su youtube".equals(value)) {
+                                onlySearchLabels = false;
+                                break;
+                            }
+                        }
+                        if (onlySearchLabels) {
+                            return denied("search_results", "La schermata Ricerca non prova il contenuto cercato");
+                        }
+                    }
+                }
             } catch (Exception e) {
                 return denied("multi_step", "Condizione finale malformata");
             }
