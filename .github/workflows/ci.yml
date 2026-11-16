@@ -2,9 +2,9 @@ name: AKAI JARVIS CI
 
 on:
   push:
-    branches: [ main, "fix/*" ]
+    branches: [ main, "fix/*", "feat/jarvis-a2-goal-verifier" ]
   pull_request:
-    branches: [ main, "fix/*", "feat/jarvis-agent-a0-memory-learning" ]
+    branches: [ main, "fix/*", "feat/jarvis-agent-a0-memory-learning", "feat/jarvis-a1-integration-candidate" ]
 
 jobs:
   audit-and-tests:
@@ -114,6 +114,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/KeystoreSecurityHelper.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/GoalEvidenceVerifier.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AkaiAiController.java \
             akai-remote-tests/UnitTests.java \
             akai-remote-tests/AgentSkillGateTest.java \
