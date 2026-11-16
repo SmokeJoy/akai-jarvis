@@ -2194,6 +2194,7 @@ public class UnitTests {
 
             final AtomicInteger ctrlHttpCalls = new AtomicInteger(0);
             final String[] ctrlScenario = new String[]{"DISCOVERY_YT"};
+            final AtomicInteger a2ReplanCallCount = new AtomicInteger(0);
             mockCtrlServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             mockCtrlServer.createContext("/v1/chat/completions", exchange -> {
                 try {
@@ -2228,6 +2229,22 @@ public class UnitTests {
                                    .put("actions", new JSONArray().put(new JSONObject().put("type", "press_key").put("key", "dpad_down")))
                                    .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Uscita digitale"));
                         }
+                    } else if ("A2_TWO_REPLANS".equals(sc)) {
+                        int attempt = a2ReplanCallCount.incrementAndGet();
+                        JSONArray actions = new JSONArray();
+                        if (attempt <= 2) {
+                            actions.put(new JSONObject().put("type", "press_key")
+                                    .put("key", attempt == 1 ? "dpad_left" : "dpad_right"));
+                        } else {
+                            actions.put(new JSONObject().put("type", "launch_app")
+                                    .put("pkg", "com.android.tv.settings"));
+                        }
+                        payload.put("reply", "Controllo obiettivo finale alla prova " + attempt)
+                               .put("intent_key", "a2_two_replans")
+                               .put("learn_procedure", true)
+                               .put("actions", actions)
+                               .put("success_condition", new JSONObject()
+                                       .put("type", "pkg_is").put("value", "com.android.tv.settings"));
                     } else if ("DUPLICATE_REPLAN".equals(sc)) {
                         payload.put("reply", "Piano fisso identico")
                                .put("intent_key", "dup_plan_key")
@@ -2459,6 +2476,40 @@ public class UnitTests {
             JSONObject rDup = ctrlFastFail.processQuery("prova azione ripetuta bloccata", false);
             boolean dupRejectedOk = !rDup.optBoolean("success") && rDup.optBoolean("replan_rejected_duplicate") &&
                     rDup.optInt("replan_count", -1) == 0 && mem37.getSavedProceduresCount() == 2;
+
+            // Scenario A2: two different retry plans, no duplicate replay,
+            // verify only the final actual UI state after the third plan.
+            ctrlScenario[0] = "A2_TWO_REPLANS";
+            a2ReplanCallCount.set(0);
+            final AtomicInteger a2ExecutedPlans = new AtomicInteger(0);
+            AkaiAiController.PerceptionAndExecutionBridge a2RetryBridge = new AkaiAiController.PerceptionAndExecutionBridge() {
+                @Override
+                public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
+                    boolean finalState = a2ExecutedPlans.get() >= 3;
+                    return new ScreenPerceptionEngine.PerceptionSnapshot(
+                            finalState ? "com.android.tv.settings" : "it.akai.customhome.v8",
+                            Collections.singletonList(finalState ? "Impostazioni" : "Home"),
+                            Collections.emptyList(), null, false, false, false);
+                }
+                @Override
+                public TvController.CommandResult executeActions(JSONArray actions) {
+                    int attempt = a2ExecutedPlans.incrementAndGet();
+                    return attempt >= 3
+                            ? new TvController.CommandResult(true, "Final UI reached")
+                            : new TvController.CommandResult(false, "Intermediate command failed", true);
+                }
+                @Override
+                public void sleepMs(long ms) {}
+            };
+            AkaiAiController ctrlA2Retry = AkaiAiController.createForTest(
+                    ctx37, new TvController(), mem37, adapter37, a2RetryBridge);
+            JSONObject rTwoReplans = ctrlA2Retry.processQuery("apri impostazioni alla terza prova", false);
+            boolean twoReplansOk = rTwoReplans.optBoolean("success")
+                    && "STATE_VERIFIED".equals(rTwoReplans.optString("execution_outcome"))
+                    && rTwoReplans.optInt("replan_count", -1) == 2
+                    && rTwoReplans.optInt("cloud_calls", -1) == 3
+                    && a2ReplanCallCount.get() == 3
+                    && a2ExecutedPlans.get() == 3;
 
             // Scenario 3: COMMAND_SENT non salvato in SQLite (quando exec ok ma screen unchanged)
             ctrlScenario[0] = "UNVERIFIED_STAY";
@@ -2752,9 +2803,10 @@ public class UnitTests {
                     GoalEvidenceVerifier.looksActionable("Mi cerchi Apollo 11") &&
                     !GoalEvidenceVerifier.looksActionable("Come si apre YouTube?");
 
-            test37Passed = fakeDoneBlockedOk && goalEvidenceGateOk && sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = twoReplansOk && fakeDoneBlockedOk && goalEvidenceGateOk && sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
-                System.err.println("[DEBUG Test 37] fakeDoneBlocked=" + fakeDoneBlockedOk + " goalEvidence=" + goalEvidenceGateOk + " sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
+                System.err.println("[DEBUG Test 37] twoReplans=" + twoReplansOk
+                        + " fakeDoneBlocked=" + fakeDoneBlockedOk + " goalEvidence=" + goalEvidenceGateOk + " sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
