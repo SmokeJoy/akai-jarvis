@@ -40,7 +40,7 @@ public final class UiClickTargetGate {
         if (value == null) return "";
         String s = Normalizer.normalize(value.trim().toLowerCase(Locale.ITALIAN),
                 Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
-        return s.replaceAll("\\s+", " ");
+        return s.replaceAll("[^a-z0-9]+", " ").replaceAll("\\s+", " ").trim();
     }
 
     private static boolean highRisk(String label) {
