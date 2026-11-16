@@ -402,6 +402,30 @@ public class AkaiAiController {
         return new WaitObservation(snap, ready, waited, snaps);
     }
 
+    /**
+     * Validate every AI-originating UI click immediately before dispatch.
+     * Never trust a click target solely because it was part of an earlier LLM plan.
+     * "exact" is set by this gate, not taken from the model's action payload.
+     */
+    private JSONArray verifiedClickAction(JSONObject step,
+                                           ScreenPerceptionEngine.PerceptionSnapshot snap) {
+        UiClickTargetGate.Decision decision = UiClickTargetGate.check(snap, step.optString("text", ""));
+        if (!decision.allowed) {
+            Log.w(TAG, "A2 UI click refused: " + decision.reason);
+            return null;
+        }
+        try {
+            JSONObject checked = new JSONObject(step.toString());
+            checked.put("exact", decision.exact);
+            JSONArray one = new JSONArray();
+            one.put(checked);
+            return one;
+        } catch (Exception e) {
+            Log.w(TAG, "A2 UI click validation failed");
+            return null;
+        }
+    }
+
     private StepwiseResult executeActionsStepwise(JSONArray actions, TaskToken token) {
         if (actions == null || actions.length() == 0) {
             return new StepwiseResult(new TvController.CommandResult(false, "Nessuna azione da eseguire"),
@@ -424,11 +448,25 @@ public class AkaiAiController {
                 return new StepwiseResult(new TvController.CommandResult(true, "Attesa completata"),
                         obs.snapshotCount, obs.elapsedMs, 1, false, obs.snapshot);
             }
-            TvController.CommandResult singleRes = bridge.executeActions(actions);
+            JSONArray toExecute = actions;
+            ScreenPerceptionEngine.PerceptionSnapshot targetSnapshot = null;
+            int captured = 0;
+            String singleType = singleStep != null ? singleStep.optString("type", "") : "";
+            if ("click_text".equals(singleType) || "click_accessibility_node".equals(singleType)) {
+                targetSnapshot = bridge.capture(context);
+                captured = 1;
+                toExecute = verifiedClickAction(singleStep, targetSnapshot);
+                if (toExecute == null) {
+                    return new StepwiseResult(new TvController.CommandResult(false,
+                            "Azione UI non autorizzata: elemento non visibile, ambiguo o sensibile"),
+                            captured, 0L, 0, false, targetSnapshot);
+                }
+            }
+            TvController.CommandResult singleRes = bridge.executeActions(toExecute);
             int executedOne = (singleRes != null && singleRes.success) ? 1 : 0;
             return new StepwiseResult(
                     singleRes != null ? singleRes : new TvController.CommandResult(false, "Errore esecuzione"),
-                    0, 0L, executedOne, false, null);
+                    captured, 0L, executedOne, false, targetSnapshot);
         }
 
         int executed = 0;
@@ -548,7 +586,21 @@ public class AkaiAiController {
             }
 
             JSONArray single = new JSONArray();
-            single.put(step);
+            if ("click_text".equals(type) || "click_accessibility_node".equals(type)) {
+                // Fresh observation before any click; the UI may have changed
+                // after the previous wait, animation or network response.
+                lastSnap = bridge.capture(context);
+                snapshots++;
+                single = verifiedClickAction(step, lastSnap);
+                if (single == null) {
+                    return new StepwiseResult(
+                            new TvController.CommandResult(false,
+                                    "Azione UI non autorizzata: elemento non visibile, ambiguo o sensibile"),
+                            snapshots, waitElapsed, executed, false, lastSnap);
+                }
+            } else {
+                single.put(step);
+            }
             TvController.CommandResult stepRes = bridge.executeActions(single);
             executed++;
             if (stepRes == null || !stepRes.success) {
