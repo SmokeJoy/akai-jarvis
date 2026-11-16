@@ -591,7 +591,8 @@ public class AkaiAiController {
             }
             return wrapper.toString();
         } catch (Exception e) {
-            return postSnap != null ? postSnap.toRedactedMinimalContextPrompt() : "{\"replan_attempt\":1}";
+            return postSnap != null ? postSnap.toRedactedMinimalContextPrompt()
+                    : "{\"replan_attempt\":" + attemptNumber + "}";
         }
     }
 
@@ -786,8 +787,8 @@ public class AkaiAiController {
                 result.put("tokens", 0);
                 result.put("cost_eur", 0.0);
                 result.put("verified", verified);
-                result.put("verification_reason", GoalEvidenceVerifier.check(query, parsed.successCondition,
-                        verifiedSnapshot).reason);
+                result.put("verification_reason", !cmdRes.success ? "ACTION_FAILED" :
+                        GoalEvidenceVerifier.check(query, parsed.successCondition, verifiedSnapshot).reason);
                 result.put("execution_outcome", executionOutcome);
                 result.put("replan_count", 0);
                 result.put("cloud_calls", 0);
@@ -1220,7 +1221,8 @@ public class AkaiAiController {
                 result.put("budget_warning", planWarning);
             }
             result.put("verified", verified);
-            result.put("verification_reason", GoalEvidenceVerifier.check(query, candidateCondition, postSnap).reason);
+            result.put("verification_reason", !execRes.success ? "ACTION_FAILED" :
+                    GoalEvidenceVerifier.check(query, candidateCondition, postSnap).reason);
             result.put("execution_outcome", executionOutcome);
             result.put("replan_count", replanCount);
             result.put("replan_rejected_duplicate", replanRejectedDuplicate);
