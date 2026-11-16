@@ -723,11 +723,14 @@
                 }, query);
                 return false;
             } else {
+                // Preserve the server's actionable diagnostic and stage rather
+                // than replacing every API 400 with a generic error message.
                 displayAiResponse({
+                    ...data,
                     success: false,
-                    status: 'ERROR',
-                    reply: data.error || 'Errore nella richiesta alla TV',
-                    verified: false
+                    verified: false,
+                    status: data.status || 'ERROR',
+                    reply: data.reply || data.error || 'Errore nella richiesta alla TV'
                 }, query);
                 return false;
             }
