@@ -257,22 +257,22 @@ public class LocalIntentParser {
         if (clean.equals("apri youtube") || clean.equals("avvia youtube") || clean.equals("youtube") || clean.equals("vai su youtube")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "launch_youtube")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "launch_youtube", "Avvia YouTube TV", acts, "Avvio di YouTube TV in corso...", "local_fast_path", null);
+            return new ParsedIntent(true, "launch_youtube", "Avvia YouTube TV", acts, "Avvio di YouTube TV in corso...", "local_fast_path", "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}");
         }
         if (clean.equals("apri raiplay") || clean.equals("avvia raiplay") || clean.equals("raiplay") || clean.equals("vai su raiplay")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "launch_raiplay")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "launch_raiplay", "Avvia RaiPlay", acts, "Avvio di RaiPlay in corso...", "local_fast_path", null);
+            return new ParsedIntent(true, "launch_raiplay", "Avvia RaiPlay", acts, "Avvio di RaiPlay in corso...", "local_fast_path", "{\"type\":\"pkg_is\",\"value\":\"it.rainet.androidtv\"}");
         }
         if (clean.equals("apri mediaset") || clean.equals("avvia mediaset") || clean.equals("mediaset") || clean.equals("infinity") || clean.equals("mediaset infinity")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "launch_mediaset")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "launch_mediaset", "Avvia Mediaset Infinity", acts, "Avvio di Mediaset Infinity in corso...", "local_fast_path", null);
+            return new ParsedIntent(true, "launch_mediaset", "Avvia Mediaset Infinity", acts, "Avvio di Mediaset Infinity in corso...", "local_fast_path", "{\"type\":\"pkg_is\",\"value\":\"it.mediaset.infinitytv\"}");
         }
         if (clean.equals("apri browser") || clean.equals("avvia browser") || clean.equals("browser") || clean.equals("internet") || clean.equals("naviga")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "launch_browser")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "launch_browser", "Avvia TV Bro Browser", acts, "Avvio del browser in corso...", "local_fast_path", null);
+            return new ParsedIntent(true, "launch_browser", "Avvia TV Bro Browser", acts, "Avvio del browser in corso...", "local_fast_path", "{\"type\":\"pkg_is\",\"value\":\"com.phlox.tvwebbrowser\"}");
         }
 
         // -------------------------------------------------------------
