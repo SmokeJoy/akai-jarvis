@@ -309,7 +309,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                     return candidate;
                 }
             }
-            if (c != null) c.close();
+            if (c != null) { c.close(); c = null; }
 
             // Check 2: Match su goal_intent (filtrando procedure personali in Guest Mode)
             String where2 = COL_GOAL_INTENT + "=?";
@@ -322,13 +322,13 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                     return candidate;
                 }
             }
-            if (c != null) c.close();
+            if (c != null) { c.close(); c = null; }
 
             // Check 3: Match se la query contiene l'intent_key memorizzato (es. "metti italia 2")
             String cleanNoSpace = clean.replaceAll("\\s+", "");
             String where3 = guest ? (COL_IS_PERSONAL + "=0") : null;
-            Cursor allProcs = db.query(TABLE_PROCEDURES, null, where3, null, null, null, COL_SUCCESS_COUNT + " DESC");
-            if (allProcs != null && allProcs.moveToFirst()) {
+            try (Cursor allProcs = db.query(TABLE_PROCEDURES, null, where3, null, null, null, COL_SUCCESS_COUNT + " DESC")) {
+                if (allProcs != null && allProcs.moveToFirst()) {
                 do {
                     String ik = allProcs.getString(allProcs.getColumnIndex(COL_INTENT_KEY));
                     String gi = allProcs.getString(allProcs.getColumnIndex(COL_GOAL_INTENT));
@@ -339,7 +339,6 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                             JSONObject res = parseProcedureCursor(allProcs);
                             if (AgentSkillGate.shouldReplay(res.optInt("success_count", 0),
                                     res.optInt("failure_count", 0))) {
-                                allProcs.close();
                                 return res;
                             }
                         }
@@ -351,13 +350,12 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
                             JSONObject res = parseProcedureCursor(allProcs);
                             if (AgentSkillGate.shouldReplay(res.optInt("success_count", 0),
                                     res.optInt("failure_count", 0))) {
-                                allProcs.close();
                                 return res;
                             }
                         }
                     }
                 } while (allProcs.moveToNext());
-                allProcs.close();
+                }
             }
         } catch (Exception e) {
             Log.e(TAG, "Error in findProcedureByGoal: " + e.getMessage());
