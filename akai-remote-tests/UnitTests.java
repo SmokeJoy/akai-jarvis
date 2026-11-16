@@ -8,6 +8,7 @@ import it.akai.customremote.ai.KeystoreSecurityHelper;
 import it.akai.customremote.ai.LocalIntentParser;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.GoalEvidenceVerifier;
+import it.akai.customremote.ai.UiClickTargetGate;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -2426,9 +2427,18 @@ public class UnitTests {
             AkaiAiController.PerceptionAndExecutionBridge replanBridge = new AkaiAiController.PerceptionAndExecutionBridge() {
                 @Override
                 public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
-                    if (execWave[0] >= 2) {
+                    if (execWave[0] >= 3) {
                         return new ScreenPerceptionEngine.PerceptionSnapshot("com.android.tv.settings",
                             Arrays.asList("Audio", "Uscita digitale"), Collections.emptyList(), "Uscita digitale", false, false, false);
+                    }
+                    if (execWave[0] == 2) {
+                        return new ScreenPerceptionEngine.PerceptionSnapshot("com.android.tv.settings",
+                            Collections.singletonList("Audio"), Collections.emptyList(), "Audio", false, false, false);
+                    }
+                    if (execWave[0] == 1) {
+                        return new ScreenPerceptionEngine.PerceptionSnapshot("com.android.tv.settings",
+                            Collections.singletonList("Preferenze del dispositivo"), Collections.emptyList(),
+                            "Preferenze del dispositivo", false, false, false);
                     }
                     return new ScreenPerceptionEngine.PerceptionSnapshot("it.akai.customhome.v8",
                         Collections.singletonList("Home"), Collections.emptyList(), "Home", false, false, false);
@@ -2566,6 +2576,31 @@ public class UnitTests {
                     && GoalEvidenceVerifier.verify("apri YouTube", new ScreenPerceptionEngine.PerceptionSnapshot(
                         "com.google.android.youtube.tv", Collections.singletonList("Home"),
                         Collections.emptyList(), null, false, false, false)).satisfied;
+
+            // A2: authorize clicks only when the latest accessibility tree
+            // shows a unique target; never click a blind, duplicate or high-risk label.
+            ScreenPerceptionEngine.PerceptionSnapshot uiExact = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "org.example.thirdparty", Arrays.asList("Cerca", "Home"),
+                    Collections.singletonList(new ScreenPerceptionEngine.ClickableElement(
+                            "Cerca", "android.widget.Button", "search", new android.graphics.Rect())),
+                    "Cerca", false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot uiAmbiguous = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "org.example.thirdparty", Arrays.asList("Cerca in catalogo", "Cerca nei canali"),
+                    Collections.emptyList(), null, false, false, false);
+            ScreenPerceptionEngine.PerceptionSnapshot uiSensitive = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "org.example.thirdparty", Collections.singletonList("Cerca"),
+                    Collections.emptyList(), null, true, false, false);
+            UiClickTargetGate.Decision exactTarget = UiClickTargetGate.check(uiExact, "Cerca");
+            UiClickTargetGate.Decision partialUnique = UiClickTargetGate.check(uiExact, "Cer");
+            boolean safeUiClicksOk = exactTarget.allowed && exactTarget.exact &&
+                    partialUnique.allowed && !partialUnique.exact &&
+                    !UiClickTargetGate.check(uiAmbiguous, "Cerca").allowed &&
+                    !UiClickTargetGate.check(uiSensitive, "Cerca").allowed &&
+                    !UiClickTargetGate.check(uiExact, "Acquista").allowed &&
+                    !UiClickTargetGate.check(uiExact, "Apri impostazioni").allowed &&
+                    !UiClickTargetGate.check(new ScreenPerceptionEngine.PerceptionSnapshot(
+                            "org.example.thirdparty", Collections.singletonList("Elimina account"),
+                            Collections.emptyList(), null, false, false, false), "Elimina account").allowed;
 
             // Scenario 4d (P1-2): Isolamento concorrenza per-task TaskToken, /api/ai/cancel HTTPS vs 401/426, telecomando non bloccato, & Stop durante replan
             ctrlScenario[0] = "CANCEL_MULTI";
@@ -2781,13 +2816,14 @@ public class UnitTests {
                     !redactedText.contains("mario.rossi@example.com") && !redactedText.contains("sk-secret9876543210") &&
                     !redactedText.contains("333 1234567");
 
-            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && privacyZeroHttpOk && redactionOk;
+            test37Passed = sc1aOk && sc1aNoEvidenceOk && sc1bOk && sc2Ok && dupRejectedOk && sc3Ok && sc4Ok && sc4bOk && sc4cOk && sc4dOk && scMediaPartialOk && goalContractOk && safeUiClicksOk && privacyZeroHttpOk && redactionOk;
             if (!test37Passed) {
                 System.err.println("[DEBUG Test 37] sc1a=" + sc1aOk + " sc1aNoEvidence=" + sc1aNoEvidenceOk + " sc1b=" + sc1bOk + " sc2=" + sc2Ok +
                     " dup=" + dupRejectedOk + " sc3=" + sc3Ok + " sc4=" + sc4Ok +
                     " sc4b=" + sc4bOk + " sc4c=" + sc4cOk + " sc4d=" + sc4dOk +
                     " (conc=" + concIsolationOk + ", repStop=" + replanStopOk + ", order=" + actionOrder + ")" +
                     " mediaPartial=" + scMediaPartialOk + " goalContract=" + goalContractOk +
+                    " safeUiClicks=" + safeUiClicksOk +
                     " priv=" + privacyZeroHttpOk + " red=" + redactionOk);
             }
         } catch (Throwable t37) {
