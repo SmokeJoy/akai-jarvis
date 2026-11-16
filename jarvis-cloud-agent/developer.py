@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import sys
 import urllib.error
@@ -13,8 +14,15 @@ import urllib.request
 
 ALLOWED_ROOTS = (
     "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/",
-    "akai-remote-tests/",
 )
+# Drafts may add isolated AI skills but cannot rewrite the operating core,
+# memory, provider security, launcher, server, or host tests.
+PROTECTED_AI_FILES = frozenset({
+    "AiProviderAdapter.java", "AkaiAiController.java", "AkaiMemoryEngine.java",
+    "LocalIntentParser.java", "ScreenPerceptionEngine.java",
+    "KeystoreSecurityHelper.java", "AkaiSpeechEngine.java",
+    "AgentFactMemory.java", "AgentSkillGate.java",
+})
 MAX_SOURCE_CHARS = 35000
 MAX_OUTPUT_CHARS = 50000
 MAX_RESPONSE_BYTES = 250_000
@@ -36,7 +44,9 @@ def target_path(root: Path, raw: str) -> Path:
     if any(part in (".", "..") for part in raw.split("/")) or posix.is_absolute():
         raise DeveloperError("Path traversal is forbidden")
     if not raw.endswith(".java") or not any(raw.startswith(x) for x in ALLOWED_ROOTS):
-        raise DeveloperError("Only AI Java sources and Java host tests can be edited")
+        raise DeveloperError("Only isolated AI Java skill sources can be proposed")
+    if posix.name in PROTECTED_AI_FILES:
+        raise DeveloperError("Core AI, memory, API and safety files require direct human development")
     parent = root.resolve()
     path = parent.joinpath(*posix.parts)
     if not path.resolve(strict=False).is_relative_to(parent):
@@ -78,10 +88,20 @@ def validate_change(obj: dict, target: str) -> str:
         raise DeveloperError("Replacement file is empty or too large")
     if "\x00" in content:
         raise DeveloperError("Binary content is forbidden")
+    # This is structural validation, NOT a guarantee of safe Java.
+    # The resulting code must be reviewed and tested before merge.
+    package = re.findall(r"(?m)^\s*package\s+([\w.]+)\s*;", content)
+    if package != ["it.akai.customremote.ai"]:
+        raise DeveloperError("Generated Java package declaration mismatch")
+    classname = PurePosixPath(target).stem
+    if not re.search(r"\bclass\s+" + re.escape(classname) + r"\b", content):
+        raise DeveloperError("Declared Java class does not match target basename")
     return content
 
 
-def call_provider(provider: str, task: str, target: str, current: str) -> dict:
+def call_provider(provider: str, task: str, target: str, current: str, *, approved: bool = False) -> dict:
+    if not approved:
+        raise DeveloperError("Paid API request requires explicit per-run owner approval; zero calls made")
     if provider not in API_ENDPOINTS:
         raise DeveloperError("Provider must be deepseek or kimi")
     key_name = "DEEPSEEK_API_KEY" if provider == "deepseek" else "MOONSHOT_API_KEY"
@@ -139,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", required=True, help="One exact AI Java file; all other files are protected")
     parser.add_argument("--root", default=".")
     parser.add_argument("--mock-json", help="Unit-test only. Workflow never passes this argument.")
+    parser.add_argument("--approve-paid-api", action="store_true",
+                        help="Owner explicitly authorizes ONE potentially billable provider request")
     args = parser.parse_args(argv)
     try:
         if not args.task.strip() or len(args.task) > 1800:
@@ -153,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.mock_json:
             proposal = extract_json(Path(args.mock_json).read_text(encoding="utf-8"))
         else:
-            proposal = call_provider(args.provider, args.task, args.target, old)
+            proposal = call_provider(args.provider, args.task, args.target, old, approved=args.approve_paid_api)
         replacement = validate_change(proposal, args.target)
         if replacement == old:
             raise DeveloperError("No meaningful file changes")
