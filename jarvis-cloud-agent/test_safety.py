@@ -53,6 +53,13 @@ class SafetyTests(unittest.TestCase):
             with self.subTest(content=malformed), self.assertRaises(DeveloperError):
                 validate_change(proposal(malformed), self.TARGET)
 
+    def test_workflow_owner_and_paid_approval_gates(self):
+        workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/jarvis-cloud-developer.yml").read_text(encoding="utf-8")
+        self.assertIn("if: github.actor == github.repository_owner", workflow)
+        self.assertIn('default: false', workflow)
+        self.assertIn('PAID_APPROVAL: ${{ inputs.approve_paid_api }}', workflow)
+        self.assertIn('"$PAID_APPROVAL" != "true"', workflow)
+
     def test_paid_call_refused_before_any_external_access(self):
         with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "fake-test-key"}), \
                 patch("developer.urllib.request.urlopen") as external:
