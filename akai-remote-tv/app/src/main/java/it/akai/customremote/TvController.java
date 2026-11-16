@@ -370,7 +370,10 @@ public class TvController {
                         String text = step.optString("text", "");
                         boolean clicked = false;
                         if (AkaiAccessibilityService.getInstance() != null) {
-                            clicked = AkaiAccessibilityService.getInstance().clickNodeByText(text, false);
+                            // The A2 planner gate sets this from a fresh accessible
+                            // screen observation. Exact prevents unrelated substring matches.
+                            clicked = AkaiAccessibilityService.getInstance().clickNodeByText(
+                                    text, step.optBoolean("exact", false));
                             Log.d(TAG, "clickNodeByText(\"" + text + "\") -> " + clicked);
                         }
                         if (!clicked) {
