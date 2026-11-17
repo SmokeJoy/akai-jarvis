@@ -69,6 +69,28 @@ jobs:
           if ($src -notmatch 'verify --print-certs \$baselineApk') { throw "Original APK signer verification missing" }
           Write-Host "A1 Windows candidate script parses and static release guards pass (no Windows hardware build in CI)."
 
+      - name: 1c. Parse final owner-signed APK build recipe and enforce no-deploy gates
+        shell: pwsh
+        run: |
+          $path = Join-Path $PWD "scripts/12_build_jarvis_final_candidate.ps1"
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          $src = Get-Content $path -Raw
+          if ($src -notmatch 'VersionCode = 4') { throw 'Final release vCode4 default required' }
+          if ($src -notmatch 'feat/jarvis-final-agent-ota-foundation-20261117') { throw 'Wrong source branch' }
+          if ($src -notmatch 'FIRMA DIVERSA DA TV') { throw 'Signer gate missing' }
+          if ($src -notmatch 'JARVIS_SIGNING_STOREPASS' -or $src -notmatch 'JARVIS_SIGNING_KEYPASS') { throw 'Private signer env vars missing' }
+          if ($src -match 'pass:android|debug.keystore|New-SelfSignedCertificate|keytool -genkey') { throw 'Debug or self-generated signer forbidden in final candidate' }
+          if ($src -match '(?i)\badb(?:\.exe)?\s+(install|root|push|pull|connect|shell)\b') { throw 'Final build script must never touch TV' }
+          if ($src -notmatch 'Get-FileHash.*SHA256') { throw 'APK checksum missing' }
+          if ($src -notmatch 'apksigner') { throw 'APK signing verification missing' }
+          Write-Host 'Final v4 source-only build recipe parses and is gated; no APK/device built in this step.'
+
       - name: 2. Secrets Leak Detection
         run: |
           echo "=== Scanning for leaked private keys or hardcoded API credentials ==="
