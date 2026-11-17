@@ -11,12 +11,12 @@ start = source.index("private void requestOnWorker(")
 end = source.index("private void consumeOnlyOnDemand(", start)
 method = source[start:end]
 guard = method.index("if (pending != null)")
-denial = method.index('FrameResult.denied("FRAME_REQUEST_BUSY")', guard)
+denial = method.index('deliverDenied(callback, "FRAME_REQUEST_BUSY")', guard)
 return_pos = method.index("return;", denial)
 reserve = method.index("gate.reserveNextFrame(", return_pos)
 assign = method.index("pending = callback;", reserve)
 assert guard < denial < return_pos < reserve < assign
-assert "callback.onFrame(FrameResult.denied" in method[guard:reserve]
+assert 'deliverDenied(callback, "FRAME_REQUEST_BUSY")' in method[guard:reserve]
 assert method.count("pending = callback;") == 1
 print("PASS: overlapping frame request rejected before quota reservation and callback assignment")
 
@@ -51,3 +51,11 @@ assert "if (!worker.postDelayed(expiration, VisualCaptureSessionGate.MAX_SESSION
 reject = startup[startup.index("if (!worker.postDelayed(expiration,"):]
 assert reject.index("stopCapture();") < reject.index("stopSelf();")
 print("PASS: rejected session-expiry scheduling releases MediaProjection resources")
+
+# A rejected request callback is untrusted and must not terminate the worker.
+helper = source[source.index("private static void deliverDenied("):source.index("private void requestOnWorker(")]
+assert "try { callback.onFrame(FrameResult.denied(reason)); }" in helper
+assert "catch (RuntimeException ignored)" in helper
+assert 'deliverDenied(callback, "SESSION_CLOSED")' in method
+assert 'deliverDenied(callback, verdict.reason)' in method
+print("PASS: denied frame callbacks cannot crash the worker")
