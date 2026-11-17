@@ -424,7 +424,10 @@ public final class VisualProjectionService extends Service {
         return dark >= 56;
     }
 
-    private void finishRequest(FrameResult result) {
+    // Serialize completion with owner STOP: a late worker must never deliver
+    // a successful frame after the session has been revoked.
+    private synchronized void finishRequest(FrameResult result) {
+        if (closed) return;
         FrameCallback deliver = pending;
         pending = null;
         // Stop frame production immediately after the requested image has
