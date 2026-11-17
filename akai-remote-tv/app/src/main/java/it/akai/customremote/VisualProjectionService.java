@@ -289,7 +289,10 @@ public final class VisualProjectionService extends Service {
         catch (RuntimeException ignored) {}
     }
 
-    private void requestOnWorker(String expectedProvider, FrameCallback callback) {
+    // Serialize request reservation and surface attachment with STOP. Without
+    // this lock, STOP can clear pending and release the display between the
+    // initial closed check and pending assignment, stranding a callback.
+    private synchronized void requestOnWorker(String expectedProvider, FrameCallback callback) {
         if (closed || gate == null || reader == null) {
             deliverDenied(callback, "SESSION_CLOSED");
             return;
