@@ -45,7 +45,9 @@ public final class ProcedureGoalMatcher {
             StringBuilder joined = new StringBuilder();
             for (int j = i; j < words.length && j < i + 4; j++) {
                 joined.append(words[j]);
-                if (joined.length() == target.length()
+                // One-token substring hits must be handled by the explicit
+                // whole-word rule below, which avoids "YouTube" -> "YouTube Kids".
+                if (j > i && joined.length() == target.length()
                         && target.equals(joined.toString())) return true;
                 if (joined.length() >= target.length()) break;
             }
@@ -59,7 +61,12 @@ public final class ProcedureGoalMatcher {
         if (user.isEmpty() || stored.isEmpty() || generic(user) || generic(stored)) return false;
         if (user.equals(stored)) return true;
         // Full candidate appears as whole words within the spoken command.
-        if (stored.length() >= 4 && wholeWords(user, stored)) return true;
+        if (stored.length() >= 4 && wholeWords(user, stored)) {
+            // If a skill names a single app, do not allow it to be a prefix
+            // of a different app, e.g. YouTube vs YouTube Kids.
+            if (stored.contains(" ") || user.endsWith(" " + stored)
+                    || user.endsWith(" " + stored + " in diretta")) return true;
+        }
         // User may shorten a stored description: "YouTube" vs "apri YouTube".
         if (user.length() >= 5 && wholeWords(stored, user)) return true;
         // Avoid substring-based matches by comparing exact token windows.
