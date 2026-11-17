@@ -41,6 +41,8 @@ class SpeechOwnerPolicyTests(unittest.TestCase):
     def test_stale_callback_guard_wired_to_android_tts(self):
         self.assertIn("mOfflineGate.activate(utteranceId);", self.engine)
         self.assertIn("mOfflineGate.isCurrent(utteranceId)", self.engine)
+        self.assertIn("private synchronized void markOfflineUtteranceStarted(", self.engine)
+        self.assertIn("private synchronized boolean finishOfflineUtterance(", self.engine)
         self.assertGreaterEqual(self.engine.count("finishOfflineUtterance(utteranceId)"), 4)
         self.assertIn('"akai_offline_" + mSpeechId.get()', self.engine)
         self.assertNotIn('"akai_offline_" + System.currentTimeMillis()', self.engine)
