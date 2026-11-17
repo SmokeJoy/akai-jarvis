@@ -44,3 +44,10 @@ assert "if (!queued)" in callback
 fallback = callback[callback.index("if (!queued)"):]
 assert fallback.index("stopCapture();") < fallback.index("stopSelf();")
 print("PASS: rejected MediaProjection revocation dispatch releases capture resources")
+
+# If the Looper rejects the session-expiry timer, no session may remain active.
+startup = source[source.index("if (!VisualObservationProvider.install("):source.index("} catch (Exception failure)")]
+assert "if (!worker.postDelayed(expiration, VisualCaptureSessionGate.MAX_SESSION_MS))" in startup
+reject = startup[startup.index("if (!worker.postDelayed(expiration,"):]
+assert reject.index("stopCapture();") < reject.index("stopSelf();")
+print("PASS: rejected session-expiry scheduling releases MediaProjection resources")
