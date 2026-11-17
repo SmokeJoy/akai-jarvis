@@ -160,6 +160,7 @@ public final class VisualProjectionService extends Service {
             stopSelf(startId);
             return START_NOT_STICKY;
         }
+        closed = false;
         try {
             createForegroundNotification();
             provider = targetProvider;
@@ -212,8 +213,12 @@ public final class VisualProjectionService extends Service {
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     null, null, worker);
             if (display == null) throw new IllegalStateException("VirtualDisplay unavailable");
-            active = this;
-            closed = false;
+            // A MediaProjection revocation can race initialization on the worker.
+            // Never resurrect an already stopped session by resetting closed here.
+            synchronized (this) {
+                if (closed) throw new IllegalStateException("Projection revoked during startup");
+                active = this;
+            }
             observationSession = new VisualObservationProvider.Session() {
                 @Override public void stopByOwner() {
                     VisualProjectionService.stopOwnerSession(getApplicationContext());
