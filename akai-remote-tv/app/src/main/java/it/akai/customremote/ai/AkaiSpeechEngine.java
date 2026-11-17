@@ -254,14 +254,16 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     // =========================================================================
 
     public String getTtsVoice() {
-        return mMemoryEngine.getPreference("tts_voice", CloudSpeechAdapter.VOICE_DIEGO);
+        // Historical Azure preferences must not be reported as active voices.
+        return CloudSpeechAdapter.VOICE_OFFLINE;
     }
 
     public void setTtsVoice(String voice) {
-        if (voice != null && !voice.isEmpty()) {
-            mMemoryEngine.setPreference("tts_voice", voice, "tts", 0);
-            Log.i(TAG, "Selected TTS voice: " + voice);
+        if (!CloudSpeechAdapter.VOICE_OFFLINE.equals(voice)) {
+            Log.w(TAG, "Unsupported external TTS voice rejected by owner policy.");
+            return;
         }
+        mMemoryEngine.setPreference("tts_voice", CloudSpeechAdapter.VOICE_OFFLINE, "tts", 0);
     }
 
     public String getAzureRegion() {
