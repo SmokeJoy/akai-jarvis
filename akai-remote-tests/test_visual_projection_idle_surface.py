@@ -37,9 +37,16 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         self.assertIn('finishRequest(FrameResult.denied("FRAME_SURFACE_ATTACH_FAILED"))', request)
 
     def test_detach_before_callback_and_cloud_work(self):
-        completed = self.method('private void finishRequest(', 'private void stopCapture(')
+        completed = self.method('private void finishRequest(', 'private synchronized void stopCapture(')
         self.assertLess(completed.index('display.setSurface(null)'), completed.index('deliver.onFrame(result)'))
         self.assertIn('gate.completeFrame(result.ok())', completed)
+
+    def test_teardown_serialized_across_main_and_worker(self):
+        self.assertIn('private synchronized void stopCapture()', self.source)
+        cleanup = self.method('private synchronized void stopCapture()', '@Override public void onDestroy()')
+        self.assertLess(cleanup.index('closed = true;'), cleanup.index('display.release()'))
+        self.assertLess(cleanup.index('closed = true;'), cleanup.index('reader.close()'))
+        self.assertLess(cleanup.index('closed = true;'), cleanup.index('old.stop()'))
 
     def test_stale_late_frame_drained_without_encoding(self):
         capture = self.method('private void consumeOnlyOnDemand(', 'private static boolean mostlyBlack(')
