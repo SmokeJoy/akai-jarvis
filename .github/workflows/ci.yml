@@ -124,6 +124,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/KeystoreSecurityHelper.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudVisionRequestPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FreeItalianTtsPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationBridge.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualCaptureSessionGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FrameSequenceGate.java \
@@ -240,6 +241,15 @@ jobs:
             akai-remote-tests/SpeechUtteranceGateTest.java
           java -cp test_speech_gate it.akai.customremote.SpeechUtteranceGateTest
           python3 akai-remote-tests/test_speech_owner_policy.py -v
+
+      - name: 4k. Free Italian TTS hard budget and endpoint policy
+        run: |
+          mkdir -p test_free_voice
+          javac -encoding UTF-8 -source 8 -target 8 -d test_free_voice \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FreeItalianTtsPolicy.java \
+            akai-remote-tests/FreeItalianTtsPolicyTest.java
+          java -cp test_free_voice it.akai.customremote.FreeItalianTtsPolicyTest
+          python3 akai-remote-tests/test_free_italian_voice_source.py -v
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |
