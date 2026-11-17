@@ -132,7 +132,11 @@ public final class VisualProjectionService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (!ACTION_START.equals(intent.getAction()) || active != null) {
+        if (active != null && !active.closed) {
+            // Repeated START must not stop the already approved session.
+            return START_NOT_STICKY;
+        }
+        if (!ACTION_START.equals(intent.getAction())) {
             stopSelf(startId);
             return START_NOT_STICKY;
         }
