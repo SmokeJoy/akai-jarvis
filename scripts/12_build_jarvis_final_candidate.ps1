@@ -343,6 +343,36 @@ if (Test-Path $releaseApk) {
         exit 1
     }
     Write-Host "      [PASS] Nessun certificato o chiave privata/keystore incorporato nell'APK release!" -ForegroundColor Green
+    # Handoff machine-readable: only non-sensitive provenance, never passwords,
+    # alias, private keystore path, personal database or API credentials.
+    $sourceHead = (& git -C $repoRoot rev-parse HEAD 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $sourceHead -notmatch '^[a-f0-9]{40}
+} else {
+    Write-Host "ERRORE: APK finale non generato." -ForegroundColor Red
+    exit 1
+}
+) {
+        throw 'Release fingerprint record failed: Git HEAD not available.'
+    }
+    $handoff = [ordered]@{
+        packageName = 'it.akai.customremote'
+        versionCode = $VersionCode
+        versionName = $VersionName
+        sourceCommit = $sourceHead
+        apkFilename = 'app-release.apk'
+        apkSha256 = $sha256.ToLowerInvariant()
+        signerSha256 = $actualSigner
+        abi = 'armeabi-v7a'
+        minSdk = 21
+        targetSdk = 28
+        androidTvTested = $false
+        signedWithOwnerOriginalCert = $true
+        installed = $false
+        buildUtc = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    $handoffPath = Join-Path $releaseOutputDir 'JARVIS_FINAL_BUILD_MANIFEST.json'
+    $handoff | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $handoffPath -Encoding UTF8
+    Write-Host "Manifest provenienza senza segreti: $handoffPath" -ForegroundColor Cyan
     Write-Host "CANDIDATO PER REVISIONE OFFLINE, NON INSTALLATO: $releaseApk" -ForegroundColor Cyan
 } else {
     Write-Host "ERRORE: APK finale non generato." -ForegroundColor Red
