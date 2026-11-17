@@ -802,9 +802,13 @@
 
             if (res.ok || isHandledAiReply(res.status, data)) {
                 displayAiResponse(data, query);
-                if (usePhoneSpeech && data.status !== 'CANCELLED'
+                // The owner may turn phone audio off while a cloud task is pending.
+                // Never restart mobile speech after the opt-in has been revoked.
+                if (usePhoneSpeech && state.phoneVoiceEnabled && data.status !== 'CANCELLED'
                         && !convoSession.userCancelRequested && typeof data.reply === 'string') {
-                    speakPhoneReply(data.reply);
+                    if (!speakPhoneReply(data.reply)) {
+                        showToast('Voce locale non disponibile; risposta mostrata a schermo.', true);
+                    }
                 }
                 // A conversational answer is handled even if no TV action was required.
                 return isVerifiedAiReply(data)
