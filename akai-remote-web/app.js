@@ -687,12 +687,12 @@
             return false;
         }
 
-        // P1-04: AbortController with 25-second timeout
+        // Allow the bounded 2-minute autonomous visual task to finish, plus response grace.
         convoSession.userCancelRequested = false;
         convoSession.aiAbortController = new AbortController();
         const timeoutId = setTimeout(() => {
             if (convoSession.aiAbortController) convoSession.aiAbortController.abort();
-        }, 25000);
+        }, 135000);
 
         try {
             const res = await fetch(getApiUrl('/api/ai/ask'), {
@@ -710,7 +710,8 @@
 
             if (res.ok || isHandledAiReply(res.status, data)) {
                 displayAiResponse(data, query);
-                return data.success === true;
+                // A conversational answer is handled even if no TV action was required.
+                return data.success === true || data.status === 'ANSWERED_DIALOG';
             } else if (res.status === 426) {
                 displayAiResponse({
                     success: false,
@@ -795,7 +796,8 @@
 
         // Status Badge (P1-05 & P1-16)
         if (elements.aiBadgeStatus) {
-            if (data.status === 'SUCCESS_VERIFIED' || data.verified === true) {
+            if ((data.status === 'SUCCESS_VERIFIED' || data.verified === true)
+                    && data.execution_outcome !== 'FAILED') {
                 elements.aiBadgeStatus.className = 'ai-badge-status verified';
                 elements.aiBadgeStatus.textContent = '✓ Verificato';
                 showToast('Comando verificato con successo');
