@@ -35,3 +35,12 @@ assert 'if (!worker.postDelayed(pendingTimeout, FRAME_TIMEOUT_MS))' in timeout
 assert 'finishRequest(FrameResult.denied("FRAME_TIMEOUT_SCHEDULE_REJECTED"))' in timeout
 assert timeout.index('if (!worker.postDelayed') < timeout.index('FRAME_TIMEOUT_SCHEDULE_REJECTED')
 print("PASS: rejected timeout scheduling completes pending request with failure")
+
+# Android may revoke MediaProjection while the worker Looper is shutting down.
+# Rejected dispatch must still stop capture; stopSelf alone leaks resources.
+callback = source[source.index("projection.registerCallback("):source.index("DisplayMetrics dm =", source.index("projection.registerCallback("))]
+assert "boolean queued = handler != null && handler.post(new Runnable()" in callback
+assert "if (!queued)" in callback
+fallback = callback[callback.index("if (!queued)"):]
+assert fallback.index("stopCapture();") < fallback.index("stopSelf();")
+print("PASS: rejected MediaProjection revocation dispatch releases capture resources")
