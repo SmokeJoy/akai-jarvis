@@ -394,8 +394,15 @@ public final class VisualProjectionService extends Service {
         } catch (RuntimeException failure) {
             finishRequest(FrameResult.denied("FRAME_DECODING_FAILED"));
         } finally {
-            if (image != null) image.close();
-            if (bitmap != null) bitmap.recycle();
+            // STOP may close ImageReader concurrently on the main thread.
+            // Image.close() can then throw IllegalStateException; cleanup must
+            // not crash the worker or mask the cancellation result.
+            if (image != null) {
+                try { image.close(); } catch (RuntimeException ignored) {}
+            }
+            if (bitmap != null) {
+                try { bitmap.recycle(); } catch (RuntimeException ignored) {}
+            }
         }
     }
 
