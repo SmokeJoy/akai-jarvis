@@ -32,6 +32,8 @@ import it.akai.customremote.ai.RgbaFramePacker;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.VisionCapturePolicy;
 import it.akai.customremote.ai.VisualCaptureSessionGate;
+import it.akai.customremote.ai.VisualObservationProvider;
+import it.akai.customremote.ai.VisionSessionCoordinator;
 
 /**
  * Android 9 on-demand multi-frame MediaProjection service for JARVIS.
@@ -99,6 +101,7 @@ public final class VisualProjectionService extends Service {
     private Runnable pendingTimeout;
     private Runnable expiration;
     private volatile boolean closed;
+    private VisualObservationProvider.Session observationSession;
 
     /** The returned object lives only in this process; no result is persisted. */
     public static boolean requestFrame(final String expectedProvider, final FrameCallback callback) {
@@ -203,6 +206,32 @@ public final class VisualProjectionService extends Service {
             if (display == null) throw new IllegalStateException("VirtualDisplay unavailable");
             active = this;
             closed = false;
+            observationSession = new VisualObservationProvider.Session() {
+                @Override public VisualObservationProvider.Result observe(
+                        String targetProvider, String expectedPkg, String expectedUi,
+                        final VisualObservationProvider.Cancellation cancel) {
+                    final AiProviderAdapter adapter =
+                            new AiProviderAdapter(getApplicationContext());
+                    VisionSessionCoordinator.Observation result =
+                            VisionSessionCoordinator.observe(
+                                    getApplicationContext(), adapter, targetProvider,
+                                    expectedPkg, expectedUi,
+                                    new VisionSessionCoordinator.Cancellation() {
+                                        @Override public boolean isCancelled() {
+                                            return cancel != null && cancel.isCancelled();
+                                        }
+                                    });
+                    return result.usable
+                            ? VisualObservationProvider.Result.observed(
+                                    result.provider, result.packageName,
+                                    result.redactedContext, result.description,
+                                    result.frameTimeMs, result.tokens, result.costEur)
+                            : VisualObservationProvider.Result.unavailable(result.reason);
+                }
+            };
+            if (!VisualObservationProvider.install(observationSession)) {
+                throw new IllegalStateException("A visual session is already active");
+            }
             expiration = new Runnable() {
                 @Override public void run() {
                     stopCapture();
@@ -359,6 +388,10 @@ public final class VisualProjectionService extends Service {
         if (closed) return;
         closed = true;
         if (active == this) active = null;
+        if (observationSession != null) {
+            VisualObservationProvider.clear(observationSession);
+            observationSession = null;
+        }
         if (gate != null) gate.stop();
         if (worker != null) {
             if (pendingTimeout != null) worker.removeCallbacks(pendingTimeout);
