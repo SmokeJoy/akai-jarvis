@@ -52,5 +52,16 @@ class VisualStopSourceTest(unittest.TestCase):
         self.assertIn("cancel != null && cancel.isCancelled()", guard)
         self.assertIn('Observation.denied("SESSION_REVOKED_BEFORE_UPLOAD")', guard)
 
+    def test_visual_goal_deadline_is_monotonic(self):
+        controller = (ROOT / "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/"
+                      "AkaiAiController.java").read_text(encoding="utf-8")
+        begin = controller.index("private JSONObject processVisualGoalLocked(")
+        end = controller.index("private String buildReflectorContext(", begin)
+        visual = controller[begin:end]
+        self.assertIn("final long visualGoalStartedNs = System.nanoTime();", visual)
+        self.assertIn("VisualStepPolicy.mayContinueElapsed(attempt, cloudCalls,", visual)
+        self.assertIn("System.nanoTime() - visualGoalStartedNs", visual)
+        self.assertNotIn("VisualStepPolicy.mayContinue(attempt, cloudCalls, startTime,", visual)
+
 if __name__ == "__main__":
     unittest.main()
