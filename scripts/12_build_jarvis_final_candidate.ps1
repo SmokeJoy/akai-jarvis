@@ -252,7 +252,7 @@ try {
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $alignedApk)) { throw "zipalign fallito" }
 
 # 8. Firma digitale con APK signing keystore PROPRIETARIO esistente.
-# Mai generare un nuovo debug keystore: Android non aggiorna un APK con firma diversa.
+# Mai generare una nuova identita' di firma: Android non aggiorna un APK con certificato diverso.
 Write-Host "[8/8] Firma APK finale con keystore privato preesistente..." 
 $signArgs = @(
     "-jar", $apksignerJar, "sign",
