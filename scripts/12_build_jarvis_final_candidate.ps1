@@ -16,16 +16,16 @@ param(
     [string]$SigningAlias
 )
 $ErrorActionPreference = "Stop"
-# Sorgenti A1 effettivi: nessuna modifica non committata o vecchia PR.
+# Sorgenti finali Git puliti e firmati dal proprietario: nessun deploy.
 $expectedBranch = 'feat/jarvis-final-agent-ota-foundation-20261117'
 $repoRoot = (Split-Path -Parent $PSScriptRoot)
 $actualBranch = (& git -C $repoRoot branch --show-current 2>$null | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $actualBranch -ne $expectedBranch) {
-    throw "Build A1 bloccata: branch locale '$actualBranch', atteso '$expectedBranch'."
+    throw "Build finale bloccata: branch locale '$actualBranch', atteso '$expectedBranch'."
 }
 $dirty = (& git -C $repoRoot status --porcelain 2>$null | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $dirty) {
-    throw "Build A1 bloccata: working tree non pulita. Nessun file modificato dal builder."
+    throw "Build finale bloccata: working tree non pulita. Nessun file modificato dal builder."
 }
 if (-not $env:JARVIS_SIGNING_STOREPASS -or -not $env:JARVIS_SIGNING_KEYPASS) {
     throw 'Firma release bloccata: impostare le variabili d ambiente JARVIS_SIGNING_STOREPASS e JARVIS_SIGNING_KEYPASS sul PC privato. Non scriverle nei sorgenti o su GitHub.'
@@ -85,7 +85,7 @@ $compiledResZip = Join-Path $buildDir "compiled_res.zip"
 $baseApk = Join-Path $buildDir "base.apk"
 $alignedApk = Join-Path $buildDir "aligned.apk"
 $outputDir = Join-Path $buildDir "outputs\apk\debug"
-$finalApk = Join-Path $outputDir "app-debug.apk"
+$finalApk = Join-Path $outputDir "app-ci-not-for-install.apk"
 $releaseOutputDir = Join-Path $buildDir "outputs\apk\release"
 $releaseApk = Join-Path $releaseOutputDir "app-release.apk"
 $releaseKeystore = $SigningKeystorePath
@@ -266,18 +266,16 @@ $signArgs = @(
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseApk)) {
     throw 'Firma APK finale fallita. Nessun tentativo di installazione.'
 }
-# Keep the existing verification and output contract, but never sign a second
-# debug candidate and never copy a potentially installable APK into Git.
-Copy-Item -LiteralPath $releaseApk -Destination $finalApk -ErrorAction Stop
-
-if ((Test-Path $finalApk) -and (Test-Path $releaseApk)) {
+# There is only ONE signed candidate in the out-of-tree release directory.
+# Never leave a duplicate debug-named APK that bypasses verification gates.
+if (Test-Path $releaseApk) {
     $sha256 = (Get-FileHash -Path $releaseApk -Algorithm SHA256).Hash
     $sizeKb = [Math]::Round((Get-Item $releaseApk).Length / 1024, 2)
     Write-Host "`n========================================================" -ForegroundColor Green
     Write-Host " APK FINALE NON-DEBUGGABLE PREPARATO: NON INSTALLATO!" -ForegroundColor Green
     Write-Host "========================================================" -ForegroundColor Green
     Write-Host " Release APK : $releaseApk"
-    Write-Host " Copia locale: $finalApk"
+    Write-Host " Nessun APK di debug prodotto"
     Write-Host " Peso        : $sizeKb KB" -ForegroundColor Yellow
     Write-Host " SHA-256     : $sha256" -ForegroundColor Yellow
 
