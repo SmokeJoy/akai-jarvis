@@ -121,6 +121,14 @@ async function run() {
         'spoken conversational answers should continue a live voice session');
     assert.match(answeredDialog.elements.aiBadgeStatus.textContent, /Risposta/);
 
+    const answeredWithoutTvSuccess = await scenario(400, {
+        success: false, status: 'ANSWERED_DIALOG', verified: false,
+        execution_outcome: 'NOT_TESTED', reply: 'Risposta conversazionale senza azioni TV.'
+    });
+    assert.equal(answeredWithoutTvSuccess.returned, true,
+        'a valid conversational answer must not require hardware verification');
+    assert.match(answeredWithoutTvSuccess.elements.aiBadgeStatus.textContent, /Risposta/);
+
     const contradictoryVerified = await scenario(400, {
         success: true, status: 'SUCCESS_VERIFIED', verified: true,
         execution_outcome: 'FAILED', reply: 'Incoerenza nel risultato.'
@@ -179,7 +187,7 @@ async function run() {
     assert.match(tlsRequired.elements.aiResponseText.textContent, /HTTPS/);
     assert.match(tlsRequired.elements.aiBadgeStatus.textContent, /Non Riuscito/);
 
-    console.log('Web AI feedback regression PASS (15 scenarios, no TV or cloud API used)');
+    console.log('Web AI feedback regression PASS (16 scenarios, no TV or cloud API used)');
 }
 
 run().catch(err => {
