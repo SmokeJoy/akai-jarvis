@@ -34,5 +34,23 @@ class VisualStopSourceTest(unittest.TestCase):
         self.assertIn("if (closed || projectionRevoked) return;", source)
         self.assertIn("service.projectionRevoked", source)
 
+    def test_vision_upload_requires_live_session_and_monotonic_wait(self):
+        # Source-contract test: hardware cancellation races still require a
+        # separately approved Android 9 integration test.
+        coordinator = (ROOT / "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/"
+                       "VisionSessionCoordinator.java").read_text(encoding="utf-8")
+        self.assertIn("import android.os.SystemClock;", coordinator)
+        self.assertIn("long begun = SystemClock.elapsedRealtime();", coordinator)
+        self.assertIn("while (SystemClock.elapsedRealtime() - begun < FRAME_WAIT_MS)", coordinator)
+        self.assertNotIn("System.currentTimeMillis()", coordinator)
+        start = coordinator.index("if (!selectedProvider.equals(frame.provider)")
+        upload = coordinator.index("AiProviderAdapter.VisionCloudResult described = adapter.describeScreenJpegOnce(", start)
+        guard = coordinator[start:upload]
+        self.assertIn("!VisualObservationProvider.active()", guard)
+        self.assertIn("!VisualProjectionService.isSessionActive()", guard)
+        self.assertIn("!adapter.hasCloudContextConsent()", guard)
+        self.assertIn("cancel != null && cancel.isCancelled()", guard)
+        self.assertIn('Observation.denied("SESSION_REVOKED_BEFORE_UPLOAD")', guard)
+
 if __name__ == "__main__":
     unittest.main()
