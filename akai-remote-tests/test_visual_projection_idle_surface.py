@@ -62,6 +62,14 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         self.assertNotIn('bitmap.compress', idle)
 
 
+    def test_consent_revocation_rejects_before_jpeg_encoding(self):
+        # Static contract only; consent-change race still needs Android testing.
+        capture = self.method('private void consumeOnlyOnDemand(', 'private static boolean mostlyBlack(')
+        self.assertIn('hasCloudContextConsent()', capture)
+        self.assertIn('FrameResult.denied("CLOUD_CONSENT_REVOKED")', capture)
+        self.assertLess(capture.index('hasCloudContextConsent()'), capture.index('Bitmap.createBitmap('))
+        self.assertLess(capture.index('CLOUD_CONSENT_REVOKED'), capture.index('bitmap.compress('))
+
     def test_stop_and_frame_completion_share_lock(self):
         # Source contract only: Android race requires final owner-approved TV test.
         completion = self.method('private synchronized void finishRequest(', 'private synchronized void stopCapture(')
