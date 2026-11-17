@@ -46,6 +46,54 @@ public final class VisualObservationProviderTest {
 
         VisualObservationProvider.clear(fake);
         verify(!VisualObservationProvider.active(), "teardown unregisters session");
+
+        // Regression: owner STOP can arrive while a vision call is blocked.
+        // Its late but otherwise well-formed answer must never reach planning.
+        final int[] revokedStopCalls = {0};
+        VisualObservationProvider.Session revokedMidFlight = new VisualObservationProvider.Session() {
+            @Override public VisualObservationProvider.Result observe(String provider,
+                    String expectedPackage, String expectedUi, VisualObservationProvider.Cancellation cancel) {
+                VisualObservationProvider.stopAndRevoke();
+                return VisualObservationProvider.Result.observed(
+                        provider, expectedPackage, expectedUi, "Late cloud answer", TIME, 7, 0.01);
+            }
+            @Override public void stopByOwner() { revokedStopCalls[0]++; }
+        };
+        verify(VisualObservationProvider.install(revokedMidFlight), "in-flight cancellation fixture");
+        VisualObservationProvider.Result revokedResult =
+                VisualObservationProvider.observe("deepseek", PKG, UI, null);
+        verify(!revokedResult.success
+                && "SESSION_REVOKED_DURING_OBSERVATION".equals(revokedResult.reason),
+                "STOP must invalidate an already started vision answer");
+        verify(revokedStopCalls[0] == 1 && !VisualObservationProvider.active(),
+                "STOP revokes only once and clears capture session");
+
+        // A newly approved session cannot inherit observations from the old one.
+        VisualObservationProvider.Session replacement = new VisualObservationProvider.Session() {
+            @Override public VisualObservationProvider.Result observe(String provider,
+                    String expectedPackage, String expectedUi, VisualObservationProvider.Cancellation cancel) {
+                return VisualObservationProvider.Result.observed(
+                        provider, expectedPackage, expectedUi, "Fresh answer", TIME, 8, 0.02);
+            }
+        };
+        VisualObservationProvider.Session replacedMidFlight = new VisualObservationProvider.Session() {
+            @Override public VisualObservationProvider.Result observe(String provider,
+                    String expectedPackage, String expectedUi, VisualObservationProvider.Cancellation cancel) {
+                VisualObservationProvider.clear(this);
+                verify(VisualObservationProvider.install(replacement), "replacement session accepted");
+                return VisualObservationProvider.Result.observed(
+                        provider, expectedPackage, expectedUi, "Stale answer", TIME, 8, 0.02);
+            }
+        };
+        verify(VisualObservationProvider.install(replacedMidFlight), "replacement fixture installed");
+        VisualObservationProvider.Result staleSession =
+                VisualObservationProvider.observe("kimi", PKG, UI, null);
+        verify(!staleSession.success
+                && "SESSION_REVOKED_DURING_OBSERVATION".equals(staleSession.reason),
+                "old session result must not cross to replacement");
+        verify(VisualObservationProvider.observe("kimi", PKG, UI, null).success,
+                "new session can still serve fresh observations");
+        VisualObservationProvider.clear(replacement);
         VisualObservationProvider.Session spoof = new VisualObservationProvider.Session() {
             @Override public VisualObservationProvider.Result observe(String provider,
                     String expectedPackage, String expectedUi, VisualObservationProvider.Cancellation cancel) {
