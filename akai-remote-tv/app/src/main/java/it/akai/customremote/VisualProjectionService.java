@@ -101,6 +101,9 @@ public final class VisualProjectionService extends Service {
     private String provider;
     private int frameWidth, frameHeight;
     private FrameCallback pending;
+    // Package observed when the owner-approved request reserved its frame.
+    // Never upload a frame from a different foreground app after a switch.
+    private String pendingForegroundPackage;
     private Runnable pendingTimeout;
     private Runnable expiration;
     private volatile boolean closed;
@@ -342,6 +345,13 @@ public final class VisualProjectionService extends Service {
             }
             return;
         }
+        if (snap == null || snap.foregroundPackage == null || snap.foregroundPackage.trim().isEmpty()) {
+            deliverDenied(callback, "FRAME_PACKAGE_UNKNOWN");
+            pending = null;
+            gate.completeFrame(false);
+            return;
+        }
+        pendingForegroundPackage = snap.foregroundPackage;
         pending = callback;
         // Empty any older buffered image. The next frame must be fresh.
         Image stale = null;
@@ -401,6 +411,13 @@ public final class VisualProjectionService extends Service {
             ScreenPerceptionEngine.PerceptionSnapshot snap = ScreenPerceptionEngine.capture(this);
             if (!VisionCapturePolicy.mayCapture(true, snap)) {
                 finishRequest(FrameResult.denied("SENSITIVE_OR_UNKNOWN_SCREEN"));
+                return;
+            }
+            // A foreground switch between request and ImageReader callback
+            // invalidates this frame. The next request may bind the new app.
+            if (snap == null || snap.foregroundPackage == null
+                    || !snap.foregroundPackage.equals(pendingForegroundPackage)) {
+                finishRequest(FrameResult.denied("FRAME_FOREGROUND_CHANGED"));
                 return;
             }
             // Consent can be revoked while the frame is being produced.
@@ -471,6 +488,7 @@ public final class VisualProjectionService extends Service {
         if (closed || projectionRevoked) return;
         FrameCallback deliver = pending;
         pending = null;
+        pendingForegroundPackage = null;
         // Stop frame production immediately after the requested image has
         // been taken, before any cloud latency or callback processing.
         if (display != null) {
@@ -512,6 +530,7 @@ public final class VisualProjectionService extends Service {
         }
         FrameCallback aborted = pending;
         pending = null;
+        pendingForegroundPackage = null;
         if (aborted != null) {
             try { aborted.onFrame(FrameResult.denied("SESSION_STOPPED")); }
             catch (RuntimeException ignored) {}
