@@ -52,7 +52,8 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         capture = self.method('private void consumeOnlyOnDemand(', 'private static boolean mostlyBlack(')
         self.assertIn('if (pending == null || closed)', capture)
         self.assertIn('source.acquireLatestImage()', capture)
-        self.assertIn('if (stale != null) stale.close()', capture)
+        self.assertIn('if (stale != null) {', capture)
+        self.assertEqual(capture.count('try { stale.close(); } catch (RuntimeException ignored) {}'), 2)
         idle = capture[capture.index('if (pending == null || closed)'):capture.index('Image image = null;')]
         self.assertNotIn('Bitmap.createBitmap', idle)
         self.assertNotIn('bitmap.compress', idle)
