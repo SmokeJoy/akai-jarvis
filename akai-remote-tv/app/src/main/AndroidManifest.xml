@@ -56,6 +56,14 @@
             android:exported="false"
             android:excludeFromRecents="true" />
 
+        <!-- Foreground service for a SINGLE Android-consented MediaProjection session.
+             No boot intent, no externally callable start, no silent recording. -->
+        <service
+            android:name=".VisualProjectionService"
+            android:enabled="true"
+            android:exported="false"
+            android:stopWithTask="false" />
+
         <!-- Internal Protected PIN Display Activity (exported=false to prevent third-party spoofing) -->
         <activity
             android:name=".PinActivity"
