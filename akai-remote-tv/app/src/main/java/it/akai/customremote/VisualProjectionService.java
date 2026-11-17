@@ -248,7 +248,11 @@ public final class VisualProjectionService extends Service {
                     stopSelf();
                 }
             };
-            worker.postDelayed(expiration, VisualCaptureSessionGate.MAX_SESSION_MS);
+            // Never leave an unbounded projection if shutdown rejects expiry scheduling.
+            if (!worker.postDelayed(expiration, VisualCaptureSessionGate.MAX_SESSION_MS)) {
+                stopCapture();
+                stopSelf();
+            }
         } catch (Exception failure) {
             stopCapture();
             stopSelf();
