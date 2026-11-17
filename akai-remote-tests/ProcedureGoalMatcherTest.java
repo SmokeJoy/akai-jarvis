@@ -29,6 +29,9 @@ public final class ProcedureGoalMatcherTest {
         expect(false, "vai", "vai alla home", "generic command forbidden");
         expect(false, "apri youtube", "apri netflix", "different installed apps");
         expect(false, "youtube kids", "youtube", "different product variant");
+        expect(false, "YouTube", "apri YouTube Kids", "reverse prefix collision");
+        expect(false, "Rai 1", "metti Rai 10", "reverse channel collision");
+        expect(false, "Italia 2", "metti Italia 20", "reverse compact channel collision");
         expect(false, "Metti Italia2", "italia20", "different compact key");
         expect(false, "attiva il timer", "tv", "short key isn't match");
         expect(false, null, "youtube", "null query");
