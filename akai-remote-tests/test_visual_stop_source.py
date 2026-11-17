@@ -63,5 +63,25 @@ class VisualStopSourceTest(unittest.TestCase):
         self.assertIn("System.nanoTime() - visualGoalStartedNs", visual)
         self.assertNotIn("VisualStepPolicy.mayContinue(attempt, cloudCalls, startTime,", visual)
 
+    def test_owner_stop_blocks_planning_action_and_skill_learning(self):
+        controller = (ROOT / "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/"
+                      "AkaiAiController.java").read_text(encoding="utf-8")
+        begin = controller.index("private JSONObject processVisualGoalLocked(")
+        end = controller.index("private String buildReflectorContext(", begin)
+        visual = controller[begin:end]
+        plan = visual.index("AiProviderAdapter.AiResponse plan = aiAdapter.planActionSequence(")
+        before_plan = visual[visual.index("JSONObject prefs = memoryEngine.getAllPreferences();"):plan]
+        self.assertIn("!VisualObservationProvider.active()", before_plan)
+        self.assertIn("!aiAdapter.hasCloudContextConsent()", before_plan)
+        after_plan = visual[visual.index("costEur += plan.costEur;"):visual.index("if (!plan.success)", plan)]
+        self.assertIn("!VisualObservationProvider.active()", after_plan)
+        self.assertIn("!aiAdapter.hasCloudContextConsent()", after_plan)
+        before_action = visual[visual.index("JSONArray single = new JSONArray()"):visual.index("StepwiseResult step = executeActionsStepwise(")]
+        self.assertIn("!VisualObservationProvider.active()", before_action)
+        before_learning = visual[visual.index("if (verified && !cancelled"):visual.index("memoryEngine.saveVerifiedProcedure(")]
+        self.assertIn("!isTokenCancelled(token)", before_learning)
+        self.assertIn("VisualObservationProvider.active()", before_learning)
+        self.assertIn("aiAdapter.hasCloudContextConsent()", before_learning)
+
 if __name__ == "__main__":
     unittest.main()
