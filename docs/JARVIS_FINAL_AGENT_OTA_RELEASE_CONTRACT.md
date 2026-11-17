@@ -78,6 +78,19 @@ Questa parte era P0 e ora ha **codice reale nel ramo di sviluppo**, distinto dal
 
 **Limiti noti**: MediaProjection può restituire nero o schermate protette DRM; in assenza di Accessibility l'agente può esplorare con comandi D-pad ma NON eseguire tocchi su coordinate dedotte da sola visione. È corretto fallire in modo verificabile piuttosto che fingere di completare un goal. L'OTA rimane opzionale, non bloccante per il rilascio unico finale.
 
+## Performance TV — VirtualDisplay realmente on-demand (17/11/2026)
+
+La TV ha circa 1,5 GB di RAM e non deve sostenere rendering continuo della sessione MediaProjection quando l'agente non osserva una schermata.
+
+- `VisualProjectionService` crea il display virtuale Android 9 con **superficie inizialmente scollegata** (`createVirtualDisplay(..., null, ...)`). In assenza di screenshot non deve generare un flusso di frame video.
+- Una richiesta autorizzata e accettata dal `VisualCaptureSessionGate` collega temporaneamente la `ImageReader Surface` con `VirtualDisplay.setSurface(reader.getSurface())`. Terminata la singola cattura, la superficie viene scollegata con `setSurface(null)` **prima** di consegnare il risultato a DeepSeek/Kimi. In questo modo non produce frame durante la latenza cloud.
+- Eventuali frame residui dopo l'arresto vengono consumati e rilasciati senza creare Bitmap/JPEG, così non si riempie il buffer e non si blocca la cattura successiva.
+- Il nuovo test host `test_visual_projection_idle_surface.py` e la CI `4f3` controllano questo contratto di codice. I risultati CI **non sono misure reali** di CPU, memoria o potenza: l'effetto va ancora verificato sulla AKAI.
+- Compatibilità documentata da Android: [MediaProjection.createVirtualDisplay, API21](https://developer.android.com/reference/android/media/projection/MediaProjection#createVirtualDisplay(java.lang.String,int,int,int,int,android.view.Surface,android.hardware.display.VirtualDisplay.Callback,android.os.Handler)) e [VirtualDisplay.setSurface, API20](https://developer.android.com/reference/android/hardware/display/VirtualDisplay#setSurface(android.view.Surface)). Entrambi disponibili su Android 9/API28.
+- `AiProviderAdapter` ora istruisce esplicitamente DeepSeek/Kimi a proporre la **prossima singola azione**, ad usare tasti D-pad se mancano label cliccabili affidabili, senza inventare coordinate e senza dichiarare raggiunti i goal soltanto per un'immagine analizzata. Nessun modello locale.
+
+**Stop gate:** questa modifica resta PR draft; non installare la build CI sulla TV, non riavviare A2, non effettuare merge senza approvazione. Il test fisico deve misurare RAM/CPU idle e sotto compito, provare 20 catture successive e verificare errore DRM/cancel/reboot.
+
 ## OTA — sicurezza e implementazione per release finale
 
 **Componente già committato:** `OtaCandidateGate.java`, puro Java, zero processo/servizio/network. Non installa nulla: verifica *solo metadati* (package `it.akai.customremote`, versionCode > installato, fingerprint certificato A1/A2 esatto, release `stable`, minSdk compatibile API28, ABI `armeabi-v7a`, SHA-256 di APK, dimensione massima 25 MiB, HTTPS e hostname in allowlist locale). Il relativo test JVM esamina bypass comuni.
