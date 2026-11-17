@@ -246,8 +246,11 @@ public final class VisualProjectionService extends Service {
                             : VisualObservationProvider.Result.unavailable(result.reason);
                 }
             };
-            if (!VisualObservationProvider.install(observationSession)) {
-                throw new IllegalStateException("A visual session is already active");
+            synchronized (this) {
+                if (closed) throw new IllegalStateException("Projection revoked before session install");
+                if (!VisualObservationProvider.install(observationSession)) {
+                    throw new IllegalStateException("A visual session is already active");
+                }
             }
             expiration = new Runnable() {
                 @Override public void run() {
