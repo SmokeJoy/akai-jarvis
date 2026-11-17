@@ -16,6 +16,9 @@ class SpeechOwnerPolicyTests(unittest.TestCase):
     def setUpClass(cls):
         cls.engine = (AI / "AkaiSpeechEngine.java").read_text(encoding="utf-8")
         cls.cloud = (AI / "CloudSpeechAdapter.java").read_text(encoding="utf-8")
+        cls.router = (AI.parent / "RestApiRouter.java").read_text(encoding="utf-8")
+        cls.web = (ROOT / "akai-remote-web/app.js").read_text(encoding="utf-8")
+        cls.html = (ROOT / "akai-remote-web/index.html").read_text(encoding="utf-8")
 
     def test_azure_not_called_by_speech_engine(self):
         self.assertNotIn(".speakNeural(", self.engine)
@@ -37,6 +40,18 @@ class SpeechOwnerPolicyTests(unittest.TestCase):
         fetch = self.cloud.split("private File fetchFromAzure(", 1)[1]
         fetch = fetch.split("private synchronized boolean playAudioFile(", 1)[0]
         self.assertIn("return null;", fetch)
+
+    def test_only_espeak_exposed_to_web_and_rest(self):
+        self.assertIn('return CloudSpeechAdapter.VOICE_OFFLINE;', self.engine)
+        self.assertIn('if (!CloudSpeechAdapter.VOICE_OFFLINE.equals(voice))', self.engine)
+        self.assertIn('"/api/ai/tts_config".equals(path) && "GET".equals(method)', self.router)
+        self.assertIn('"/api/ai/tts_config".equals(path) && "POST".equals(method)', self.router)
+        self.assertIn('if (!"offline_espeak".equals(voice))', self.router)
+        self.assertIn('req.has("azure_key") || req.has("azure_region")', self.router)
+        self.assertNotIn('azure-speech-key-input', self.html)
+        self.assertNotIn('Diego (Azure', self.html)
+        self.assertNotIn('azure-speech-key-input', self.web)
+        self.assertNotIn('azure_region: region', self.web)
 
     def test_stale_callback_guard_wired_to_android_tts(self):
         self.assertIn("mOfflineGate.activate(utteranceId);", self.engine)
