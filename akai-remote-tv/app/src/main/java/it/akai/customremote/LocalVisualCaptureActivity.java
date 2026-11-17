@@ -46,6 +46,7 @@ import java.util.Arrays;
  */
 public final class LocalVisualCaptureActivity extends Activity {
     private static final int REQUEST_SCREEN = 718;
+    private static final int REQUEST_MULTI_FRAME_SESSION = 719;
     private static final long TIMEOUT_MS = 4000L;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -95,7 +96,7 @@ public final class LocalVisualCaptureActivity extends Activity {
         content.addView(heading);
 
         TextView privacy = new TextView(this);
-        privacy.setText("Test volontario: Android chiede il consenso. La TV cattura UN SOLO fotogramma dopo aver nascosto questa schermata. L'immagine resta soltanto nella memoria della TV: nessun salvataggio, invio a DeepSeek/Kimi o condivisione LAN. Per annullare, rifiuta il consenso.");
+        privacy.setText("La cattura non invia immagini automaticamente. Puoi fare una prova locale oppure autorizzare una sessione temporanea multi-schermata con DeepSeek/Kimi. Ogni analisi cloud richiede l'opt-in specifico della sessione. Non mostrare PIN, account, pagamenti o altre informazioni private.");
         privacy.setTextColor(Color.LTGRAY);
         privacy.setTextSize(14);
         privacy.setPadding(0, pad / 2, 0, pad / 2);
@@ -107,6 +108,23 @@ public final class LocalVisualCaptureActivity extends Activity {
         captureButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 requestProjection();
+            }
+        });
+
+        Button multiFrameButton = new Button(this);
+        multiFrameButton.setText("Avvia sessione visiva temporanea (consenso separato)");
+        content.addView(multiFrameButton);
+        multiFrameButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { confirmMultiFrameSession(); }
+        });
+
+        Button stopFrameButton = new Button(this);
+        stopFrameButton.setText("Interrompi sessione visiva");
+        content.addView(stopFrameButton);
+        stopFrameButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                VisualProjectionService.stopOwnerSession(getApplicationContext());
+                status.setText("Richiesto arresto della sessione visiva.");
             }
         });
 
@@ -159,6 +177,49 @@ public final class LocalVisualCaptureActivity extends Activity {
         });
     }
 
+    private void confirmMultiFrameSession() {
+        if (destroyed || !completed || VisualProjectionService.isSessionActive()) {
+            status.setText("Chiudi prima la sessione precedente o la cattura locale in corso.");
+            return;
+        }
+        final AiProviderAdapter adapter = new AiProviderAdapter(getApplicationContext());
+        final String targetProvider = adapter.getActiveProvider();
+        if (!CloudProviderPolicy.isSupportedCloudProvider(targetProvider)) {
+            status.setText("Configurare soltanto DeepSeek o Kimi. Nessun LLM locale.");
+            return;
+        }
+        if (!adapter.hasCloudContextConsent()) {
+            status.setText("Consenso AI cloud non attivo nelle impostazioni JARVIS.");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Autorizza sessione visiva DeepSeek/Kimi")
+                .setMessage("Android richiedera' il consenso alla cattura schermo. "
+                        + "Per MASSIMO 3 minuti o 20 fotogrammi JARVIS potra' "
+                        + "acquisire immagini SOLO in risposta alle azioni della sessione "
+                        + "e inviarle a " + targetProvider + " via API per ragionare. "
+                        + "Ogni immagine puo' consumare credito API. "
+                        + "Evita PIN, account, pagamenti e dati personali. "
+                        + "Interrompi in qualsiasi momento dalla notifica. "
+                        + "Confermi il consenso cloud per questa sessione?")
+                .setNegativeButton("Annulla", null)
+                .setPositiveButton("Confermo e apro il consenso Android",
+                        new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                        try {
+                            projectionManager = (MediaProjectionManager)
+                                    getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+                            if (projectionManager == null) throw new IllegalStateException();
+                            startActivityForResult(
+                                    projectionManager.createScreenCaptureIntent(),
+                                    REQUEST_MULTI_FRAME_SESSION);
+                        } catch (RuntimeException ex) {
+                            status.setText("Permesso MediaProjection non disponibile.");
+                        }
+                    }
+                }).show();
+    }
+
     private void requestProjection() {
         if (!completed || destroyed) return;
         clearPreview();
@@ -183,6 +244,35 @@ public final class LocalVisualCaptureActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_MULTI_FRAME_SESSION) {
+            if (resultCode != RESULT_OK || data == null) {
+                status.setText("Sessione multi-schermata annullata.");
+                return;
+            }
+            String provider = new AiProviderAdapter(getApplicationContext()).getActiveProvider();
+            if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+                status.setText("Provider non autorizzato: scegli DeepSeek o Kimi.");
+                return;
+            }
+            try {
+                Intent start = new Intent(this, VisualProjectionService.class)
+                        .setAction(VisualProjectionService.ACTION_START)
+                        .putExtra(VisualProjectionService.EXTRA_RESULT_CODE, resultCode)
+                        .putExtra(VisualProjectionService.EXTRA_GRANT, data)
+                        .putExtra(VisualProjectionService.EXTRA_PROVIDER, provider);
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    startForegroundService(start);
+                } else {
+                    startService(start);
+                }
+                status.setText("Sessione visiva autorizzata. Ritorno alla TV; "
+                        + "puoi interromperla dalla notifica JARVIS.");
+                moveTaskToBack(true);
+            } catch (RuntimeException ex) {
+                status.setText("Il firmware Android non consente la sessione visiva.");
+            }
+            return;
+        }
         if (requestCode != REQUEST_SCREEN) return;
         if (resultCode != RESULT_OK || data == null) {
             finishCapture(null, "Cattura annullata: nessun consenso.");
