@@ -2606,10 +2606,30 @@ public class UnitTests {
             ScreenPerceptionEngine.PerceptionSnapshot mediaWrongTitle = new ScreenPerceptionEngine.PerceptionSnapshot(
                     "it.mediaset.infinitytv", Collections.singletonList("Canale 5"),
                     Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot mediaWrongNumber = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Italia 20"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot mediaLabelWithSuffix = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Ora in onda: Italia 2 HD"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot mediaCompactLabel = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Italia2 HD"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot raiWrongNumber = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.rainet.androidtv", Collections.singletonList("Rai 10"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot raiCompactLabel = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.rainet.androidtv", Collections.singletonList("Rai1 Diretta"),
+                    Collections.emptyList(), null, false, true, true);
             boolean goalContractOk = !GoalEvidenceVerifier.verify("apri impostazioni audio", settingsMenu).satisfied
                     && GoalEvidenceVerifier.verify("apri impostazioni audio", settingsDetail).satisfied
                     && !GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaWrongTitle).satisfied
                     && GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaPlaying).satisfied
+                    && !GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaWrongNumber).satisfied
+                    && GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaLabelWithSuffix).satisfied
+                    && GoalEvidenceVerifier.verify("metti Italia2 in diretta da Mediaset Infinity", mediaCompactLabel).satisfied
+                    && !GoalEvidenceVerifier.verify("metti Rai 1 in diretta", raiWrongNumber).satisfied
+                    && GoalEvidenceVerifier.verify("metti Rai1 in diretta", raiCompactLabel).satisfied
                     && !GoalEvidenceVerifier.verify("apri YouTube e cerca video di gatti",
                             "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}",
                             new ScreenPerceptionEngine.PerceptionSnapshot(
