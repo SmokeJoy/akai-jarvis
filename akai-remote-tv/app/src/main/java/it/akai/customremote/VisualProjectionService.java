@@ -315,7 +315,9 @@ public final class VisualProjectionService extends Service {
             stale = reader.acquireLatestImage();
         } catch (RuntimeException ignored) {
         } finally {
-            if (stale != null) stale.close();
+            if (stale != null) {
+                try { stale.close(); } catch (RuntimeException ignored) {}
+            }
         }
         // Avoid streaming frames continuously on the low-memory ARMv7 TV.
         // A detached VirtualDisplay preserves the ONE owner-consented
@@ -346,7 +348,9 @@ public final class VisualProjectionService extends Service {
             Image stale = null;
             try { stale = source.acquireLatestImage(); }
             catch (RuntimeException ignored) {}
-            finally { if (stale != null) stale.close(); }
+            finally { if (stale != null) {
+                try { stale.close(); } catch (RuntimeException ignored) {}
+            } }
             return;
         }
         Image image = null;
