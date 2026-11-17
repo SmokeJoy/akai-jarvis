@@ -803,10 +803,10 @@
                 elements.aiBadgeStatus.textContent = '✓ Verificato';
                 showToast('Comando verificato con successo');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
-            } else if (data.status === 'ANSWERED_DIALOG') {
+            } else if (data.status === 'ANSWERED_DIALOG' || (data.status === 'MEMORY_HANDLED' && data.success === true)) {
                 elements.aiBadgeStatus.className = 'ai-badge-status dialog';
-                elements.aiBadgeStatus.textContent = '💬 Risposta';
-                showToast('Risposta da JARVIS');
+                elements.aiBadgeStatus.textContent = data.status === 'MEMORY_HANDLED' ? '💾 Memoria' : '💬 Risposta';
+                showToast(data.status === 'MEMORY_HANDLED' ? 'Memoria gestita da JARVIS' : 'Risposta da JARVIS');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
             } else if (data.execution_outcome === 'COMMAND_SENT'
                     || (data.status === 'COMPLETED_UNVERIFIED' && data.execution_outcome !== 'FAILED')) {
