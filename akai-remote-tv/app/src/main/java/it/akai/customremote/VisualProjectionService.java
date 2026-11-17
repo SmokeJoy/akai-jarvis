@@ -397,6 +397,13 @@ public final class VisualProjectionService extends Service {
                 finishRequest(FrameResult.denied("SENSITIVE_OR_UNKNOWN_SCREEN"));
                 return;
             }
+            // Consent can be revoked while the frame is being produced.
+            // Recheck before allocating/encoding a JPEG; cloud upload has its
+            // own separate policy gate and must also fail closed.
+            if (!new AiProviderAdapter(this).hasCloudContextConsent()) {
+                finishRequest(FrameResult.denied("CLOUD_CONSENT_REVOKED"));
+                return;
+            }
             Image.Plane plane = image.getPlanes()[0];
             ByteBuffer packed = RgbaFramePacker.pack(plane.getBuffer(),
                     frameWidth, frameHeight, plane.getRowStride(), plane.getPixelStride());
