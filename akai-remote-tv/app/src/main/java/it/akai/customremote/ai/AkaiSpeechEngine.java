@@ -15,13 +15,9 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * AkaiSpeechEngine: Motore vocale ibrido per AKAI Custom TV (Fase 15).
- * 
- * Orchestra a doppio livello:
- * 1. Livello Neurale Cloud: Microsoft Azure Speech F0 (voci naturali it-IT-DiegoNeural, it-IT-IsabellaNeural)
- *    con cache audio 8 MB su disco ed AudioFocus Ducking.
- * 2. Livello Offline Fallback: Android TextToSpeech nativo (com.reecedunn.espeak) in caso di assenza
- *    di connessione, quota esaurita o richiesta esplicita di modalità offline.
+ * AkaiSpeechEngine: Android platform TTS for AKAI TV.
+ * Speech uses the installed Android engine; no external Azure synthesis calls.
+ * DeepSeek/Kimi remain the exclusive cloud providers for AI inference.
  */
 public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     private static final String TAG = "AKAI_SpeechEngine";
@@ -158,8 +154,7 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
 
     /**
      * Pronuncia un testo attraverso gli altoparlanti della televisione.
-     * Tenta prioritariamente la voce neurale configurata (Diego/Isabella); in caso di errore
-     * o assenza di credenziali esegue un fallback trasparente su TTS locale offline.
+     * Uses only Android platform TTS. Legacy cloud synthesis is disabled.
      */
     public synchronized boolean speak(String text, boolean interrupt) {
         if (text == null || text.trim().isEmpty()) return false;
@@ -171,21 +166,7 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         mSpeechId.incrementAndGet();
         mSpeechState = SpeechState.FETCHING;
 
-        String voice = getTtsVoice();
-        String region = getAzureRegion();
-        String apiKey = getAzureKey();
-
-        // Tentativo con voce neurale cloud se configurata e chiave presente (inibito se STRICT_LOCAL_ONLY)
-        if (!AkaiAiController.isStrictLocalOnly() && !CloudSpeechAdapter.VOICE_OFFLINE.equals(voice) && apiKey != null && !apiKey.isEmpty()) {
-            Log.i(TAG, "Attempting neural speech with voice: " + voice + " (" + region + ")");
-            boolean neuralSuccess = mCloudAdapter.speakNeural(text, voice, region, apiKey, null);
-            if (neuralSuccess) {
-                return true;
-            }
-            Log.w(TAG, "Neural speech failed or unavailable. Falling back to offline AOSP TTS engine...");
-        }
-
-        // Fallback offline su Android TextToSpeech
+        // Local Android TTS only; no Azure speech calls or additional providers.
         return speakOfflineTts(text, interrupt);
     }
 
@@ -196,12 +177,8 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         mSpeechId.incrementAndGet();
         mSpeechState = SpeechState.FETCHING;
 
-        String region = getAzureRegion();
-        String apiKey = getAzureKey();
-
-        if (!AkaiAiController.isStrictLocalOnly() && !CloudSpeechAdapter.VOICE_OFFLINE.equals(voice) && apiKey != null && !apiKey.isEmpty()) {
-            return mCloudAdapter.speakNeural(text, voice, region, apiKey, null);
-        }
+        // Historical voice choice is accepted for UI compatibility; synthesis
+        // remains on the installed Android TTS engine.
         return speakOfflineTts(text, true);
     }
 
