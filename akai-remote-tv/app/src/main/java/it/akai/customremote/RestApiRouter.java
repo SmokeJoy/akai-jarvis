@@ -721,6 +721,7 @@ public class RestApiRouter {
                     || req.has("billing") || req.has("paid_plan") || req.has("api_endpoint")) {
                 sendJsonResponse(os, 403, new JSONObject()
                         .put("success", false)
+                        .put("strict_local_only", aiHandler == null || aiHandler.isStrictLocalOnly())
                         .put("error", "Provider non ammesso: solo eSpeak o FreeTTS gratuito personale"));
                 return true;
             }
