@@ -41,6 +41,7 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     private TextToSpeech mTts;
     private final AtomicBoolean mIsInitialized = new AtomicBoolean(false);
     private final AtomicBoolean mIsOfflineSpeaking = new AtomicBoolean(false);
+    private final SpeechUtteranceGate mOfflineGate = new SpeechUtteranceGate();
 
     private final AudioManager.OnAudioFocusChangeListener mFocusListener = new AudioManager.OnAudioFocusChangeListener() {
         @Override
@@ -120,6 +121,7 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                 mTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                     @Override
                     public void onStart(String utteranceId) {
+                        if (!mOfflineGate.isCurrent(utteranceId)) return;
                         mIsOfflineSpeaking.set(true);
                         mSpeechState = SpeechState.PLAYING;
                         Log.d(TAG, "Offline TTS speaking started: " + utteranceId);
@@ -127,18 +129,14 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
 
                     @Override
                     public void onDone(String utteranceId) {
-                        mIsOfflineSpeaking.set(false);
-                        mSpeechState = SpeechState.IDLE;
+                        if (!finishOfflineUtterance(utteranceId)) return;
                         Log.d(TAG, "Offline TTS speaking finished: " + utteranceId);
-                        abandonAudioFocus();
                     }
 
                     @Override
                     public void onError(String utteranceId) {
-                        mIsOfflineSpeaking.set(false);
-                        mSpeechState = SpeechState.IDLE;
+                        if (!finishOfflineUtterance(utteranceId)) return;
                         Log.e(TAG, "Offline TTS error: " + utteranceId);
-                        abandonAudioFocus();
                     }
                 });
 
@@ -190,18 +188,19 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
             return false;
         }
 
+        // Sequence ID prevents two requests in the same millisecond from sharing callbacks.
+        final String utteranceId = "akai_offline_" + mSpeechId.get();
+        mOfflineGate.activate(utteranceId);
         try {
             requestAudioFocus();
             int queueMode = interrupt ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
-            String utteranceId = "akai_offline_" + System.currentTimeMillis();
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 Bundle params = new Bundle();
                 params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
                 int res = mTts.speak(text, queueMode, params, utteranceId);
                 if (res != TextToSpeech.SUCCESS) {
-                    mSpeechState = SpeechState.IDLE;
-                    abandonAudioFocus();
+                    finishOfflineUtterance(utteranceId);
                     return false;
                 }
                 return true;
@@ -211,21 +210,21 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                 params.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId);
                 int res = mTts.speak(text, queueMode, params);
                 if (res != TextToSpeech.SUCCESS) {
-                    mSpeechState = SpeechState.IDLE;
-                    abandonAudioFocus();
+                    finishOfflineUtterance(utteranceId);
                     return false;
                 }
                 return true;
             }
         } catch (Exception e) {
             Log.e(TAG, "Error in speakOfflineTts: " + e.getMessage());
-            mSpeechState = SpeechState.IDLE;
-            abandonAudioFocus();
+            finishOfflineUtterance(utteranceId);
             return false;
         }
     }
 
     public synchronized void stop() {
+        // Invalidate first: TTS.stop() can trigger asynchronous onDone/onError.
+        mOfflineGate.stop();
         if (mCloudAdapter != null) {
             mCloudAdapter.stopCurrentPlayback();
         }
@@ -235,6 +234,14 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         mIsOfflineSpeaking.set(false);
         mSpeechState = SpeechState.IDLE;
         abandonAudioFocus();
+    }
+
+    private boolean finishOfflineUtterance(String utteranceId) {
+        if (!mOfflineGate.finish(utteranceId)) return false;
+        mIsOfflineSpeaking.set(false);
+        mSpeechState = SpeechState.IDLE;
+        abandonAudioFocus();
+        return true;
     }
 
     public boolean isSpeaking() {
