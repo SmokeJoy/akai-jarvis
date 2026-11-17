@@ -59,6 +59,10 @@ public final class ProcedureGoalMatcher {
         String user = normalize(userInput);
         String stored = normalize(storedCandidate);
         if (user.isEmpty() || stored.isEmpty() || generic(user) || generic(stored)) return false;
+        // Never execute a recalled skill from a negated or exploratory utterance.
+        // Ambiguous language should be handled by the cloud planner, not SQLite recall.
+        if (user.matches("^(non|no|evita|senza|annulla|stop|ferma)(\\s+.*)?$")
+                || user.matches("^(come|perche|quando|puoi|potresti|sai)(\\s+.*)?$")) return false;
         if (user.equals(stored)) return true;
         // Full candidate appears as whole words within the spoken command.
         if (stored.length() >= 4 && wholeWords(user, stored)) {
