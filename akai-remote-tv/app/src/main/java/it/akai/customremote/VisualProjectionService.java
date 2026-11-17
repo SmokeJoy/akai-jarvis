@@ -283,7 +283,13 @@ public final class VisualProjectionService extends Service {
         startForeground(NOTIFICATION_ID, notification.build());
     }
 
-    // A caller-provided callback must not crash the MediaProjection worker.\n    private static void deliverDenied(FrameCallback callback, String reason) {\n        try { callback.onFrame(FrameResult.denied(reason)); }\n        catch (RuntimeException ignored) {}\n    }\n\n    private void requestOnWorker(String expectedProvider, FrameCallback callback) {
+    // A caller-provided callback must not crash the MediaProjection worker.
+    private static void deliverDenied(FrameCallback callback, String reason) {
+        try { callback.onFrame(FrameResult.denied(reason)); }
+        catch (RuntimeException ignored) {}
+    }
+
+    private void requestOnWorker(String expectedProvider, FrameCallback callback) {
         if (closed || gate == null || reader == null) {
             deliverDenied(callback, "SESSION_CLOSED");
             return;
@@ -301,7 +307,7 @@ public final class VisualProjectionService extends Service {
         VisualCaptureSessionGate.Verdict verdict = gate.reserveNextFrame(
                 expectedProvider, cloudConsent, sensitive, false, System.currentTimeMillis());
         if (!verdict.allowed) {
-            deliverDenied(callback, verdict.reason));
+            deliverDenied(callback, verdict.reason);
             if (!gate.isActive()) {
                 stopCapture();
                 stopSelf();
