@@ -621,6 +621,26 @@ public class AkaiAiController {
                 snapshots, waitElapsed, executed, false, lastSnap);
     }
 
+    /**
+     * Pure session boundary: consented screenshot -> remote vision description.
+     * No unconsented cloud fallback, no local LLM and no click authorization.
+     */
+    private VisualObservationProvider.Result observeSessionFrame(
+            String provider, ScreenPerceptionEngine.PerceptionSnapshot snapshot,
+            final TaskToken token) {
+        if (snapshot == null || snapshot.hasSensitiveFields || isTokenCancelled(token)) {
+            return VisualObservationProvider.Result.unavailable("NO_SAFE_UI_SNAPSHOT");
+        }
+        return VisualObservationProvider.observe(
+                provider, snapshot.foregroundPackage,
+                snapshot.toRedactedMinimalContextPrompt(),
+                new VisualObservationProvider.Cancellation() {
+                    @Override public boolean isCancelled() {
+                        return isTokenCancelled(token);
+                    }
+                });
+    }
+
     private String buildReflectorContext(String userGoal,
                                         String candidateCondition,
                                         ScreenPerceptionEngine.PerceptionSnapshot postSnap,
@@ -862,6 +882,7 @@ public class AkaiAiController {
         int snapshotCount = 0;
         long totalWaitElapsedMs = 0L;
         int cloudCalls = 0;
+        int visualFrames = 0;
         int replanCount = 0;
         boolean replanRejectedDuplicate = false;
 
@@ -971,6 +992,41 @@ public class AkaiAiController {
             String visualHint = VisualObservationBridge.consume(
                     provider, initialSnap.foregroundPackage, redactedContextPrompt,
                     initialSnap.hasSensitiveFields, System.currentTimeMillis());
+            // If the owner has started an Android-consented multi-frame
+            // session, acquire a NEW on-demand frame. The service sends data
+            // only to the selected DeepSeek/Kimi API; no on-TV AI model.
+            if (visualHint.isEmpty() && VisualObservationProvider.active()
+                    && !isTokenCancelled(myToken)) {
+                VisualObservationProvider.Result image = observeSessionFrame(
+                        provider, initialSnap, myToken);
+                if (image.success) {
+                    cloudCalls++;
+                    visualFrames++;
+                    totalTokens += image.tokens;
+                    costEur += image.costEur;
+                    VisualObservationBridge.publish(provider, image.packageName,
+                            image.uiContext, image.description,
+                            image.frameTimeMs, System.currentTimeMillis());
+                    // Check that the real Accessibility screen still matches
+                    // after HTTP latency. Never plan against stale imagery.
+                    initialSnap = bridge.capture(context);
+                    snapshotCount++;
+                    redactedContextPrompt = initialSnap.toRedactedMinimalContextPrompt();
+                    visualHint = VisualObservationBridge.consume(provider,
+                            initialSnap.foregroundPackage, redactedContextPrompt,
+                            initialSnap.hasSensitiveFields, System.currentTimeMillis());
+                    if (initialSnap.hasSensitiveFields) {
+                        try {
+                            result.put("success", false);
+                            result.put("status", "PRIVACY_BLOCKED");
+                            result.put("execution_outcome", OUTCOME_NOT_TESTED);
+                            result.put("visual_frame_count", visualFrames);
+                            result.put("verified", false);
+                        } catch (Exception ignored) {}
+                        return result;
+                    }
+                }
+            }
             if (!visualHint.isEmpty()) {
                 try {
                     JSONObject bounded = new JSONObject(redactedContextPrompt);
@@ -992,17 +1048,17 @@ public class AkaiAiController {
 
             if (planRes.success) {
                 usedCloudPlanner = true;
-                promptTokens = planRes.promptTokens;
-                compTokens = planRes.completionTokens;
-                totalTokens = planRes.totalTokens;
-                costEur = planRes.costEur;
+                promptTokens += planRes.promptTokens;
+                compTokens += planRes.completionTokens;
+                totalTokens += planRes.totalTokens;
+                costEur += planRes.costEur;
                 planReply = planRes.reply;
                 planWarning = planRes.warningMessage;
 
                 // Caso A: Domanda puramente conversazionale -> 0 azioni hardware richieste
                 if (planRes.actions == null || planRes.actions.length() == 0) {
                     Log.i(TAG, "Conversational dialog response received (content redacted)");
-                    memoryEngine.incrementStat("cloud_ai_calls", 1);
+                    memoryEngine.incrementStat("cloud_ai_calls", cloudCalls);
                     memoryEngine.incrementStat("prompt_tokens", promptTokens);
                     memoryEngine.incrementStat("completion_tokens", compTokens);
 
@@ -1014,6 +1070,7 @@ public class AkaiAiController {
                         result.put("verified", false);
                         result.put("execution_outcome", OUTCOME_NOT_TESTED);
                         result.put("cloud_calls", cloudCalls);
+                        result.put("visual_frame_count", visualFrames);
                         result.put("snapshot_count", snapshotCount);
                         result.put("execution_mode", getExecutionMode());
                         result.put("strict_local_only", false);
@@ -1117,6 +1174,35 @@ public class AkaiAiController {
         // Reflector & singolo replanning non ripetitivo se fallito o non verificato
         if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
             String reflectorContext = buildReflectorContext(query, candidateCondition, postSnap, candidateActions, execRes);
+            // A changed application/screen may require a SECOND, fresh image.
+            // It cannot reuse the previous screenshot or authorize blind clicks.
+            if (VisualObservationProvider.active() && postSnap != null
+                    && !postSnap.hasSensitiveFields && !isTokenCancelled(myToken)) {
+                VisualObservationProvider.Result retryImage = observeSessionFrame(
+                        provider, postSnap, myToken);
+                if (retryImage.success) {
+                    cloudCalls++;
+                    visualFrames++;
+                    totalTokens += retryImage.tokens;
+                    costEur += retryImage.costEur;
+                    try {
+                        JSONObject wrapper = new JSONObject(reflectorContext);
+                        wrapper.put("untrusted_visual_description", retryImage.description);
+                        wrapper.put("visual_frame_time_ms", retryImage.frameTimeMs);
+                        wrapper.put("visual_description_is_click_authority", false);
+                        wrapper.put("visual_description_is_goal_evidence", false);
+                        // Re-check live context before feeding the planner.
+                        ScreenPerceptionEngine.PerceptionSnapshot latest = bridge.capture(context);
+                        snapshotCount++;
+                        if (latest != null && !latest.hasSensitiveFields
+                                && retryImage.packageName.equals(latest.foregroundPackage)
+                                && retryImage.uiContext.equals(latest.toRedactedMinimalContextPrompt())) {
+                            reflectorContext = wrapper.toString();
+                            postSnap = latest;
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
             JSONObject prefs = memoryEngine.getAllPreferences();
             try {
                 prefs.put("agent_relevant_facts",
@@ -1258,6 +1344,7 @@ public class AkaiAiController {
             result.put("replan_count", replanCount);
             result.put("replan_rejected_duplicate", replanRejectedDuplicate);
             result.put("cloud_calls", cloudCalls);
+            result.put("visual_frame_count", visualFrames);
             result.put("snapshot_count", snapshotCount);
             result.put("wait_elapsed_ms", totalWaitElapsedMs);
             result.put("executed_steps", executedStepsTotal);
