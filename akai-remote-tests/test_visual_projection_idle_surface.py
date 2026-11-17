@@ -43,7 +43,7 @@ class VisualIdleSurfaceTests(unittest.TestCase):
 
     def test_stale_late_frame_drained_without_encoding(self):
         capture = self.method('private void consumeOnlyOnDemand(', 'private static boolean mostlyBlack(')
-        self.assertRegex(capture, r'if \\(pending == null \\|\\| closed\\)')
+        self.assertIn('if (pending == null || closed)', capture)
         self.assertIn('source.acquireLatestImage()', capture)
         self.assertIn('if (stale != null) stale.close()', capture)
         idle = capture[capture.index('if (pending == null || closed)'):capture.index('Image image = null;')]
