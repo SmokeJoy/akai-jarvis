@@ -641,6 +641,211 @@ public class AkaiAiController {
                 });
     }
 
+    /**
+     * Owner-approved multi-frame mode. One DeepSeek/Kimi frame description and
+     * one cloud plan per iteration -> at most ONE Android action -> fresh UI.
+     * No vision model runs on the TV and no screenshot is stored in SQLite.
+     * Screenshot descriptions never authorize clicks or verify a goal.
+     */
+    private JSONObject processVisualGoalLocked(String query, boolean speak,
+            long startTime, TaskToken token,
+            ScreenPerceptionEngine.PerceptionSnapshot initial) {
+        JSONObject result = new JSONObject();
+        String provider = aiAdapter.getActiveProvider();
+        if (!CloudProviderPolicy.isSupportedCloudProvider(provider)
+                || !aiAdapter.hasCloudContextConsent()
+                || aiAdapter.getApiKey(provider).trim().isEmpty()) {
+            try {
+                result.put("source", "consent_guard");
+                result.put("execution_outcome", OUTCOME_NOT_TESTED);
+                result.put("verified", false);
+            } catch (Exception ignored) {}
+            return completeAndSpeak(result, query,
+                    "Sessione AI senza provider DeepSeek/Kimi e consenso configurati.",
+                    "CLOUD_NOT_CONFIGURED", null, 0, 0.0, false, startTime);
+        }
+
+        ScreenPerceptionEngine.PerceptionSnapshot current = initial;
+        JSONArray fullPath = new JSONArray();
+        String lastAction = null;
+        String lastPerceivedState = null;
+        String lastCondition = null;
+        String failureReason = "Obiettivo non ancora verificato.";
+        int cloudCalls = 0, visualFrames = 0, tokens = 0, executed = 0;
+        double costEur = 0.0;
+        boolean verified = false;
+        boolean cancelled = false;
+        boolean answeredDialog = false;
+        String dialogReply = null;
+        final String firstPackage = initial != null ? initial.foregroundPackage : "";
+        String intentKey = generateIntentKey(query);
+
+        for (int attempt = 0; attempt < VisualStepPolicy.MAX_ACTION_STEPS; attempt++) {
+            if (isTokenCancelled(token)) {
+                cancelled = true;
+                failureReason = "Operazione interrotta dall'utente.";
+                break;
+            }
+            if (!VisualStepPolicy.mayContinue(attempt, cloudCalls, startTime,
+                    System.currentTimeMillis()) || aiAdapter.isBudgetExceeded()) {
+                failureReason = "Limite di tempo, azioni, chiamate o credito AI raggiunto.";
+                break;
+            }
+            if (!VisualObservationProvider.active()) {
+                failureReason = "Sessione di acquisizione terminata o revocata.";
+                break;
+            }
+            if (current == null || current.hasSensitiveFields) {
+                failureReason = "Schermata non osservabile o con dati sensibili.";
+                break;
+            }
+            VisualObservationProvider.Result frame = observeSessionFrame(provider, current, token);
+            if (!frame.success) {
+                failureReason = "Nuovo screenshot non disponibile: " + frame.reason;
+                break;
+            }
+            cloudCalls++;
+            visualFrames++;
+            tokens += frame.tokens;
+            costEur += frame.costEur;
+
+            // The image may be several seconds old when the remote API replies.
+            // Re-observe before using its description in a planning request.
+            ScreenPerceptionEngine.PerceptionSnapshot fresh = bridge.capture(context);
+            if (fresh == null || fresh.hasSensitiveFields) {
+                failureReason = "Schermata sensibile: pianificazione bloccata.";
+                break;
+            }
+            String freshUi = fresh.toRedactedMinimalContextPrompt();
+            if (!frame.packageName.equals(fresh.foregroundPackage)
+                    || !frame.uiContext.equals(freshUi)) {
+                current = fresh;
+                failureReason = "Schermata cambiata durante l'analisi.";
+                continue;
+            }
+            current = fresh;
+            try {
+                JSONObject contextInfo = new JSONObject(freshUi);
+                contextInfo.put("untrusted_visual_description", frame.description);
+                contextInfo.put("visual_description_is_click_authority", false);
+                contextInfo.put("visual_description_is_goal_evidence", false);
+                contextInfo.put("action_limit_for_this_iteration", 1);
+                contextInfo.put("visual_iteration", attempt + 1);
+                contextInfo.put("remaining_user_goal", query);
+                contextInfo.put("previous_execution_status", failureReason);
+                JSONArray previous = new JSONArray();
+                int min = Math.max(0, fullPath.length() - 4);
+                for (int j = min; j < fullPath.length(); j++) {
+                    previous.put(fullPath.optJSONObject(j));
+                }
+                contextInfo.put("already_executed_actions", previous);
+
+                JSONObject prefs = memoryEngine.getAllPreferences();
+                prefs.put("agent_relevant_facts",
+                        AgentFactMemory.relevantFacts(memoryEngine, query, 3));
+                AiProviderAdapter.AiResponse plan = aiAdapter.planActionSequence(
+                        query, contextInfo.toString(), prefs,
+                        memoryEngine.getRecentConversations(2));
+                cloudCalls++;
+                tokens += plan.totalTokens;
+                costEur += plan.costEur;
+
+                if (!plan.success) {
+                    failureReason = "Pianificazione DeepSeek/Kimi non riuscita.";
+                    break;
+                }
+                JSONObject chosen = VisualStepPolicy.firstStep(plan.actions);
+                if (chosen == null) {
+                    if (fullPath.length() == 0 && plan.reply != null) {
+                        answeredDialog = true;
+                        dialogReply = plan.reply;
+                        failureReason = "Risposta testuale senza azioni TV.";
+                    } else {
+                        failureReason = "Nessuna ulteriore azione TV proposta.";
+                    }
+                    break;
+                }
+                String stateSignature = freshUi + "|" + frame.description;
+                String actionSignature = chosen.toString();
+                if (VisualStepPolicy.repeatedWithoutProgress(lastAction,
+                        lastPerceivedState, actionSignature, stateSignature)) {
+                    failureReason = "Nessun progresso: stessa azione sulla stessa schermata.";
+                    break;
+                }
+                lastAction = actionSignature;
+                lastPerceivedState = stateSignature;
+                JSONArray single = new JSONArray().put(new JSONObject(chosen.toString()));
+                StepwiseResult step = executeActionsStepwise(single, token);
+                executed += step.executedSteps;
+                if (step.cancelled || isTokenCancelled(token)) {
+                    cancelled = true;
+                    failureReason = "Operazione interrotta.";
+                    break;
+                }
+                if (step.commandResult == null || !step.commandResult.success) {
+                    failureReason = "Azione rifiutata dalla TV; controllero' la nuova schermata.";
+                    current = bridge.capture(context);
+                    continue;
+                }
+                fullPath.put(new JSONObject(chosen.toString()));
+                lastCondition = plan.successCondition;
+                WaitObservation obs = waitForConditionOrUiChange(query, lastCondition,
+                        1000L, sDefaultPollIntervalMs, token);
+                current = obs.snapshot;
+                verified = obs.verified;
+                if (verified) break;
+                failureReason = "Azione eseguita, ma obiettivo finale non verificato.";
+            } catch (Exception e) {
+                failureReason = "Errore di convalida o sequenza visuale.";
+                break;
+            }
+        }
+
+        boolean learned = false;
+        if (verified && !cancelled
+                && AgentSkillGate.canLearn(true, fullPath, lastCondition)) {
+            try {
+                learned = memoryEngine.saveVerifiedProcedure(
+                        intentKey, query.toLowerCase(Locale.ITALIAN), query,
+                        current != null ? current.foregroundPackage : firstPackage,
+                        new JSONObject().put("pkg", firstPackage).toString(),
+                        fullPath, lastCondition, "autonomous-visual-1");
+            } catch (Exception ignored) {}
+        }
+        if (cloudCalls > 0) {
+            memoryEngine.incrementStat("cloud_ai_calls", cloudCalls);
+            memoryEngine.incrementStat("visual_frames_used", visualFrames);
+            memoryEngine.incrementStat("total_cloud_tokens", tokens);
+        }
+        try {
+            result.put("success", verified || answeredDialog);
+            result.put("verified", verified);
+            result.put("source", provider);
+            result.put("visual_session", true);
+            result.put("visual_frames", visualFrames);
+            result.put("executed_steps", executed);
+            result.put("cloud_calls", cloudCalls);
+            result.put("tokens", tokens);
+            result.put("cost_eur", costEur);
+            result.put("learned_new_procedure", learned);
+            result.put("execution_mode", getExecutionMode());
+            result.put("goal_evidence_reason", failureReason);
+            result.put("execution_outcome", verified ? OUTCOME_STATE_VERIFIED
+                    : (cancelled ? OUTCOME_FAILED : (answeredDialog
+                    ? OUTCOME_NOT_TESTED : (fullPath.length() > 0
+                    ? OUTCOME_COMMAND_SENT : OUTCOME_FAILED))));
+        } catch (Exception ignored) {}
+        String status = verified ? "SUCCESS_VERIFIED"
+                : cancelled ? "CANCELLED" : answeredDialog
+                ? "ANSWERED_DIALOG" : "COMPLETED_UNVERIFIED";
+        String finalMessage = verified
+                ? "Obiettivo raggiunto e verificato sullo stato attuale della TV."
+                : answeredDialog ? dialogReply
+                : "JARVIS non puo' ancora confermare il risultato: " + failureReason;
+        return completeAndSpeak(result, query, finalMessage, status, intentKey,
+                tokens, costEur, speak && !cancelled, startTime);
+    }
+
     private String buildReflectorContext(String userGoal,
                                         String candidateCondition,
                                         ScreenPerceptionEngine.PerceptionSnapshot postSnap,
@@ -911,6 +1116,13 @@ public class AkaiAiController {
                 secRes.put("strict_local_only", isStrictLocalOnly());
             } catch (JSONException ignored) {}
             return secRes;
+        }
+
+        // A session begins ONLY after separate user + Android MediaProjection
+        // consent. It is the only path that can perform multi-frame visual
+        // autonomy across apps. Legacy commands still use their A1/A2 path.
+        if (VisualObservationProvider.active() && !isStrictLocalOnly()) {
+            return processVisualGoalLocked(query, speak, startTime, myToken, initialSnap);
         }
 
         String provider = aiAdapter.getActiveProvider();
