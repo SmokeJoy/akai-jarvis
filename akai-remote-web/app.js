@@ -149,6 +149,10 @@
 
         // Voice & TTS
         aiVoiceSelect: document.getElementById('ai-voice-select'),
+        freeTtsKeyInput: document.getElementById('free-tts-api-key'),
+        freeTtsConsent: document.getElementById('free-tts-consent'),
+        freeTtsFreePlan: document.getElementById('free-tts-free-plan'),
+        freeTtsQuotaStatus: document.getElementById('free-tts-quota-status'),
         phoneVoiceToggle: document.getElementById('phone-voice-toggle'),
         phoneVoiceStatus: document.getElementById('phone-voice-status'),
         btnPreviewPhoneVoice: document.getElementById('btn-preview-phone-voice'),
@@ -1241,7 +1245,6 @@
     }
 
     async function loadTtsConfig() {
-        if (elements.aiVoiceSelect) elements.aiVoiceSelect.value = 'offline_espeak';
         if (!state.token) return;
         try {
             const res = await fetch(getApiUrl('/api/ai/tts_config'), {
@@ -1249,12 +1252,31 @@
             });
             if (!res.ok) return;
             const cfg = await res.json();
+            const voice = cfg.active_voice;
             if (elements.aiVoiceSelect) {
-                elements.aiVoiceSelect.value = cfg.active_voice === 'offline_espeak'
-                    ? cfg.active_voice : 'offline_espeak';
+                elements.aiVoiceSelect.value = (
+                    voice === 'it-IT-DiegoNeural' || voice === 'it-IT-IsabellaNeural'
+                ) && cfg.free_tts_enabled === true ? voice : 'offline_espeak';
+            }
+            if (elements.freeTtsConsent) {
+                elements.freeTtsConsent.checked = cfg.free_tts_consent === true;
+            }
+            if (elements.freeTtsFreePlan) elements.freeTtsFreePlan.checked = false;
+            if (elements.freeTtsKeyInput) {
+                elements.freeTtsKeyInput.value = '';
+                elements.freeTtsKeyInput.placeholder = cfg.free_tts_has_key
+                    ? 'Chiave gratuita già salvata in forma cifrata'
+                    : 'Incolla la chiave gratuita del tuo account personale';
+            }
+            if (elements.freeTtsQuotaStatus) {
+                const used = Number(cfg.free_tts_used_chars || 0);
+                const limit = Number(cfg.free_tts_limit_chars || 5000);
+                elements.freeTtsQuotaStatus.textContent =
+                    `FreeTTS: ${cfg.free_tts_enabled ? 'attiva' : 'disattiva'} · ${Math.max(0, limit - used)} caratteri rimanenti su ${limit} al mese. `
+                    + 'Le risposte non supportate continuano con eSpeak.';
             }
         } catch (e) {
-            console.warn('Errore lettura stato TTS locale:', e);
+            console.warn('Errore lettura stato sintesi vocale:', e);
         }
     }
 
@@ -1310,7 +1332,27 @@
     }
 
     async function saveTtsConfig() {
-        if (!state.token) return;
+        if (!state.token) {
+            showToast('Associa il telecomando alla TV prima di configurare la voce.', true);
+            return;
+        }
+        const voice = elements.aiVoiceSelect ? elements.aiVoiceSelect.value : 'offline_espeak';
+        const cloudSpeech = voice !== 'offline_espeak';
+        const consent = Boolean(elements.freeTtsConsent && elements.freeTtsConsent.checked);
+        const confirmedFree = Boolean(elements.freeTtsFreePlan && elements.freeTtsFreePlan.checked);
+        if (cloudSpeech && (!consent || !confirmedFree)) {
+            showToast('Per la voce gratuita devi confermare il consenso e il piano personale Free.', true);
+            return;
+        }
+        const payload = {
+            mode: cloudSpeech ? 'freetts_free' : 'offline_espeak',
+            voice,
+            free_tts_consent: cloudSpeech && consent,
+            free_tier_confirmed: cloudSpeech && confirmedFree
+        };
+        const key = elements.freeTtsKeyInput ? elements.freeTtsKeyInput.value.trim() : '';
+        if (cloudSpeech && key) payload.freetts_api_key = key;
+
         try {
             const res = await fetch(getApiUrl('/api/ai/tts_config'), {
                 method: 'POST',
@@ -1318,19 +1360,31 @@
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${state.token}`
                 },
-                body: JSON.stringify({ voice: 'offline_espeak' })
+                body: JSON.stringify(payload)
             });
-            showToast(res.ok ? 'Sintesi locale eSpeak confermata' :
-                'Configurazione vocale locale non disponibile', !res.ok);
-            if (res.ok) loadTtsConfig();
+            const answer = await res.json().catch(() => ({}));
+            if (!res.ok || answer.success !== true) {
+                showToast(answer.error || 'Configurazione vocale non autorizzata o chiave non disponibile.', true);
+                return;
+            }
+            if (elements.freeTtsKeyInput) elements.freeTtsKeyInput.value = '';
+            showToast(cloudSpeech
+                ? 'Voce italiana FreeTTS attivata con limite gratuito e fallback eSpeak'
+                : 'Voce offline eSpeak attivata. FreeTTS e relativa chiave disattivate.');
+            loadTtsConfig();
         } catch (e) {
-            showToast('Errore comunicazione TTS locale', true);
+            showToast('Errore di comunicazione col motore vocale della TV.', true);
         }
     }
 
     async function previewVoice() {
         if (!state.token) return;
-        const voice = 'offline_espeak';
+        const voice = elements.aiVoiceSelect ? elements.aiVoiceSelect.value : 'offline_espeak';
+        const isFreeVoice = voice !== 'offline_espeak';
+        if (isFreeVoice && !Boolean(elements.freeTtsConsent && elements.freeTtsConsent.checked)) {
+            showToast('Attiva il consenso FreeTTS prima di usare l\'anteprima.', true);
+            return;
+        }
         try {
             const res = await fetch(getApiUrl('/api/ai/tts_preview'), {
                 method: 'POST',
@@ -1340,13 +1394,15 @@
                 },
                 body: JSON.stringify({
                     voice,
-                    text: 'Questa è la voce locale di JARVIS sulla tua televisione AKAI.'
+                    text: 'Ciao, sono JARVIS. Questa è la mia voce italiana sulla tua televisione.'
                 })
             });
-            if (res.ok) showToast('Anteprima eSpeak avviata sulla TV');
-            else showToast('Impossibile avviare il motore vocale locale', true);
+            showToast(res.ok
+                ? 'Anteprima inviata agli altoparlanti della TV.'
+                : 'Anteprima non disponibile. Salva prima la voce o verifica la quota gratuita.',
+                !res.ok);
         } catch (e) {
-            showToast('Errore anteprima voce locale', true);
+            showToast('Errore anteprima sulla TV', true);
         }
     }
 
