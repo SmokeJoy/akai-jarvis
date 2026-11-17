@@ -89,3 +89,20 @@ assert 'if (closed || projectionRevoked) throw new IllegalStateException("Projec
 registration = start_command[start_command.index("if (closed || projectionRevoked) throw new IllegalStateException(\"Projection revoked before session install\")"):]
 assert registration.index("if (closed || projectionRevoked) throw") < registration.index("VisualObservationProvider.install(observationSession)")
 print("PASS: revoked projection cannot register a stale visual observation session")
+
+# An application may switch between the reservation snapshot and ImageReader's
+# callback. Never encode/upload that frame under the earlier request's consent.
+# This is a source-level contract, NOT a hardware concurrency simulation.
+capture = source[source.index("private void consumeOnlyOnDemand("):source.index("private synchronized void finishRequest(")]
+assert "private String pendingForegroundPackage;" in source
+assert "pendingForegroundPackage = snap.foregroundPackage;" in method
+assert method.index("pendingForegroundPackage = snap.foregroundPackage;") < method.index("display.setSurface(reader.getSurface())")
+assert 'deliverDenied(callback, "FRAME_PACKAGE_UNKNOWN")' in method
+assert 'snap.foregroundPackage.equals(pendingForegroundPackage)' in capture
+assert 'finishRequest(FrameResult.denied("FRAME_FOREGROUND_CHANGED"))' in capture
+assert capture.index("FRAME_FOREGROUND_CHANGED") < capture.index("RgbaFramePacker.pack(")
+finish = source[source.index("private synchronized void finishRequest("):source.index("private synchronized void stopCapture(")]
+stop = source[source.index("private synchronized void stopCapture("):]
+assert "pendingForegroundPackage = null;" in finish
+assert "pendingForegroundPackage = null;" in stop
+print("PASS: foreground app switch invalidates frame before JPEG encoding and clears request binding")
