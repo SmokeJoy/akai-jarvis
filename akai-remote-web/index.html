@@ -593,55 +593,20 @@
                         </div>
                     </div>
 
-                    <!-- SUBTAB: VOCE & TTS NEURALE -->
+                    <!-- SUBTAB: VOCE LOCALE (NESSUN TTS CLOUD) -->
                     <div id="tab-voice" class="ai-tab-content" role="tabpanel">
                         <p class="section-intro">
-                            Sintesi vocale naturale italiana (Azure Speech F0: 500.000 car/mese gratuiti) con ducking automatico del volume TV.
+                            Risposte vocali tramite eSpeak installato sulla TV. Nessun servizio Azure, credenziale o costo API per la sintesi.
+                            L'intelligenza dell'assistente rimane su DeepSeek/Kimi, secondo il consenso configurato.
                         </p>
-
                         <div class="form-group">
-                            <label for="ai-voice-select">Voce Assistente:</label>
+                            <label for="ai-voice-select">Motore vocale attivo:</label>
                             <select id="ai-voice-select" class="form-select">
-                                <option value="it-IT-DiegoNeural" selected>Diego (Azure Neurale Maschile - Naturale e Calmo)</option>
-                                <option value="it-IT-IsabellaNeural">Isabella (Azure Neurale Femminile - Naturale)</option>
-                                <option value="offline_espeak">Offline Standard (eSpeak NG Locale sulla TV)</option>
+                                <option value="offline_espeak" selected>eSpeak offline (Android TV)</option>
                             </select>
                         </div>
-
-                        <div class="form-group">
-                            <label for="azure-speech-key-input">Chiave Azure Speech F0 (opzionale, cifrata in TrustZone):</label>
-                            <div class="password-input-group">
-                                <input type="password" id="azure-speech-key-input" placeholder="Chiave Azure Speech..." class="form-input">
-                                <button type="button" class="btn-toggle-pwd" id="btn-toggle-azure-key" aria-label="Mostra chiave Azure">👁</button>
-                            </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="azure-region-select">Regione Azure:</label>
-                            <select id="azure-region-select" class="form-select">
-                                <option value="westeurope" selected>West Europe (westeurope)</option>
-                                <option value="italynorth">Italy North (italynorth)</option>
-                                <option value="eastus">East US (eastus)</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group">
-                            <div class="budget-card">
-                                <div class="budget-row">
-                                    <span class="budget-label">Cache Audio Disco:</span>
-                                    <span id="tts-cache-size" class="budget-val">0 KB / 8 MB</span>
-                                </div>
-                                <div class="budget-row">
-                                    <span class="budget-label">Audio Focus TV:</span>
-                                    <span class="budget-val">Ducking Automatico (API 26+)</span>
-                                </div>
-                            </div>
-                        </div>
-
                         <div class="settings-actions">
-                            <button id="btn-save-voice" class="btn-primary-action">Salva Impostazioni Voce</button>
-                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta Anteprima</button>
-                            <button id="btn-clear-cache" class="btn-danger-outline">Svuota Cache</button>
+                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta Anteprima Locale</button>
                         </div>
                     </div>
 
