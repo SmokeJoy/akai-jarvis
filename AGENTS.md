@@ -43,3 +43,14 @@
 - AI core: `akai-remote-tv/app/src/main/java/it/akai/customremote/ai/`
 - Android activity: `akai-remote-tv/app/src/main/java/it/akai/customremote/LocalVisualCaptureActivity.java`
 - CI: `.github/workflows/ci.yml` and host mock suite.
+
+## 17 NOV 2026 — REVOKED VISION / DEADLINES / FINAL CHANNEL EVIDENCE (SOURCE GATES)
+
+The following changes are source-backed implementation in draft PR #18, **not hardware-verified** on the AKAI TV:
+
+- `VisualObservationProvider.observe` must discard an in-flight cloud result if its exact consented session was revoked/replaced before it returned. Host mock tests simulate STOP and replacement; a reply from the old session cannot drive planning.
+- `VisionSessionCoordinator.observe` must recheck owner task cancellation, active visual session and cloud consent immediately before the DeepSeek/Kimi JPEG upload. Its frame wait uses a monotonic Android clock, not wall-clock time.
+- `AkaiAiController.processVisualGoalLocked` must recheck owner STOP / cloud consent before a planning call, after the cloud response, before Android action execution, and before saving a verified SQLite skill. A STOP notification must not authorize continuation of a visual plan.
+- Visual goals must be limited by **elapsed monotonic time** (`System.nanoTime()` interval and `VisualStepPolicy.mayContinueElapsed`), not a user/NTP change to the TV's clock. Preserve wall-clock time for diagnostic timestamps only.
+- `GoalEvidenceVerifier` requires a whole-token channel label for explicit Italia 2 or Rai 1 playback goals. Labels `Italia 20` / `Rai 10` cannot count as evidence; `Italia2` and `Rai1` compact OEM labels may qualify when paired with the existing independent player/audio signals. Absence of a reliable label must fail closed.
+- Run host Java regression tests, source-contract tests and full Android9 ARMv7 CI on the **latest exact SHA**. These tests are not equivalent to a real Android 9 cancellation, DRM, frame timing or channel playback test. TV A2 Preview vCode3 is unchanged; **NO** intermediate deployment, paid AI calls or new local model.
