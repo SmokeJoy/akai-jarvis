@@ -33,6 +33,12 @@ class FreeItalianVoiceSourceTest(unittest.TestCase):
         self.assertIn('conn.setInstanceFollowRedirects(false)', self.client)
         self.assertIn('readBounded(is, 8192)', self.client)
         self.assertIn('fileIdAllowed(id)', self.client)
+        self.assertIn('public interface Cancellation', self.client)
+        self.assertGreaterEqual(self.client.count('cancel.isCancelled()'), 4)
+        self.assertIn('if (cancelled.isCancelled()) return;', self.coordinator)
+        self.assertIn('request != generation', self.coordinator)
+        self.assertIn('!prefs.getBoolean(CONSENT, false)', self.coordinator)
+
         self.assertIn('setRequestProperty("x-api-key", freeApiKey)', self.client)
         self.assertNotIn('azure', self.client.lower())
         self.assertNotIn('microsoft.com', self.client.lower())
