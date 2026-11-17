@@ -53,6 +53,17 @@ class SpeechOwnerPolicyTests(unittest.TestCase):
         self.assertNotIn('azure-speech-key-input', self.web)
         self.assertNotIn('azure_region: region', self.web)
 
+    def test_legacy_azure_credentials_never_read_or_persisted(self):
+        legacy = self.engine.split("public String getAzureRegion() {", 1)[1]
+        legacy = legacy.split("public long getCacheSizeBytes() {", 1)[0]
+        self.assertIn('public String getAzureKey() {\n        return "";', legacy)
+        self.assertIn('public String getAzureRegion() {\n        return "";', self.engine)
+        self.assertNotIn("KeystoreSecurityHelper.decrypt(", legacy)
+        self.assertNotIn("KeystoreSecurityHelper.encrypt(", legacy)
+        self.assertNotIn("mMemoryEngine.setPreference(", legacy)
+        self.assertNotIn("mMemoryEngine.getPreference(", legacy)
+        self.assertNotIn("mMemoryEngine.deletePreference(", legacy)
+
     def test_stale_callback_guard_wired_to_android_tts(self):
         self.assertIn("mOfflineGate.activate(utteranceId);", self.engine)
         self.assertIn("mOfflineGate.isCurrent(utteranceId)", self.engine)
