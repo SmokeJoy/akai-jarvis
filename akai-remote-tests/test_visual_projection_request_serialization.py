@@ -85,3 +85,7 @@ assert "synchronized (this)" in publish
 assert 'if (closed) throw new IllegalStateException("Projection revoked during startup")' in publish
 assert publish.index("if (closed) throw") < publish.index("active = this;")
 print("PASS: revoked projection cannot be resurrected by late startup publication")
+assert 'if (closed) throw new IllegalStateException("Projection revoked before session install")' in start_command
+registration = start_command[start_command.index("if (closed) throw new IllegalStateException(\"Projection revoked before session install\")"):]
+assert registration.index("if (closed) throw") < registration.index("VisualObservationProvider.install(observationSession)")
+print("PASS: revoked projection cannot register a stale visual observation session")
