@@ -672,6 +672,15 @@
             && typeof data.reply === 'string' && data.reply.trim().length > 0;
     }
 
+    // A status flag alone must never certify hardware success. Only a
+    // consistent STATE_VERIFIED result can be displayed as verified or
+    // advance the hands-free conversation as a successful TV action.
+    function isVerifiedAiReply(data) {
+        return data != null && data.success === true && data.verified === true
+            && data.status === 'SUCCESS_VERIFIED'
+            && data.execution_outcome === 'STATE_VERIFIED';
+    }
+
     async function askAi(userQuery, forceSpeak = true) {
         const query = (userQuery || elements.aiTextInput.value).trim();
         if (!query) return false;
@@ -711,8 +720,13 @@
             if (res.ok || isHandledAiReply(res.status, data)) {
                 displayAiResponse(data, query);
                 // A conversational answer is handled even if no TV action was required.
-                return (data.success === true && data.execution_outcome !== 'FAILED')
-                    || data.status === 'ANSWERED_DIALOG';
+                return isVerifiedAiReply(data)
+                    || (data.status === 'ANSWERED_DIALOG'
+                        && data.execution_outcome === 'NOT_TESTED'
+                        && data.success !== false)
+                    || (data.status === 'MEMORY_HANDLED'
+                        && data.execution_outcome === 'NOT_TESTED'
+                        && data.success === true);
             } else if (res.status === 426) {
                 displayAiResponse({
                     success: false,
@@ -797,19 +811,24 @@
 
         // Status Badge (P1-05 & P1-16)
         if (elements.aiBadgeStatus) {
-            if ((data.status === 'SUCCESS_VERIFIED' || data.verified === true)
-                    && data.execution_outcome !== 'FAILED') {
+            if (isVerifiedAiReply(data)) {
                 elements.aiBadgeStatus.className = 'ai-badge-status verified';
                 elements.aiBadgeStatus.textContent = '✓ Verificato';
                 showToast('Comando verificato con successo');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
-            } else if (data.status === 'ANSWERED_DIALOG' || (data.status === 'MEMORY_HANDLED' && data.success === true)) {
+            } else if ((data.status === 'ANSWERED_DIALOG'
+                    && data.execution_outcome === 'NOT_TESTED'
+                    && data.success !== false)
+                    || (data.status === 'MEMORY_HANDLED'
+                    && data.execution_outcome === 'NOT_TESTED'
+                    && data.success === true)) {
                 elements.aiBadgeStatus.className = 'ai-badge-status dialog';
                 elements.aiBadgeStatus.textContent = data.status === 'MEMORY_HANDLED' ? '💾 Memoria' : '💬 Risposta';
                 showToast(data.status === 'MEMORY_HANDLED' ? 'Memoria gestita da JARVIS' : 'Risposta da JARVIS');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
-            } else if (data.execution_outcome === 'COMMAND_SENT'
-                    || (data.status === 'COMPLETED_UNVERIFIED' && data.execution_outcome !== 'FAILED')) {
+            } else if (data.status === 'COMPLETED_UNVERIFIED'
+                    && data.execution_outcome === 'COMMAND_SENT'
+                    && data.verified !== true && data.success !== true) {
                 elements.aiBadgeStatus.className = 'ai-badge-status unverified';
                 elements.aiBadgeStatus.textContent = '⚠️ Eseguito (Non Verificato)';
                 showToast('Comando inviato (Non verificato)');
