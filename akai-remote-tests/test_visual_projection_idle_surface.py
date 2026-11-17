@@ -62,6 +62,13 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         self.assertNotIn('bitmap.compress', idle)
 
 
+    def test_stop_and_frame_completion_share_lock(self):
+        # Source contract only: Android race requires final owner-approved TV test.
+        completion = self.method('private synchronized void finishRequest(', 'private synchronized void stopCapture(')
+        self.assertIn('if (closed) return;', completion)
+        self.assertLess(completion.index('if (closed) return;'), completion.index('FrameCallback deliver = pending;'))
+        self.assertIn('private synchronized void stopCapture()', self.source)
+
     def test_concurrent_stop_cannot_crash_frame_finally_cleanup(self):
         capture = self.method('private void consumeOnlyOnDemand(', 'private static boolean mostlyBlack(')
         cleanup = capture[capture.index('} finally {', capture.index('Bitmap bitmap = null;')):]
