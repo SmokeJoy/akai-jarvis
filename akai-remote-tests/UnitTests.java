@@ -10,6 +10,7 @@ import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.GoalEvidenceVerifier;
 import it.akai.customremote.ai.UiClickTargetGate;
 import it.akai.customremote.ai.VisionCapturePolicy;
+import it.akai.customremote.ai.VisualObservationBridge;
 import it.akai.customremote.ai.RgbaFramePacker;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
@@ -2969,6 +2970,7 @@ public class UnitTests {
             KeystoreSecurityHelper.setTestFallbackSecretKey(kg38.generateKey());
 
             final AtomicInteger e2eCloudCalls = new AtomicInteger(0);
+            final AtomicBoolean visualHintSeen38 = new AtomicBoolean(false);
             final String[] e2eScenario = new String[]{"DISCOVERY_AUDIO"};
 
             mockE2eCloudServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -2976,6 +2978,10 @@ public class UnitTests {
                 try {
                     byte[] reqBytes = exchange.getRequestBody().readAllBytes();
                     String reqBody = new String(reqBytes, StandardCharsets.UTF_8);
+                    if (reqBody.contains("untrusted_visual_description")
+                            && reqBody.contains("Menu audio")) {
+                        visualHintSeen38.set(true);
+                    }
 
                     if ("FAIL_500".equals(e2eScenario[0]) || reqBody.contains("provoca_errore_500")) {
                         e2eCloudCalls.incrementAndGet();
@@ -3206,10 +3212,17 @@ public class UnitTests {
             // =================================================================
             e2eScenario[0] = "DISCOVERY_AUDIO";
             int cloudCallsBeforeP3 = e2eCloudCalls.get();
+            ScreenPerceptionEngine.PerceptionSnapshot visualOrigin38 = bridge38.capture(ctx38);
+            long captureAt38 = System.currentTimeMillis() - 1000L;
+            boolean visualReady38 = VisualObservationBridge.publish(
+                    AiProviderAdapter.PROVIDER_DEEPSEEK, visualOrigin38.foregroundPackage,
+                    visualOrigin38.toRedactedMinimalContextPrompt(),
+                    "Menu audio: selezione Uscita digitale", captureAt38, System.currentTimeMillis());
 
             MockHttpResponse rUnknownAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"apri impostazioni audio avanzate\"}", "192.168.1.55", true);
 
-            boolean part3Ok = (rUnknownAi.statusCode == 200) &&
+            boolean part3Ok = visualReady38 && visualHintSeen38.get()
+                              && (rUnknownAi.statusCode == 200) &&
                               rUnknownAi.json != null &&
                               rUnknownAi.json.optBoolean("success") &&
                               rUnknownAi.json.optBoolean("learned_new_procedure") &&
