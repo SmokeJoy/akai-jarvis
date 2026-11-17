@@ -207,6 +207,10 @@ public final class VisualProjectionService extends Service {
             active = this;
             closed = false;
             observationSession = new VisualObservationProvider.Session() {
+                @Override public void stopByOwner() {
+                    VisualProjectionService.stopOwnerSession(getApplicationContext());
+                }
+
                 @Override public VisualObservationProvider.Result observe(
                         String targetProvider, String expectedPkg, String expectedUi,
                         final VisualObservationProvider.Cancellation cancel) {
