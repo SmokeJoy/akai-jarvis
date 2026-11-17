@@ -117,6 +117,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudVisionRequestPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationBridge.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualCaptureSessionGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationProvider.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/GoalEvidenceVerifier.java \
@@ -176,6 +177,15 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualCaptureSessionGate.java \
             akai-remote-tests/VisualCaptureSessionGateTest.java
           java -cp test_capture_session it.akai.customremote.VisualCaptureSessionGateTest
+
+      - name: 4g. Vision observer handoff to planner (provider lock, cancellation)
+        run: |
+          mkdir -p test_obs_provider
+          javac -encoding UTF-8 -source 8 -target 8 -d test_obs_provider \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationProvider.java \
+            akai-remote-tests/VisualObservationProviderTest.java
+          java -cp test_obs_provider it.akai.customremote.VisualObservationProviderTest
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |
