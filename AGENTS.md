@@ -41,7 +41,7 @@
 - Legacy `CloudSpeechAdapter.speakNeural` and private `fetchFromAzure` paths return disabled outcomes without network access, even if an old Azure voice setting or encrypted key remains. The compatibility class is not instantiated during normal speech. **Do not silently restore any third-party cloud audio service.**
 - `SpeechUtteranceGate` rejects stale/duplicate callbacks after STOP, replacement or session change. Android callbacks that alter focus/state are synchronized with `speak` and `stop`; utterance IDs use a monotonically incrementing request sequence rather than wall-clock milliseconds.
 - CI `4j` runs pure Java gate regressions and a source policy contract. The complete Android9 build must pass on the exact HEAD. **No real AKAI eSpeak/AudioFocus success is claimed yet**; test actual speech, rapid interrupt, missing eSpeak, and volume/audio-focus coexistence at the single owner-authorized final release.
-- Historical Azure preferences and UI compatibility signatures remain in source but cannot transmit to Azure. Audit UX so old Azure voice names cannot misrepresent the active voice.
+- Historical Azure preferences and method signatures remain inert; `getTtsVoice()` reports only eSpeak. Web Remote removes Azure voice options, credential/region inputs, and cloud audio-cache controls. `RestApiRouter` exposes authenticated GET/POST offline-only TTS config and denies Azure voice/key/region or preview **in both LOCAL_ONLY and CLOUD_OPTIONAL**. Java REST tests and Web/source checks are added; check the CI HEAD. No real TV speech success is asserted.
 
 ## CURRENT ENTRYPOINTS
 
