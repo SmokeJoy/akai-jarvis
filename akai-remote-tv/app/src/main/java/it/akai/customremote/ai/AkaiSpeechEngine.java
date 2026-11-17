@@ -315,7 +315,11 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     }
 
     public synchronized boolean configureVoice(JSONObject settings) {
-        return mFreeVoice.configure(settings);
+        boolean saved = mFreeVoice.configure(settings);
+        // Switching voice profiles must also clear Android TTS/AudioFocus
+        // state, not just stop the async MP3 player in the coordinator.
+        if (saved) stop();
+        return saved;
     }
 
     // Compatibility methods remain for older callers but cannot expose, write
