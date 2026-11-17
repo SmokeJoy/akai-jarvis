@@ -668,6 +668,9 @@ public class AkaiAiController {
                     "CLOUD_NOT_CONFIGURED", null, 0, 0.0, false, startTime);
         }
 
+        // Keep the 2-minute per-goal bound independent of manual/NTP clock
+        // changes; wall-clock startTime remains only for external telemetry.
+        final long visualGoalStartedNs = System.nanoTime();
         ScreenPerceptionEngine.PerceptionSnapshot current = initial;
         JSONArray fullPath = new JSONArray();
         String lastAction = null;
@@ -690,8 +693,10 @@ public class AkaiAiController {
                 failureReason = "Operazione interrotta dall'utente.";
                 break;
             }
-            if (!VisualStepPolicy.mayContinue(attempt, cloudCalls, startTime,
-                    System.currentTimeMillis()) || aiAdapter.isBudgetExceeded()) {
+            if (!VisualStepPolicy.mayContinueElapsed(attempt, cloudCalls,
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - visualGoalStartedNs))
+                    || aiAdapter.isBudgetExceeded()) {
                 failureReason = "Limite di tempo, azioni, chiamate o credito AI raggiunto.";
                 break;
             }
