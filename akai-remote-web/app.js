@@ -663,6 +663,15 @@
     // AI DISPATCHER & ACCURATE RESPONSE FEEDBACK (P0-01, P1-04, P1-05)
     // =========================================================================
 
+    // A processed AI result can have HTTP 400 when success means FINAL GOAL VERIFIED.
+    // Preserve the actual reply and outcome; an unverified command is not a
+    // network failure, and must never be presented as verified success.
+    function isHandledAiReply(httpStatus, data) {
+        return httpStatus === 400 && data !== null && typeof data === 'object'
+            && typeof data.status === 'string' && data.status.length > 0
+            && typeof data.reply === 'string' && data.reply.trim().length > 0;
+    }
+
     async function askAi(userQuery, forceSpeak = true) {
         const query = (userQuery || elements.aiTextInput.value).trim();
         if (!query) return false;
@@ -699,9 +708,9 @@
 
             const data = await res.json().catch(() => ({}));
 
-            if (res.ok) {
+            if (res.ok || isHandledAiReply(res.status, data)) {
                 displayAiResponse(data, query);
-                return true;
+                return data.success === true;
             } else if (res.status === 426) {
                 displayAiResponse({
                     success: false,
@@ -796,7 +805,8 @@
                 elements.aiBadgeStatus.textContent = '💬 Risposta';
                 showToast('Risposta da JARVIS');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
-            } else if (data.status === 'COMPLETED_UNVERIFIED' || data.verified === false && data.success !== false) {
+            } else if (data.execution_outcome === 'COMMAND_SENT'
+                    || (data.status === 'COMPLETED_UNVERIFIED' && data.execution_outcome !== 'FAILED')) {
                 elements.aiBadgeStatus.className = 'ai-badge-status unverified';
                 elements.aiBadgeStatus.textContent = '⚠️ Eseguito (Non Verificato)';
                 showToast('Comando inviato (Non verificato)');
