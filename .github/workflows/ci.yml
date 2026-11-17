@@ -115,6 +115,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/KeystoreSecurityHelper.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudVisionRequestPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationBridge.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/GoalEvidenceVerifier.java \
@@ -156,6 +157,15 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudVisionRequestPolicy.java \
             akai-remote-tests/CloudVisionRequestPolicyTest.java
           java -cp test_vision it.akai.customremote.CloudVisionRequestPolicyTest
+
+      - name: 4e. Single-use vision-to-planner bridge (fresh UI, no local LLM)
+        run: |
+          mkdir -p test_visual_bridge
+          javac -encoding UTF-8 -source 8 -target 8 -d test_visual_bridge \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationBridge.java \
+            akai-remote-tests/VisualObservationBridgeTest.java
+          java -cp test_visual_bridge it.akai.customremote.VisualObservationBridgeTest
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |
