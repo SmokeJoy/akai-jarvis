@@ -55,34 +55,30 @@ public final class ProcedureGoalMatcher {
         return false;
     }
 
+    private static String target(String phrase) {
+        String value = phrase.replaceFirst("^(apri|metti|avvia|vai) ", "");
+        value = value.replaceFirst("^l app ", "");
+        value = value.replaceFirst(" in diretta$", "");
+        return value;
+    }
+
+    private static boolean sameTarget(String left, String right) {
+        if (left.equals(right)) return true;
+        // Channel names may be written with or without the digit separator.
+        // Do not collapse arbitrary app names (e.g. YouTube Kids).
+        return left.matches("[a-z]+ [0-9]+") && left.replace(" ", "").equals(right)
+                || right.matches("[a-z]+ [0-9]+") && right.replace(" ", "").equals(left);
+    }
+
     public static boolean matches(String userInput, String storedCandidate) {
         String user = normalize(userInput);
         String stored = normalize(storedCandidate);
         if (user.isEmpty() || stored.isEmpty() || generic(user) || generic(stored)) return false;
-        // Never execute a recalled skill from a negated or exploratory utterance.
-        // Ambiguous language should be handled by the cloud planner, not SQLite recall.
-        if (user.matches("^(non|no|evita|senza|annulla|stop|ferma)(\\s+.*)?$")
+        // Never recall an executable skill for a question or negated request.
+        // This guard deliberately rejects ambiguous language instead of guessing.
+        if ((" " + user + " ").matches(".* (non|no|evita|senza|annulla|stop|ferma) .*")
                 || user.matches("^(come|perche|quando|puoi|potresti|sai)(\\s+.*)?$")) return false;
         if (user.equals(stored)) return true;
-        // Full candidate appears as whole words within the spoken command.
-        if (stored.length() >= 4 && wholeWords(user, stored)) {
-            // If a skill names a single app, do not allow it to be a prefix
-            // of a different app, e.g. YouTube vs YouTube Kids.
-            if (stored.contains(" ") || user.endsWith(" " + stored)
-                    || user.endsWith(" " + stored + " in diretta")) return true;
-        }
-        // User may shorten a stored description: "YouTube" vs "apri YouTube".
-        if (user.length() >= 5 && wholeWords(stored, user)) {
-            // A shortened command must identify the complete target, not a
-            // prefix of a different app/channel (YouTube vs YouTube Kids).
-            // Only strip known command verbs and the optional live-TV suffix.
-            String target = stored.replaceFirst("^(apri|metti|avvia|vai) ", "");
-            if (target.endsWith(" in diretta")) {
-                target = target.substring(0, target.length() - " in diretta".length());
-            }
-            if (user.equals(target)) return true;
-        }
-        // Avoid substring-based matches by comparing exact token windows.
-        return compactTokenWindow(user, stored);
+        return sameTarget(target(user), target(stored));
     }
 }
