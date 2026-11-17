@@ -27,7 +27,7 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         self.assertNotIn('reader.getSurface(), null, worker)', startup)
 
     def test_attach_only_for_reserved_request(self):
-        request = self.method('private void requestOnWorker(', 'private void consumeOnlyOnDemand(')
+        request = self.method('private synchronized void requestOnWorker(', 'private void consumeOnlyOnDemand(')
         reserve = request.index('gate.reserveNextFrame(')
         pending = request.index('pending = callback;')
         attach = request.index('display.setSurface(reader.getSurface())')
@@ -55,7 +55,7 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         self.assertIn('if (stale != null) {', capture)
         # The second stale-image cleanup lives in requestOnWorker, outside this slice.
         self.assertEqual(capture.count('try { stale.close(); } catch (RuntimeException ignored) {}'), 1)
-        request = self.method('private void requestOnWorker(', 'private void consumeOnlyOnDemand(')
+        request = self.method('private synchronized void requestOnWorker(', 'private void consumeOnlyOnDemand(')
         self.assertEqual(request.count('try { stale.close(); } catch (RuntimeException ignored) {}'), 1)
         idle = capture[capture.index('if (pending == null || closed)'):capture.index('Image image = null;')]
         self.assertNotIn('Bitmap.createBitmap', idle)
