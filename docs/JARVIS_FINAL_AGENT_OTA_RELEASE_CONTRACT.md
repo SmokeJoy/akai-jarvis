@@ -39,6 +39,14 @@
 
 Riferimenti: [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/), [Kimi K2.6](https://huggingface.co/moonshotai/Kimi-K2.6) (modello ufficiale Moonshot, supporto image input).
 
+## Incremento di sviluppo: handoff visivo verso il planner (nessun deploy intermedio)
+
+- `VisualObservationBridge.java` conserva **solo una descrizione testuale** restituita da DeepSeek/Kimi, mai il JPEG: TTL massimo 45 s, una sola lettura, vincolo sullo **stesso provider, package Android e fingerprint dello snapshot Accessibility redatto**. Un cambio schermata, una schermata sensibile, un provider diverso o un testo potenzialmente iniettato invalidano il passaggio.
+- La `LocalVisualCaptureActivity` registra l'origine della schermata al momento del frame (package/UI redatta) e, solo se l'owner ha autorizzato l'invio separato e la descrizione cloud è ritornata, permette di usare **una volta** la descrizione nel successivo piano. Pulsante "Torna alla TV" per riprendere il contesto; "Cancella anteprima" revoca l'osservazione.
+- `AkaiAiController` consuma il testo soltanto nel successivo `planActionSequence` cloud, come JSON `untrusted_visual_description`, con flag `visual_description_is_click_authority=false` e `visual_description_is_goal_evidence=false`. **Tutti i click continuano a passare da `UiClickTargetGate` e snapshot Accessibility aggiornato**. Una descrizione visiva non può provare il completamento dell'obiettivo o autorizzare coordinate/click non osservabili.
+- Regressioni: `VisualObservationBridgeTest.java` e step CI `4e`, oltre alla compilazione Android 9/ARMv7 del codice reale. Nessun dato passa a un modello AI locale, nessuna scrittura su SQLite.
+- **Limite esplicito:** questo è un ponte informativo verso il planner, non ancora navigazione pixel/coordinate autonoma o visual goal verification. Su app DRM e UI non accessibili il sistema deve fallire in modo sicuro. Verifiche attuali host/mock non equivalgono a TV collaudata.
+
 ## OTA — sicurezza e implementazione per release finale
 
 **Componente già committato:** `OtaCandidateGate.java`, puro Java, zero processo/servizio/network. Non installa nulla: verifica *solo metadati* (package `it.akai.customremote`, versionCode > installato, fingerprint certificato A1/A2 esatto, release `stable`, minSdk compatibile API28, ABI `armeabi-v7a`, SHA-256 di APK, dimensione massima 25 MiB, HTTPS e hostname in allowlist locale). Il relativo test JVM esamina bypass comuni.
