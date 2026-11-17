@@ -89,6 +89,9 @@ jobs:
           if ($src -match '(?i)\badb(?:\.exe)?\s+(install|root|push|pull|connect|shell)\b') { throw 'Final build script must never touch TV' }
           if ($src -notmatch 'Get-FileHash.*SHA256') { throw 'APK checksum missing' }
           if ($src -notmatch 'apksigner') { throw 'APK signing verification missing' }
+          if ($src -notmatch 'if \(-not \(Test-Path -LiteralPath \$aaptCli -PathType Leaf\)\)') { throw 'Missing fail-closed aapt.exe availability gate' }
+          if ($src -notmatch '\$LASTEXITCODE -ne 0 -or \[string\]::IsNullOrWhiteSpace\(\$xmlTree\)') { throw 'Missing fail-closed compiled manifest inspection gate' }
+          if ($src -match 'if \(Test-Path \$aaptCli\)') { throw 'Optional debuggable verification forbidden' }
           Write-Host 'Final v4 source-only build recipe parses and is gated; no APK/device built in this step.'
 
       - name: 2. Secrets Leak Detection
