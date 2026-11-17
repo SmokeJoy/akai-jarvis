@@ -22,12 +22,22 @@ public final class VisualStepPolicy {
         return step;
     }
 
-    public static boolean mayContinue(int executedSteps, int cloudCalls,
-            long startedAtMs, long nowMs) {
+    /**
+     * Evaluate a goal against elapsed duration, not wall-clock time. The caller
+     * must supply a monotonic interval (System.nanoTime() in production).
+     * Changing the TV clock must never grant extra cloud planning time.
+     */
+    public static boolean mayContinueElapsed(int executedSteps, int cloudCalls, long elapsedMs) {
         return executedSteps >= 0 && executedSteps < MAX_ACTION_STEPS
                 && cloudCalls >= 0 && cloudCalls < MAX_CLOUD_CALLS
-                && startedAtMs > 0 && nowMs >= startedAtMs
-                && nowMs - startedAtMs < MAX_GOAL_MS;
+                && elapsedMs >= 0 && elapsedMs < MAX_GOAL_MS;
+    }
+
+    /** Compatibility for existing deterministic tests and legacy callers. */
+    public static boolean mayContinue(int executedSteps, int cloudCalls,
+            long startedAtMs, long nowMs) {
+        return startedAtMs > 0 && nowMs >= startedAtMs
+                && mayContinueElapsed(executedSteps, cloudCalls, nowMs - startedAtMs);
     }
 
     /**
