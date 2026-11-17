@@ -33,6 +33,7 @@ function fakeClassList() {
 async function scenario(httpStatus, responseBody) {
     const messages = [];
     let expired = false;
+    let requestedTimeoutMs = 0;
     const elements = {
         aiTextInput: { value: '' },
         aiActiveLabel: { textContent: '' },
@@ -49,7 +50,8 @@ async function scenario(httpStatus, responseBody) {
         state: { token: 'test-only', isListening: false },
         convoSession: { active: false, aiAbortController: null, userCancelRequested: false },
         AbortController,
-        setTimeout, clearTimeout,
+        setTimeout(_callback, ms) { requestedTimeoutMs = ms; return 1; },
+        clearTimeout() {},
         triggerHaptic() {},
         getApiUrl() { return 'https://test.invalid/api/ai/ask'; },
         fetch: async () => ({
@@ -67,7 +69,7 @@ async function scenario(httpStatus, responseBody) {
         context
     );
     const returned = await exposed.askAi('Apri YouTube', false);
-    return { returned, elements, messages, expired };
+    return { returned, elements, messages, expired, requestedTimeoutMs };
 }
 
 async function run() {
@@ -76,6 +78,8 @@ async function run() {
         execution_outcome: 'STATE_VERIFIED', reply: 'YouTube aperto e verificato'
     });
     assert.equal(verified.returned, true);
+    assert.equal(verified.requestedTimeoutMs, 135000,
+        'web timeout must exceed the backend 2-minute autonomous task deadline');
     assert.equal(verified.elements.aiBadgeStatus.textContent, '✓ Verificato');
 
     const unverified = await scenario(400, {
@@ -108,6 +112,22 @@ async function run() {
     });
     assert.match(cancelled.elements.aiBadgeStatus.textContent, /Annullato/);
 
+    const answeredDialog = await scenario(400, {
+        success: false, status: 'ANSWERED_DIALOG',
+        execution_outcome: 'NOT_TESTED', reply: 'Ecco la risposta richiesta.'
+    });
+    assert.equal(answeredDialog.returned, true,
+        'spoken conversational answers should continue a live voice session');
+    assert.match(answeredDialog.elements.aiBadgeStatus.textContent, /Risposta/);
+
+    const contradictoryVerified = await scenario(400, {
+        success: true, status: 'SUCCESS_VERIFIED', verified: true,
+        execution_outcome: 'FAILED', reply: 'Incoerenza nel risultato.'
+    });
+    assert.equal(contradictoryVerified.returned, false,
+        'FAILED must never be a successful voice turn');
+    assert.match(contradictoryVerified.elements.aiBadgeStatus.textContent, /Non Riuscito/);
+
     const bareHttpError = await scenario(400, { error: 'Richiesta invalida' });
     assert.match(bareHttpError.elements.aiBadgeStatus.textContent, /Non Riuscito/,
         'a generic HTTP error without AI result must not be treated as a handled command');
@@ -120,7 +140,7 @@ async function run() {
     assert.match(tlsRequired.elements.aiResponseText.textContent, /HTTPS/);
     assert.match(tlsRequired.elements.aiBadgeStatus.textContent, /Non Riuscito/);
 
-    console.log('Web AI feedback regression PASS (8 scenarios, no TV or cloud API used)');
+    console.log('Web AI feedback regression PASS (10 scenarios, no TV or cloud API used)');
 }
 
 run().catch(err => {
