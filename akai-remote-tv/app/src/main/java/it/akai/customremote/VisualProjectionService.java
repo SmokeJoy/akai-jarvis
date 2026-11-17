@@ -32,6 +32,7 @@ import it.akai.customremote.ai.RgbaFramePacker;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.VisionCapturePolicy;
 import it.akai.customremote.ai.VisualCaptureSessionGate;
+import it.akai.customremote.ai.FrameSequenceGate;
 import it.akai.customremote.ai.VisualObservationProvider;
 import it.akai.customremote.ai.VisionSessionCoordinator;
 
@@ -95,6 +96,7 @@ public final class VisualProjectionService extends Service {
     private VirtualDisplay display;
     private ImageReader reader;
     private VisualCaptureSessionGate gate;
+    private final FrameSequenceGate frameSequenceGate = new FrameSequenceGate();
     private String provider;
     private int frameWidth, frameHeight;
     private FrameCallback pending;
@@ -352,6 +354,12 @@ public final class VisualProjectionService extends Service {
         try {
             image = source.acquireLatestImage();
             if (image == null) return;
+            // Android image timestamps are producer-specific, so compare only
+            // with prior frames from THIS SAME ImageReader, never with system
+            // wall/monotonic time. A buffered old/duplicate frame cannot be
+            // accepted as a new screenshot after an application transition.
+            // Keep the request pending for a newer frame until its timeout.
+            if (!frameSequenceGate.accept(image.getTimestamp())) return;
             ScreenPerceptionEngine.PerceptionSnapshot snap = ScreenPerceptionEngine.capture(this);
             if (!VisionCapturePolicy.mayCapture(true, snap)) {
                 finishRequest(FrameResult.denied("SENSITIVE_OR_UNKNOWN_SCREEN"));
