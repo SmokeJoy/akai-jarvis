@@ -593,20 +593,51 @@
                         </div>
                     </div>
 
-                    <!-- SUBTAB: VOCE LOCALE (NESSUN TTS CLOUD) -->
+                    <!-- SUBTAB: VOCE - FREE-TIER, NO AUTOMATIC BILLING -->
                     <div id="tab-voice" class="ai-tab-content" role="tabpanel">
                         <p class="section-intro">
-                            Risposte vocali tramite eSpeak installato sulla TV. Nessun servizio Azure, credenziale o costo API per la sintesi.
-                            L'intelligenza dell'assistente rimane su DeepSeek/Kimi, secondo il consenso configurato.
+                            Scegli una voce per gli altoparlanti della TV. eSpeak non costa nulla e funziona offline.
+                            FreeTTS può offrire una voce italiana più naturale usando un account personale gratuito,
+                            ma richiede Internet e consenso separato. Il piano gratuito aggiunge un breve marchio vocale.
                         </p>
                         <div class="form-group">
-                            <label for="ai-voice-select">Motore vocale attivo:</label>
+                            <label for="ai-voice-select">Voce della TV:</label>
                             <select id="ai-voice-select" class="form-select">
-                                <option value="offline_espeak" selected>eSpeak offline (Android TV)</option>
+                                <option value="offline_espeak" selected>eSpeak (gratuita, offline)</option>
+                                <option value="it-IT-DiegoNeural">Diego — italiana maschile (FreeTTS gratuito)</option>
+                                <option value="it-IT-IsabellaNeural">Isabella — italiana femminile (FreeTTS gratuito)</option>
                             </select>
                         </div>
+                        <div class="form-group">
+                            <label for="free-tts-api-key">Chiave API FreeTTS (solo account Free senza carta):</label>
+                            <input type="password" id="free-tts-api-key" autocomplete="off"
+                                placeholder="Inserisci la tua chiave gratuita solo qui, non in chat" class="form-input">
+                            <p id="free-tts-quota-status" class="section-intro" role="status" aria-live="polite">
+                                Modalità gratuita inattiva. Limite prudenziale di JARVIS: 5.000 caratteri/mese.
+                            </p>
+                            <p class="section-intro">Account gratuito personale: <a href="https://freetts.org/developers" target="_blank" rel="noopener noreferrer">FreeTTS Developer API</a>.
+                                Nessun abbonamento viene acquistato da JARVIS. Alla quota esaurita torna automaticamente a eSpeak.
+                                Solo per uso personale: la licenza gratuita non è commerciale.</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="toggle-card">
+                                <input type="checkbox" id="free-tts-consent">
+                                <span class="toggle-info">
+                                    <span class="toggle-title">Autorizzo l'invio del testo parlato a FreeTTS</span>
+                                    <span class="toggle-desc">Invia soltanto risposte di massimo 600 caratteri, senza credenziali o dati riconosciuti come sensibili.</span>
+                                </span>
+                            </label>
+                            <label class="toggle-card">
+                                <input type="checkbox" id="free-tts-free-plan">
+                                <span class="toggle-info">
+                                    <span class="toggle-title">Confermo di usare esclusivamente l'account personale Free</span>
+                                    <span class="toggle-desc">Nessuna carta di credito o piano a pagamento: non usare chiavi di un abbonamento.</span>
+                                </span>
+                            </label>
+                        </div>
                         <div class="settings-actions">
-                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta eSpeak sulla TV</button>
+                            <button id="btn-save-voice" class="btn-primary-action">Salva Voce TV</button>
+                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta Anteprima sulla TV</button>
                         </div>
                         <div class="form-group">
                             <label class="toggle-card">
