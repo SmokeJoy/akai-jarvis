@@ -126,3 +126,8 @@ La PR #18 è sempre draft, nessuna installazione sulla TV e nessuna API fatturab
 - PR A2 stacked: #10 (inventario), #12 (etichette Accessibility), #13 (goal), #14 (click sicuri), #15 (open locale), #16 (MediaProjection one-shot locale).
 - Questa branch è **work-in-progress non distribuibile**, base PR #16. Nessun merge/release automatico.
 - Il proprietario sta collaudando A2 in una chat distinta; registrare i report reali come regressioni/bug con SHA e log pertinenti, senza cambiare APK in uso.
+
+### Incremento 17/11/2026 — frame legato al package foreground (solo codice)
+- PR #18: `VisualProjectionService` registra il package foreground durante la prenotazione del frame; rifiuta `FRAME_PACKAGE_UNKNOWN` se assente e `FRAME_FOREGROUND_CHANGED` se la UI passa a un'altra app prima del callback ImageReader. Il controllo precede JPEG/Cloud e viene azzerato su completamento o STOP.
+- Commit codice `bc4f0f790aa4ee013b60014c8a398c205f3069ef`, regressione source `4bea7213087f9c7b2a3eb6f3337a0ddf87feb4b0` nel test di serializzazione MediaProjection già incluso nella CI. Non è una simulazione reale di cambio app Android; la CI sul nuovo HEAD resta da verificare. Ultimo baseline precedente `9aedcc669472a074f6a1cb8ebd52367dc0e48f16`: Actions #44190758940 completed/success.
+- Restano necessari test fisici Android9 alla sola release finale autorizzata: foreground package disponibile, cambio app tra richiesta/frame, DRM, timestamp OEM e STOP. Nessun ADB/deploy/merge/API pagata.
