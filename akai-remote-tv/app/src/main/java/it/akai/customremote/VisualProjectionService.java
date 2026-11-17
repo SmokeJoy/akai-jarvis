@@ -276,6 +276,12 @@ public final class VisualProjectionService extends Service {
             callback.onFrame(FrameResult.denied("SESSION_CLOSED"));
             return;
         }
+        // A second caller must never replace the first callback or its timeout.
+        // Reject before reserving a frame quota: a busy request is not a capture.
+        if (pending != null) {
+            callback.onFrame(FrameResult.denied("FRAME_REQUEST_BUSY"));
+            return;
+        }
         ScreenPerceptionEngine.PerceptionSnapshot snap = ScreenPerceptionEngine.capture(this);
         boolean sensitive = snap == null || snap.hasSensitiveFields
                 || !VisionCapturePolicy.mayCapture(true, snap);
