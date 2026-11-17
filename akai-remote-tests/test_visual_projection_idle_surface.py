@@ -50,14 +50,14 @@ class VisualIdleSurfaceTests(unittest.TestCase):
 
     def test_stale_late_frame_drained_without_encoding(self):
         capture = self.method('private void consumeOnlyOnDemand(', 'private static boolean mostlyBlack(')
-        self.assertIn('if (pending == null || closed)', capture)
+        self.assertIn('if (pending == null || closed || projectionRevoked)', capture)
         self.assertIn('source.acquireLatestImage()', capture)
         self.assertIn('if (stale != null) {', capture)
         # The second stale-image cleanup lives in requestOnWorker, outside this slice.
         self.assertEqual(capture.count('try { stale.close(); } catch (RuntimeException ignored) {}'), 1)
         request = self.method('private synchronized void requestOnWorker(', 'private void consumeOnlyOnDemand(')
         self.assertEqual(request.count('try { stale.close(); } catch (RuntimeException ignored) {}'), 1)
-        idle = capture[capture.index('if (pending == null || closed)'):capture.index('Image image = null;')]
+        idle = capture[capture.index('if (pending == null || closed || projectionRevoked)'):capture.index('Image image = null;')]
         self.assertNotIn('Bitmap.createBitmap', idle)
         self.assertNotIn('bitmap.compress', idle)
 
@@ -73,8 +73,8 @@ class VisualIdleSurfaceTests(unittest.TestCase):
     def test_stop_and_frame_completion_share_lock(self):
         # Source contract only: Android race requires final owner-approved TV test.
         completion = self.method('private synchronized void finishRequest(', 'private synchronized void stopCapture(')
-        self.assertIn('if (closed) return;', completion)
-        self.assertLess(completion.index('if (closed) return;'), completion.index('FrameCallback deliver = pending;'))
+        self.assertIn('if (closed || projectionRevoked) return;', completion)
+        self.assertLess(completion.index('if (closed || projectionRevoked) return;'), completion.index('FrameCallback deliver = pending;'))
         self.assertIn('private synchronized void stopCapture()', self.source)
 
     def test_concurrent_stop_cannot_crash_frame_finally_cleanup(self):
