@@ -24,5 +24,15 @@ class VisualStopSourceTest(unittest.TestCase):
         # Wall-clock jumps must not extend or prematurely expire the consented session.
         self.assertNotRegex(source, r"(?:VisualCaptureSessionGate\.begin|gate\.reserveNextFrame)\([^;]*System\.currentTimeMillis\(\)")
 
+    def test_projection_revocation_blocks_publication_and_frame_delivery(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("private volatile boolean projectionRevoked;", source)
+        callback = source[source.index("@Override public void onStop()"):source.index("}, worker);", source.index("@Override public void onStop()"))]
+        self.assertLess(callback.index("projectionRevoked = true;"), callback.index("handler.post("))
+        self.assertIn("if (closed || projectionRevoked) throw new IllegalStateException(\"Projection revoked during startup\")", source)
+        self.assertIn("if (closed || projectionRevoked) throw new IllegalStateException(\"Projection revoked before session install\")", source)
+        self.assertIn("if (closed || projectionRevoked) return;", source)
+        self.assertIn("service.projectionRevoked", source)
+
 if __name__ == "__main__":
     unittest.main()
