@@ -635,6 +635,23 @@ public class RestApiRouter {
             return true;
         }
 
+        // TTS configuration is always offline-only, independently of AI cloud mode.
+        if ("/api/ai/tts_config".equals(path) && "GET".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato"));
+                return true;
+            }
+            JSONObject cfg = new JSONObject();
+            cfg.put("active_voice", "offline_espeak");
+            cfg.put("speech_provider_policy", "OFFLINE_ONLY");
+            cfg.put("cloud_tts_enabled", false);
+            cfg.put("cache_size_kb", 0);
+            cfg.put("max_cache_mb", 0);
+            sendJsonResponse(os, 200, cfg);
+            return true;
+        }
+
         // AI Voice Preview (/api/ai/tts_preview)
         if ("/api/ai/tts_preview".equals(path) && "POST".equals(method)) {
             String token = extractBearerToken(headers);
@@ -647,10 +664,10 @@ public class RestApiRouter {
             String voice = req.optString("voice", "it-IT-DiegoNeural");
             boolean localOnly = aiHandler != null ? aiHandler.isStrictLocalOnly() : true;
 
-            if (localOnly && !"offline_espeak".equals(voice)) {
+            if (!"offline_espeak".equals(voice)) {
                 JSONObject err = new JSONObject();
                 err.put("success", false);
-                err.put("error", "Anteprima voci neurali cloud inibita nel profilo STRICT_LOCAL_ONLY (zero leak verso server esterni)");
+                err.put("error", "Voci cloud vietate dalla policy OFFLINE_ONLY (STRICT_LOCAL_ONLY e CLOUD_OPTIONAL)");
                 err.put("strict_local_only", true);
                 sendJsonResponse(os, 403, err);
                 return true;
@@ -669,30 +686,31 @@ public class RestApiRouter {
             return true;
         }
 
-        // AI TTS Neural Configuration Update (/api/ai/tts_config)
+        // Only the built-in eSpeak profile is configurable. Historical Azure
+        // credentials, regions and voice names must never be accepted in cloud mode.
         if ("/api/ai/tts_config".equals(path) && "POST".equals(method)) {
             String token = extractBearerToken(headers);
             if (!securityManager.validateToken(token)) {
-                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato"));
                 return true;
             }
-
             JSONObject req = new JSONObject(body != null && !body.isEmpty() ? body : "{}");
-            boolean localOnly = aiHandler != null ? aiHandler.isStrictLocalOnly() : true;
-
-            if (localOnly) {
-                boolean settingAzureKey = req.has("azure_key") && !req.optString("azure_key", "").isEmpty();
-                boolean settingAzureRegion = req.has("azure_region");
-                boolean settingCloudVoice = req.has("voice") && !"offline_espeak".equals(req.optString("voice", ""));
-                if (settingAzureKey || settingAzureRegion || settingCloudVoice) {
-                    JSONObject err = new JSONObject();
-                    err.put("success", false);
-                    err.put("error", "Modifica credenziali o attivazione voci cloud inibita nel profilo STRICT_LOCAL_ONLY");
-                    err.put("strict_local_only", true);
-                    sendJsonResponse(os, 403, err);
-                    return true;
-                }
+            String voice = req.optString("voice", "offline_espeak");
+            if (!"offline_espeak".equals(voice) || req.has("azure_key") || req.has("azure_region")) {
+                JSONObject err = new JSONObject();
+                err.put("success", false);
+                err.put("error", "TTS esterno vietato dalla policy OFFLINE_ONLY (anche in STRICT_LOCAL_ONLY e CLOUD_OPTIONAL)");
+                err.put("strict_local_only", aiHandler == null || aiHandler.isStrictLocalOnly());
+                err.put("speech_provider_policy", "OFFLINE_ONLY");
+                sendJsonResponse(os, 403, err);
+                return true;
             }
+            JSONObject out = new JSONObject();
+            out.put("success", true);
+            out.put("active_voice", "offline_espeak");
+            out.put("speech_provider_policy", "OFFLINE_ONLY");
+            sendJsonResponse(os, 200, out);
+            return true;
         }
 
         return false;
