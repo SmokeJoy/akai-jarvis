@@ -43,6 +43,15 @@
 - CI `4j` runs pure Java gate regressions and a source policy contract. The complete Android9 build must pass on the exact HEAD. **No real AKAI eSpeak/AudioFocus success is claimed yet**; test actual speech, rapid interrupt, missing eSpeak, and volume/audio-focus coexistence at the single owner-authorized final release.
 - Historical Azure preferences and method signatures remain inert; `getTtsVoice()` reports only eSpeak. Web Remote removes Azure voice options, credential/region inputs, and cloud audio-cache controls. `RestApiRouter` exposes authenticated GET/POST offline-only TTS config and denies Azure voice/key/region or preview **in both LOCAL_ONLY and CLOUD_OPTIONAL**. Java REST tests and Web/source checks are added; check the CI HEAD. No real TV speech success is asserted.
 
+## OPTIONAL WEB REMOTE ITALIAN VOICE (17 NOV 2026)
+
+- Important limitation: **JARVIS still speaks through eSpeak on the TV**. No natural Italian TTS voice has been installed on the AKAI TV. DeepSeek's official TTS docs do not currently list Italian; Kimi's official API does not offer TTS/ASR. Never claim that a natural voice is available on the television without device evidence.
+- The Web Remote offers **explicitly opt-in Italian browser/system speech on the PHONE/REMOTE device**, not the TV speakers. The control is OFF after each page load. The client must accept only Italian browser voices with `localService === true`; if none are available it must leave `speak=true` for the TV's eSpeak.
+- When selected, `/api/ai/ask` sends `speak=false` to avoid double audio and the response is played by the user's mobile OS/browser. Voice selection can prefer an already available enhanced local Italian voice; a name is not proof of naturalness. Never load an external TTS URL or add cloud provider/credentials. This is local platform output on the user's browser device; no AI reasoning is moved from DeepSeek/Kimi.
+- STOP and opt-out must cancel browser audio, and a late AI response after opting out must not re-enable speech. In continuous conversation, wait until phone speech finishes before the microphone resumes. Full reply remains visible in the Web UI even without phone voice.
+- Host regression `akai-remote-tests/test_web_local_italian_voice.js` runs in CI step `1a2`. Browser speech is not simulated on a real iPhone or Android device; test UI semantics and voices on actual hardware only after the owner-authorized release.
+- Future television-speaker natural Italian neural TTS would require **distinct owner permission to alter the DeepSeek/Kimi-only inference policy** or a newly verified official DeepSeek/Kimi Italian TTS capability. No service exception, model download, or APK deploy is authorized by this optional Web voice.
+
 ## CURRENT ENTRYPOINTS
 
 - Final-release contract: `docs/JARVIS_FINAL_AGENT_OTA_RELEASE_CONTRACT.md`
