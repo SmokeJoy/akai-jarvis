@@ -311,7 +311,11 @@ public final class VisualProjectionService extends Service {
                 finishRequest(FrameResult.denied("NO_NEW_FRAME_TIMEOUT"));
             }
         };
-        worker.postDelayed(pendingTimeout, FRAME_TIMEOUT_MS);
+        // A shutting-down Looper may refuse the timeout. Never leave a
+        // pending capture without a deadline or strand its callback.
+        if (!worker.postDelayed(pendingTimeout, FRAME_TIMEOUT_MS)) {
+            finishRequest(FrameResult.denied("FRAME_TIMEOUT_SCHEDULE_REJECTED"));
+        }
     }
 
     private void consumeOnlyOnDemand(ImageReader source) {
