@@ -44,6 +44,14 @@ public final class CloudProviderPolicyTest {
                 "https://api.deepseek.com/chat/completions?token=secret"), "query denied");
         check(!CloudProviderPolicy.isApprovedDestination("deepseek",
                 "https://api.deepseek.com/chat/completions#fragment"), "fragment denied");
+        check(!CloudProviderPolicy.isApprovedDestination("deepseek",
+                "https://api.deepseek.com/chat%2Fcompletions"), "encoded slash path denied");
+        check(!CloudProviderPolicy.isApprovedDestination("deepseek",
+                "https://api.deepseek.com/%63hat/completions"), "encoded path character denied");
+        check(!CloudProviderPolicy.isApprovedDestination("kimi",
+                "https://api.moonshot.ai/v1/chat%2fcompletions"), "Kimi encoded slash denied");
+        check(!CloudProviderPolicy.isApprovedDestination("deepseek",
+                "https://api.deepseek.com/chat/../chat/completions"), "dot segment path denied");
         check(!CloudProviderPolicy.isApprovedDestination("kimi", null), "missing URL denied");
         check(CloudProviderPolicy.isLoopbackTestDestination("http://127.0.0.1:8080/v1/chat/completions"),
                 "host mock allowed");
