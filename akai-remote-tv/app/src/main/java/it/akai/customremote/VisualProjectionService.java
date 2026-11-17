@@ -104,12 +104,14 @@ public final class VisualProjectionService extends Service {
     private Runnable pendingTimeout;
     private Runnable expiration;
     private volatile boolean closed;
+    // Set directly by MediaProjection.onStop, before queued worker teardown.
+    private volatile boolean projectionRevoked;
     private VisualObservationProvider.Session observationSession;
 
     /** The returned object lives only in this process; no result is persisted. */
     public static boolean requestFrame(final String expectedProvider, final FrameCallback callback) {
         final VisualProjectionService service = active;
-        if (service == null || service.closed || service.worker == null || callback == null) return false;
+        if (service == null || service.closed || service.projectionRevoked || service.worker == null || callback == null) return false;
         // A stopped HandlerThread may reject a post during shutdown. Do not
         // claim that a capture was queued when its Looper is already quitting.
         return service.worker.post(new Runnable() {
@@ -121,7 +123,7 @@ public final class VisualProjectionService extends Service {
 
     public static boolean isSessionActive() {
         VisualProjectionService s = active;
-        return s != null && !s.closed && s.gate != null && s.gate.isActive();
+        return s != null && !s.closed && !s.projectionRevoked && s.gate != null && s.gate.isActive();
     }
 
     public static void stopOwnerSession(Context ctx) {
@@ -162,6 +164,7 @@ public final class VisualProjectionService extends Service {
             return START_NOT_STICKY;
         }
         closed = false;
+        projectionRevoked = false;
         try {
             createForegroundNotification();
             provider = targetProvider;
@@ -176,6 +179,9 @@ public final class VisualProjectionService extends Service {
             if (projection == null) throw new IllegalStateException("Android projection denied");
             projection.registerCallback(new MediaProjection.Callback() {
                 @Override public void onStop() {
+                    // Callback can run after startup checks but before worker STOP.
+                    // Block publication and new frame requests immediately.
+                    projectionRevoked = true;
                     Handler handler = worker;
                     // Projection revocation must terminate the service even if
                     // the frame worker is already quitting and rejects post().
@@ -217,7 +223,7 @@ public final class VisualProjectionService extends Service {
             // A MediaProjection revocation can race initialization on the worker.
             // Never resurrect an already stopped session by resetting closed here.
             synchronized (this) {
-                if (closed) throw new IllegalStateException("Projection revoked during startup");
+                if (closed || projectionRevoked) throw new IllegalStateException("Projection revoked during startup");
                 active = this;
             }
             observationSession = new VisualObservationProvider.Session() {
@@ -248,7 +254,7 @@ public final class VisualProjectionService extends Service {
                 }
             };
             synchronized (this) {
-                if (closed) throw new IllegalStateException("Projection revoked before session install");
+                if (closed || projectionRevoked) throw new IllegalStateException("Projection revoked before session install");
                 if (!VisualObservationProvider.install(observationSession)) {
                     throw new IllegalStateException("A visual session is already active");
                 }
@@ -302,7 +308,7 @@ public final class VisualProjectionService extends Service {
     // this lock, STOP can clear pending and release the display between the
     // initial closed check and pending assignment, stranding a callback.
     private synchronized void requestOnWorker(String expectedProvider, FrameCallback callback) {
-        if (closed || gate == null || reader == null) {
+        if (closed || projectionRevoked || gate == null || reader == null) {
             deliverDenied(callback, "SESSION_CLOSED");
             return;
         }
@@ -372,7 +378,7 @@ public final class VisualProjectionService extends Service {
     private void consumeOnlyOnDemand(ImageReader source) {
         // Drain a rare late image after surface detachment. Holding stale
         // ImageReader buffers could block the NEXT requested frame entirely.
-        if (pending == null || closed) {
+        if (pending == null || closed || projectionRevoked) {
             Image stale = null;
             try { stale = source.acquireLatestImage(); }
             catch (RuntimeException ignored) {}
@@ -462,7 +468,7 @@ public final class VisualProjectionService extends Service {
     // Serialize completion with owner STOP: a late worker must never deliver
     // a successful frame after the session has been revoked.
     private synchronized void finishRequest(FrameResult result) {
-        if (closed) return;
+        if (closed || projectionRevoked) return;
         FrameCallback deliver = pending;
         pending = null;
         // Stop frame production immediately after the requested image has
