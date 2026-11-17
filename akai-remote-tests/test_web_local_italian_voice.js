@@ -35,7 +35,7 @@ const italianOffline = { name: 'Italiano Migliorata', lang: 'it-IT', localServic
 const italianRemote = { name: 'Italiano online', lang: 'it-IT', localService: false };
 const englishOffline = { name: 'English Premium', lang: 'en-US', localService: true };
 
-async function scenario({ enabled, voices, forceSpeak = true, data = reply, hasSynth = true }) {
+async function scenario({ enabled, voices, forceSpeak = true, data = reply, hasSynth = true, revokeDuringFetch = false }) {
     const requestBodies = [];
     const utterances = [];
     const seenReplies = [];
@@ -63,6 +63,7 @@ async function scenario({ enabled, voices, forceSpeak = true, data = reply, hasS
         getApiUrl(pathname) { return 'https://test.invalid' + pathname; },
         fetch: async (_url, options) => {
             requestBodies.push(JSON.parse(options.body));
+            if (revokeDuringFetch) state.phoneVoiceEnabled = false;
             return { status: 400, ok: false, json: async () => data };
         },
         displayAiResponse(data) { seenReplies.push(data.reply); },
@@ -95,6 +96,13 @@ async function main() {
     assert.ok(phoneWait, 'voice lifecycle is observable for microphone resume');
     local.utterances[0].onend();
     await phoneWait;
+
+    const revoked = await scenario({
+        enabled: true, voices: [italianOffline], revokeDuringFetch: true
+    });
+    assert.equal(revoked.requestBodies[0].speak, false, 'request started under explicit opt-in');
+    assert.equal(revoked.utterances.length, 0, 'owner opt-out during request must block late voice');
+    assert.equal(revoked.seenReplies[0], reply.reply, 'reply must remain visible without audio');
 
     const defaultOff = await scenario({ enabled: false, voices: [italianOffline] });
     assert.equal(defaultOff.requestBodies[0].speak, true);
@@ -144,7 +152,7 @@ async function main() {
         'prefer already installed enhanced Italian voice');
     prioritized.exposed.stopPhoneSpeech();
 
-    console.log('Web local Italian voice PASS: 10 opt-in/fallback/STOP checks (no device or cloud)');
+    console.log('Web local Italian voice PASS: 11 opt-in/fallback/STOP checks (no device or cloud)');
 }
 
 main().catch(err => { console.error(err); process.exitCode = 1; });
