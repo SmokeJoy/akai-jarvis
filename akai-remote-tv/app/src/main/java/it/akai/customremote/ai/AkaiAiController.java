@@ -652,7 +652,7 @@ public class AkaiAiController {
      */
     private JSONObject processVisualGoalLocked(String query, boolean speak,
             long startTime, TaskToken token,
-            ScreenPerceptionEngine.PerceptionSnapshot initial) {
+            ScreenPerceptionEngine.PerceptionSnapshot initial, String relearnIntentKey) {
         JSONObject result = new JSONObject();
         String provider = aiAdapter.getActiveProvider();
         if (!CloudProviderPolicy.isSupportedCloudProvider(provider)
@@ -681,7 +681,8 @@ public class AkaiAiController {
         boolean answeredDialog = false;
         String dialogReply = null;
         final String firstPackage = initial != null ? initial.foregroundPackage : "";
-        String intentKey = generateIntentKey(query);
+        String intentKey = relearnIntentKey != null && !relearnIntentKey.trim().isEmpty()
+                ? relearnIntentKey : generateIntentKey(query);
 
         for (int attempt = 0; attempt < VisualStepPolicy.MAX_ACTION_STEPS; attempt++) {
             if (isTokenCancelled(token)) {
@@ -1096,6 +1097,18 @@ public class AkaiAiController {
                 result.put("actions_count", parsed.actions != null ? parsed.actions.length() : 0);
             } catch (Exception ignored) {}
 
+            // Self-improvement of a learned *procedure*, NOT self-editing code:
+            // if a previously verified SQLite route becomes stale, remember
+            // its failure and rediscover it with current owner-consented frames.
+            // Only a later STATE_VERIFIED may replace the old recipe.
+            if ("procedural_memory".equals(parsed.source) && !verified
+                    && !isTokenCancelled(myToken) && !isStrictLocalOnly()
+                    && VisualObservationProvider.active() && finalSnap != null
+                    && !finalSnap.hasSensitiveFields) {
+                Log.i(TAG, "Relearning stale procedure from consented TV observations.");
+                return processVisualGoalLocked(query, speak, startTime, myToken,
+                        finalSnap, parsed.intentKey);
+            }
             return completeAndSpeak(result, query, replyMsg, status, parsed.intentKey, 0, 0.0, speak, startTime);
         }
 
@@ -1141,7 +1154,8 @@ public class AkaiAiController {
         // consent. It is the only path that can perform multi-frame visual
         // autonomy across apps. Legacy commands still use their A1/A2 path.
         if (VisualObservationProvider.active() && !isStrictLocalOnly()) {
-            return processVisualGoalLocked(query, speak, startTime, myToken, initialSnap);
+            return processVisualGoalLocked(query, speak, startTime, myToken,
+                    initialSnap, null);
         }
 
         String provider = aiAdapter.getActiveProvider();
