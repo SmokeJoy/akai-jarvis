@@ -120,6 +120,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudVisionRequestPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationBridge.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualCaptureSessionGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FrameSequenceGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationProvider.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualStepPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
@@ -187,6 +188,14 @@ jobs:
 
       - name: 4f3. Android 9 idle capture power and memory regression
         run: python3 -m unittest akai-remote-tests/test_visual_projection_idle_surface.py -v
+
+      - name: 4f4. ImageReader frame sequence freshness across app switches
+        run: |
+          mkdir -p test_frame_sequence
+          javac -encoding UTF-8 -source 8 -target 8 -d test_frame_sequence \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FrameSequenceGate.java \
+            akai-remote-tests/FrameSequenceGateTest.java
+          java -cp test_frame_sequence it.akai.customremote.FrameSequenceGateTest
 
       - name: 4g. Vision observer handoff to planner (provider lock, cancellation)
         run: |
