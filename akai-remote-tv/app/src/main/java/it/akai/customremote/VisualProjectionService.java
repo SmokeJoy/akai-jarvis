@@ -208,7 +208,7 @@ public final class VisualProjectionService extends Service {
             display = projection.createVirtualDisplay("jarvis-on-demand",
                     frameWidth, frameHeight, dm.densityDpi,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    reader.getSurface(), null, worker);
+                    null, null, worker);
             if (display == null) throw new IllegalStateException("VirtualDisplay unavailable");
             active = this;
             closed = false;
@@ -315,6 +315,16 @@ public final class VisualProjectionService extends Service {
         } finally {
             if (stale != null) stale.close();
         }
+        // Avoid streaming frames continuously on the low-memory ARMv7 TV.
+        // A detached VirtualDisplay preserves the ONE owner-consented
+        // MediaProjection session, then emits frames only for a live request.
+        try {
+            if (display == null) throw new IllegalStateException("DISPLAY_UNAVAILABLE");
+            display.setSurface(reader.getSurface());
+        } catch (RuntimeException ex) {
+            finishRequest(FrameResult.denied("FRAME_SURFACE_ATTACH_FAILED"));
+            return;
+        }
         pendingTimeout = new Runnable() {
             @Override public void run() {
                 finishRequest(FrameResult.denied("NO_NEW_FRAME_TIMEOUT"));
@@ -328,9 +338,15 @@ public final class VisualProjectionService extends Service {
     }
 
     private void consumeOnlyOnDemand(ImageReader source) {
-        // With no pending capture, intentionally do not consume buffered images.
-        // This avoids CPU-heavy per-frame processing in the background.
-        if (pending == null || closed) return;
+        // Drain a rare late image after surface detachment. Holding stale
+        // ImageReader buffers could block the NEXT requested frame entirely.
+        if (pending == null || closed) {
+            Image stale = null;
+            try { stale = source.acquireLatestImage(); }
+            catch (RuntimeException ignored) {}
+            finally { if (stale != null) stale.close(); }
+            return;
+        }
         Image image = null;
         Bitmap bitmap = null;
         try {
@@ -392,6 +408,12 @@ public final class VisualProjectionService extends Service {
     private void finishRequest(FrameResult result) {
         FrameCallback deliver = pending;
         pending = null;
+        // Stop frame production immediately after the requested image has
+        // been taken, before any cloud latency or callback processing.
+        if (display != null) {
+            try { display.setSurface(null); }
+            catch (RuntimeException ignored) {}
+        }
         if (pendingTimeout != null && worker != null) {
             worker.removeCallbacks(pendingTimeout);
             pendingTimeout = null;
