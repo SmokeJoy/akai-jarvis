@@ -128,6 +128,14 @@ async function run() {
         'FAILED must never be a successful voice turn');
     assert.match(contradictoryVerified.elements.aiBadgeStatus.textContent, /Non Riuscito/);
 
+    const memoryHandled = await scenario(200, {
+        success: true, status: 'MEMORY_HANDLED', verified: false,
+        execution_outcome: 'NOT_TESTED', reply: 'Ho salvato la tua preferenza.'
+    });
+    assert.equal(memoryHandled.returned, true);
+    assert.match(memoryHandled.elements.aiBadgeStatus.textContent, /Memoria/,
+        'local memory handled is not an unsuccessful TV action');
+
     const bareHttpError = await scenario(400, { error: 'Richiesta invalida' });
     assert.match(bareHttpError.elements.aiBadgeStatus.textContent, /Non Riuscito/,
         'a generic HTTP error without AI result must not be treated as a handled command');
@@ -140,7 +148,7 @@ async function run() {
     assert.match(tlsRequired.elements.aiResponseText.textContent, /HTTPS/);
     assert.match(tlsRequired.elements.aiBadgeStatus.textContent, /Non Riuscito/);
 
-    console.log('Web AI feedback regression PASS (10 scenarios, no TV or cloud API used)');
+    console.log('Web AI feedback regression PASS (11 scenarios, no TV or cloud API used)');
 }
 
 run().catch(err => {
