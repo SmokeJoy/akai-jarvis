@@ -102,10 +102,7 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                 mTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                     @Override
                     public void onStart(String utteranceId) {
-                        if (!mOfflineGate.isCurrent(utteranceId)) return;
-                        mIsOfflineSpeaking.set(true);
-                        mSpeechState = SpeechState.PLAYING;
-                        Log.d(TAG, "Offline TTS speaking started: " + utteranceId);
+                        markOfflineUtteranceStarted(utteranceId);
                     }
 
                     @Override
@@ -223,7 +220,16 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         abandonAudioFocus();
     }
 
-    private boolean finishOfflineUtterance(String utteranceId) {
+    // Serialize callbacks with speak()/stop(): the old onDone must not
+    // release audio focus after the next utterance has started.
+    private synchronized void markOfflineUtteranceStarted(String utteranceId) {
+        if (!mOfflineGate.isCurrent(utteranceId)) return;
+        mIsOfflineSpeaking.set(true);
+        mSpeechState = SpeechState.PLAYING;
+        Log.d(TAG, "Offline TTS speaking started: " + utteranceId);
+    }
+
+    private synchronized boolean finishOfflineUtterance(String utteranceId) {
         if (!mOfflineGate.finish(utteranceId)) return false;
         mIsOfflineSpeaking.set(false);
         mSpeechState = SpeechState.IDLE;
