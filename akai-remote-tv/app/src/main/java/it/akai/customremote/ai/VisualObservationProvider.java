@@ -104,6 +104,12 @@ public final class VisualObservationProvider {
         } catch (RuntimeException ignored) {
             return Result.unavailable("CAPTURE_FAILED");
         }
+        // STOP or service teardown may revoke/replace this session while
+        // an Android capture or DeepSeek/Kimi request is still in flight.
+        // Never feed an observation from an old consent grant to the planner.
+        if (ACTIVE.get() != session) {
+            return Result.unavailable("SESSION_REVOKED_DURING_OBSERVATION");
+        }
         if (result == null || !result.success) {
             return result == null ? Result.unavailable("NO_RESULT") : result;
         }
