@@ -35,6 +35,14 @@
 - **Test rigor**: host Java 40 tests, supplemental policy tests, simulated HTTP E2E and Android9 APK build. Do NOT claim the feature operates on real AKAI until a human confirms actual MediaProjection consent, JPEG frame updates across apps, remote vision API, memory preservation and rollback.
 - **No intermediate OTA/deploy**; prepare the single final user-authorized update. Continue development until all explicit release gates pass.
 
+## LEGACY SPEECH POLICY AND TTS LIFECYCLE (17 NOV 2026)
+
+- `AkaiSpeechEngine` now synthesizes speech only using the explicitly selected Android eSpeak offline service (`com.reecedunn.espeak`); no default engine with unknown cloud backing and no Azure Neural TTS. eSpeak is a speech synthesizer, **not** a local LLM. If the engine is missing, fail closed for speech and keep TV controls functional.
+- Legacy `CloudSpeechAdapter.speakNeural` and private `fetchFromAzure` paths return disabled outcomes without network access, even if an old Azure voice setting or encrypted key remains. The compatibility class is not instantiated during normal speech. **Do not silently restore any third-party cloud audio service.**
+- `SpeechUtteranceGate` rejects stale/duplicate callbacks after STOP, replacement or session change. Android callbacks that alter focus/state are synchronized with `speak` and `stop`; utterance IDs use a monotonically incrementing request sequence rather than wall-clock milliseconds.
+- CI `4j` runs pure Java gate regressions and a source policy contract. The complete Android9 build must pass on the exact HEAD. **No real AKAI eSpeak/AudioFocus success is claimed yet**; test actual speech, rapid interrupt, missing eSpeak, and volume/audio-focus coexistence at the single owner-authorized final release.
+- Historical Azure preferences and UI compatibility signatures remain in source but cannot transmit to Azure. Audit UX so old Azure voice names cannot misrepresent the active voice.
+
 ## CURRENT ENTRYPOINTS
 
 - Final-release contract: `docs/JARVIS_FINAL_AGENT_OTA_RELEASE_CONTRACT.md`
