@@ -74,3 +74,14 @@ assert context.index('deliverDenied(callback, "FRAME_CONTEXT_UNAVAILABLE")') < c
 assert "ScreenPerceptionEngine.capture(this)" in context
 assert "hasCloudContextConsent()" in context
 print("PASS: failed Accessibility/context read denies capture before quota reservation")
+
+# Revocation on the worker can race initialization on the main thread.
+# The startup path must not clear closed after publishing the active service.
+start_command = source[source.index("public int onStartCommand("):source.index("private void createForegroundNotification()")]
+assert start_command.count("closed = false;") == 1
+assert start_command.index("closed = false;") < start_command.index("projection.registerCallback(")
+publish = start_command[start_command.index("if (display == null)"):start_command.index("observationSession = new VisualObservationProvider.Session()")]
+assert "synchronized (this)" in publish
+assert 'if (closed) throw new IllegalStateException("Projection revoked during startup")' in publish
+assert publish.index("if (closed) throw") < publish.index("active = this;")
+print("PASS: revoked projection cannot be resurrected by late startup publication")
