@@ -285,13 +285,13 @@ public final class VisualProjectionService extends Service {
 
     // A caller-provided callback must not crash the MediaProjection worker.\n    private static void deliverDenied(FrameCallback callback, String reason) {\n        try { callback.onFrame(FrameResult.denied(reason)); }\n        catch (RuntimeException ignored) {}\n    }\n\n    private void requestOnWorker(String expectedProvider, FrameCallback callback) {
         if (closed || gate == null || reader == null) {
-            deliverDenied(callback, "SESSION_CLOSED"));
+            deliverDenied(callback, "SESSION_CLOSED");
             return;
         }
         // A second caller must never replace the first callback or its timeout.
         // Reject before reserving a frame quota: a busy request is not a capture.
         if (pending != null) {
-            deliverDenied(callback, "FRAME_REQUEST_BUSY"));
+            deliverDenied(callback, "FRAME_REQUEST_BUSY");
             return;
         }
         ScreenPerceptionEngine.PerceptionSnapshot snap = ScreenPerceptionEngine.capture(this);
