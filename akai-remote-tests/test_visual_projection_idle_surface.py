@@ -37,7 +37,7 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         self.assertIn('finishRequest(FrameResult.denied("FRAME_SURFACE_ATTACH_FAILED"))', request)
 
     def test_detach_before_callback_and_cloud_work(self):
-        completed = self.method('private void finishRequest(', 'private synchronized void stopCapture(')
+        completed = self.method('private synchronized void finishRequest(', 'private synchronized void stopCapture(')
         self.assertLess(completed.index('display.setSurface(null)'), completed.index('deliver.onFrame(result)'))
         self.assertIn('gate.completeFrame(result.ok())', completed)
 
