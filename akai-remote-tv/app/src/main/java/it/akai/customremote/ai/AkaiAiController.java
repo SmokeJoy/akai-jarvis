@@ -211,6 +211,9 @@ public class AkaiAiController {
             cancelledAny = true;
             cancelledTaskId = current.taskId;
         }
+        // Stop is not only a cloud-request flag: immediately revoke the
+        // owner's active screenshot permission and foreground capture.
+        VisualObservationProvider.stopAndRevoke();
         if (context != null) {
             try {
                 AkaiSpeechEngine.getInstance(context).stop();
