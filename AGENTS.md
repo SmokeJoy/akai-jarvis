@@ -64,6 +64,8 @@
 ## CURRENT ENTRYPOINTS
 
 - Final-release contract: `docs/JARVIS_FINAL_AGENT_OTA_RELEASE_CONTRACT.md`
+- Owner-led single-install handoff (signed APK, backups, TV test matrix): `docs/JARVIS_FINAL_OWNER_HANDOFF.md`
+- Owner-local no-TV build recipe: `scripts/12_build_jarvis_final_candidate.ps1` (versionCode 4+, same TV signing cert; no debug/CI APK).
 - GitHub tracking issue: #17
 - Draft implementation PR: #18, stacked on A2 PR #16; A2 preparatory PRs #10, #12, #13, #14, #15.
 - AI core: `akai-remote-tv/app/src/main/java/it/akai/customremote/ai/`
