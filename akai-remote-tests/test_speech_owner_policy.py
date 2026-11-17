@@ -21,6 +21,11 @@ class SpeechOwnerPolicyTests(unittest.TestCase):
         self.assertNotIn(".speakNeural(", self.engine)
         self.assertIn("return speakOfflineTts(text, interrupt);", self.engine)
         self.assertIn("return speakOfflineTts(text, true);", self.engine)
+        self.assertNotIn("new CloudSpeechAdapter(", self.engine)
+        self.assertIn("new TextToSpeech(mContext, this, PREFERRED_OFFLINE_ENGINE)", self.engine)
+        self.assertNotIn("new TextToSpeech(mContext, this)", self.engine)
+        self.assertNotIn("mTts.setSpeechRate(1.0f)", self.engine)
+        self.assertNotIn("mTts.setPitch(1.0f)", self.engine)
 
     def test_legacy_cloud_adapter_is_inert(self):
         method = self.cloud.split("public synchronized boolean speakNeural(", 1)[1]
