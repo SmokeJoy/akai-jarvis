@@ -606,7 +606,18 @@
                             </select>
                         </div>
                         <div class="settings-actions">
-                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta Anteprima Locale</button>
+                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta eSpeak sulla TV</button>
+                        </div>
+                        <div class="form-group">
+                            <label class="toggle-card">
+                                <input type="checkbox" id="phone-voice-toggle">
+                                <span class="toggle-info">
+                                    <span class="toggle-title">Voce italiana del telefono (facoltativa)</span>
+                                    <span class="toggle-desc">Usa soltanto una voce italiana che il browser dichiara locale. Le risposte si sentono sul telefono, NON sugli altoparlanti della TV. Resta disattivata fino alla tua scelta e non usa API TTS esterne.</span>
+                                </span>
+                            </label>
+                            <p id="phone-voice-status" class="section-intro" role="status" aria-live="polite">Controllo delle voci italiane disponibili nel browser...</p>
+                            <button type="button" id="btn-preview-phone-voice" class="btn-secondary-action">🔊 Prova la voce del telefono</button>
                         </div>
                     </div>
 
