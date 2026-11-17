@@ -4,10 +4,10 @@
 
 ## HARD RULE — AI PROVIDERS (17 Nov 2026)
 
-**JARVIS MUST USE ONLY CLOUD DEEPSEEK OR KIMI (MOONSHOT) MODELS VIA THEIR OFFICIAL APIs FOR ANY AI INFERENCE.**
+**All JARVIS reasoning, image understanding and autonomous AI inference MUST use only official DeepSeek or Kimi (Moonshot) cloud APIs. A narrowly scoped optional personal free voice-output exception is documented below; it is not an agent reasoning provider.**
 
 - **Never add or execute a local AI model** on the AKAI TV, a PC, Termux, an edge box or any fallback compute node. The TV is Android 9/API28, ARMv7, ~1.5 GB RAM, unsuitable for LLM inference.
-- **No third-party model/API providers**, model routers, on-device LLM, Ollama, LM Studio, ONNX LLM, quantized fallback, multi-provider proxy or paid AI service other than the owner-selected DeepSeek/Kimi provider.
+- **No third-party reasoning/vision/planning model/API providers**, model routers, on-device LLM, Ollama, LM Studio, ONNX LLM, quantized fallback, multi-provider proxy or paid AI service other than the owner-selected DeepSeek/Kimi provider. Optional FreeTTS must remain disabled without its separate owner consent and a personal free-only key.
 - Explicitly distinguish local **deterministic software** (buttons, Accessibility, package inventory, parsed commands, SQLite, rule-based UI guards, orchestration) from a local **AI model** (forbidden). The historical `LOCAL_ONLY` label means "cloud disabled, deterministic operations only" and MUST NOT implement or promise local inference.
 - If DeepSeek/Kimi is unavailable, unconfigured, unauthorized or out of budget, fail closed for AI reasoning. Existing deterministic TV remote controls may continue.
 - Verify the active provider and request destination with `CloudProviderPolicy`. API keys are provider-specific, kept in Android Keystore; no cross-provider redirects, no public credentials and no API charges without owner consent.
@@ -37,12 +37,21 @@
 
 ## LEGACY SPEECH POLICY AND TTS LIFECYCLE (17 NOV 2026)
 
-- `AkaiSpeechEngine` now synthesizes speech only using the explicitly selected Android eSpeak offline service (`com.reecedunn.espeak`); no default engine with unknown cloud backing and no Azure Neural TTS. eSpeak is a speech synthesizer, **not** a local LLM. If the engine is missing, fail closed for speech and keep TV controls functional.
-- Legacy `CloudSpeechAdapter.speakNeural` and private `fetchFromAzure` paths return disabled outcomes without network access, even if an old Azure voice setting or encrypted key remains. The compatibility class is not instantiated during normal speech. **Do not silently restore any third-party cloud audio service.**
+- `AkaiSpeechEngine` defaults to Android eSpeak offline (`com.reecedunn.espeak`); never use an unknown default engine or Azure Neural API/account. Owner may optionally enable FreeTTS personal free-tier Italian speech via explicit Web TV consent; eSpeak is fallback. Neither mode runs a local LLM.
+- Legacy `CloudSpeechAdapter.speakNeural` and `fetchFromAzure` remain inert. FreeTTS uses a separate allowlisted free-voice-only path, never Azure account credentials or paid subscription. No raw TTS key may be shown in GitHub, logs or REST GET.
 - `SpeechUtteranceGate` rejects stale/duplicate callbacks after STOP, replacement or session change. Android callbacks that alter focus/state are synchronized with `speak` and `stop`; utterance IDs use a monotonically incrementing request sequence rather than wall-clock milliseconds.
 - CI `4j` runs pure Java gate regressions and a source policy contract. The complete Android9 build must pass on the exact HEAD. **No real AKAI eSpeak/AudioFocus success is claimed yet**; test actual speech, rapid interrupt, missing eSpeak, and volume/audio-focus coexistence at the single owner-authorized final release.
 - Historical Azure preferences and method signatures remain inert; `getTtsVoice()` reports only eSpeak. Web Remote removes Azure voice options, credential/region inputs, and cloud audio-cache controls. `RestApiRouter` exposes authenticated GET/POST offline-only TTS config and denies Azure voice/key/region or preview **in both LOCAL_ONLY and CLOUD_OPTIONAL**. Java REST tests and Web/source checks are added; check the CI HEAD. No real TV speech success is asserted.
 
+## OWNER VOICE DECISION — FREE ITALIAN AUDIO FROM TV SPEAKERS
+
+- The owner rejected Azure account billing and requested a free natural Italian voice from the AKAI TV speakers with the PC off. This authorizes implementation of a narrow FreeTTS personal free voice-output option, NOT any third-party reasoning/vision/planning provider.
+- FreeTTS Developer API requires a personal free-only account and API key; free output may have an audible watermark and is non-commercial. Its public docs describe inconsistent monthly quotas: JARVIS independently hard-stops at 5,000 characters per UTC month, 600 characters per utterance and 2 MiB per MP3. Failed attempts also consume the local reserved quota.
+- The owner must enable separate cloud TTS consent and confirm use of the FREE personal tier; default mode is eSpeak, no key and zero cloud TTS calls. FreeTTS key is encrypted with Android Keystore in private SharedPreferences and never exposed via REST GET or web readback. No app-managed subscription, paid plan, credit card, overage purchase, upgrade or fallback to other remote providers.
+- Use the official FreeTTS POST https://freetts.org/api/v1/tts and returned validated file ID with GET https://freetts.org/api/audio/{id} only; direct HTTPS host allowlist and no redirects. Skip requests containing sensitive-looking text; all network on a bounded worker, one active speech stream, STOP invalidates late responses, delete temporary MP3 after playback. On any error, fall back to offline eSpeak.
+- FreeTTS synthesizes speech output only: permitted voice IDs it-IT-DiegoNeural and it-IT-IsabellaNeural. Never send image, code, private memory or credentials as TTS content. It uses Azure behind the FreeTTS proxy, but the user does NOT need an Azure account; do not misrepresent upstream processing or promise free availability forever.
+- Code: FreeItalianTtsPolicy.java, FreeItalianTtsClient.java, FreeItalianTtsCoordinator.java, AkaiSpeechEngine.java, RestApiRouter.java, RemoteServerService.java, Web Remote voice configuration. CI: pure Java policy, Android build, TTS source-contract and REST mock. No paid API calls, no tested free account, no device playback verification yet.
+- The narrowly scoped TTS exception is NOT permission to expand AI provider policy, install neural models on the TV or merge/install an intermediate release. PR #18 remains Draft pending full CI, real TV tests and owner final release approval.
 ## OPTIONAL WEB REMOTE ITALIAN VOICE (17 NOV 2026)
 
 - Important limitation: **JARVIS still speaks through eSpeak on the TV**. No natural Italian TTS voice has been installed on the AKAI TV. DeepSeek's official TTS docs do not currently list Italian; Kimi's official API does not offer TTS/ASR. Never claim that a natural voice is available on the television without device evidence.
@@ -50,7 +59,7 @@
 - When selected, `/api/ai/ask` sends `speak=false` to avoid double audio and the response is played by the user's mobile OS/browser. Voice selection can prefer an already available enhanced local Italian voice; a name is not proof of naturalness. Never load an external TTS URL or add cloud provider/credentials. This is local platform output on the user's browser device; no AI reasoning is moved from DeepSeek/Kimi.
 - STOP and opt-out must cancel browser audio, and a late AI response after opting out must not re-enable speech. In continuous conversation, wait until phone speech finishes before the microphone resumes. Full reply remains visible in the Web UI even without phone voice.
 - Host regression `akai-remote-tests/test_web_local_italian_voice.js` runs in CI step `1a2`. Browser speech is not simulated on a real iPhone or Android device; test UI semantics and voices on actual hardware only after the owner-authorized release.
-- Future television-speaker natural Italian neural TTS would require **distinct owner permission to alter the DeepSeek/Kimi-only inference policy** or a newly verified official DeepSeek/Kimi Italian TTS capability. No service exception, model download, or APK deploy is authorized by this optional Web voice.
+- The original phone-local voice option remains separate: FreeTTS personal free-tier speech, if enabled by the owner, can instead speak directly from the AKAI TV. Neither mode implies any APK deployment before the final owner-authorized update.
 
 ## CURRENT ENTRYPOINTS
 
