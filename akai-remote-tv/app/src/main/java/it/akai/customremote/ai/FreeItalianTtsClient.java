@@ -26,7 +26,13 @@ public final class FreeItalianTtsClient {
     private static final String TAG = "AKAI_FreeItalianTTS";
     private FreeItalianTtsClient() {}
 
-    public static File synthesize(Context context, String text, String voice, String freeApiKey) {
+    public interface Cancellation {
+        boolean isCancelled();
+    }
+
+    public static File synthesize(Context context, String text, String voice, String freeApiKey,
+                                  Cancellation cancel) {
+        if (cancel == null || cancel.isCancelled()) return null;
         if (context == null || !FreeItalianTtsPolicy.textAllowed(text)
                 || !FreeItalianTtsPolicy.voiceAllowed(voice)
                 || freeApiKey == null || freeApiKey.length() < 10
@@ -36,6 +42,7 @@ public final class FreeItalianTtsClient {
         HttpsURLConnection audio = null;
         File tmp = null;
         try {
+            if (cancel.isCancelled()) return null;
             URL endpoint = new URL(FreeItalianTtsPolicy.ENDPOINT);
             post = openTrusted(endpoint, "POST");
             post.setDoOutput(true);
@@ -48,10 +55,12 @@ public final class FreeItalianTtsClient {
             payload.put("pitch", "+0Hz");
             byte[] input = payload.toString().getBytes(StandardCharsets.UTF_8);
             post.setFixedLengthStreamingMode(input.length);
+            if (cancel.isCancelled()) return null;
             try (OutputStream os = post.getOutputStream()) {
                 os.write(input);
             }
-            if (post.getResponseCode() != 200) return null;
+            if (cancel.isCancelled() || post.getResponseCode() != 200) return null;
+            if (cancel.isCancelled()) return null;
 
             byte[] metadata;
             try (InputStream is = post.getInputStream()) {
@@ -61,6 +70,7 @@ public final class FreeItalianTtsClient {
             String id = response.optString("file_id", "");
             if (!FreeItalianTtsPolicy.fileIdAllowed(id)) return null;
 
+            if (cancel.isCancelled()) return null;
             URL audioUrl = new URL(FreeItalianTtsPolicy.AUDIO_PREFIX + id);
             audio = openTrusted(audioUrl, "GET");
             if (audio.getResponseCode() != 200) return null;
@@ -78,6 +88,7 @@ public final class FreeItalianTtsClient {
                 byte[] buffer = new byte[4096];
                 int n;
                 while ((n = is.read(buffer)) != -1) {
+                    if (cancel.isCancelled()) return null;
                     written += n;
                     if (written > FreeItalianTtsPolicy.MAX_AUDIO_BYTES) return null;
                     os.write(buffer, 0, n);
@@ -93,6 +104,7 @@ public final class FreeItalianTtsClient {
                 boolean mp3 = a == 0xFF && (b & 0xE0) == 0xE0;
                 if (!id3 && !mp3) return null;
             }
+            if (cancel.isCancelled()) return null;
             File success = tmp;
             tmp = null;
             return success;
