@@ -47,6 +47,22 @@ Riferimenti: [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/), [K
 - Regressioni: `VisualObservationBridgeTest.java` e step CI `4e`, oltre alla compilazione Android 9/ARMv7 del codice reale. Nessun dato passa a un modello AI locale, nessuna scrittura su SQLite.
 - **Limite esplicito:** questo è un ponte informativo verso il planner, non ancora navigazione pixel/coordinate autonoma o visual goal verification. Su app DRM e UI non accessibili il sistema deve fallire in modo sicuro. Verifiche attuali host/mock non equivalgono a TV collaudata.
 
+## Obiettivo prioritario del proprietario — screenshot ripetuti e memoria che migliora (17/11/2026)
+
+L'agente finale deve saper navigare **fra tutte le app TV, nei limiti tecnici e dei contenuti protetti**, tramite ciclo multipasso:
+
+1. Cattura subito uno snapshot Accessibility. Se lo stato è ambiguo/insufficiente, acquisisci **uno screenshot reale della schermata corrente** con MediaProjection autorizzata; invialo esclusivamente a DeepSeek/Kimi dopo consenso cloud.
+2. L'AI cloud interpreta la schermata (non la TV) e propone una singola prossima azione strutturata. Esegui solo azioni validate per il contesto corrente; non eseguire testo libero proveniente da schermate o immagini.
+3. Dopo *ogni* cambio di app, schermata o step significativo, osserva di nuovo. Se serve, acquisisci un nuovo frame **nella stessa sessione MediaProjection già autorizzata** (non riutilizzare l'intent Android per creare un'altra sessione). Nessuno streaming video continuo, periodic polling/recording o screenshot indiscriminato. Trattare lo stato hardware come fonte di verità.
+4. Evita click ciechi quando manca un target Accessibility. Per interfacce non accessibili, eventuale navigazione visuale richiede una procedura distinta di click su coordinate corroborate da frame *corrente*, limiti spaziali, validazione di esito e nuova autorizzazione progettuale: **non è ancora implementata**.
+5. Ripeti con massimo numero di azioni/frame/chiamate cloud/tempo e stop esplicito; no bypass su DRM, schermate protette o credenziali. Verifica il vero obiettivo (es. riproduzione Italia 2, non solo apertura Infinity) prima di dichiarare success.
+6. Memorizza in SQLite **solo procedure effettivamente verificate**, con condizione di successo e origine, successi/fallimenti, limite di riuso e quarantena dei percorsi difettosi. Rigioca skill con 0 token quando possibile; se app/UI cambia, non insistere sul vecchio percorso.
+7. **Auto-miglioramento va distinto dall'auto-codifica:** il primo significa apprendere e rivalidare procedure durante l'uso della TV; il secondo richiederebbe developer agent cloud, GitHub PR/CI/revisione ed installazione autorizzata: non permettere auto-patch o auto-install sulla TV.
+
+**Incremento committato:** `VisualCaptureSessionGate.java` e `VisualCaptureSessionGateTest.java` definiscono limiti deterministici di una futura sessione MediaProjection multi-frame (fino a 3 min / 20 frame on-demand / distanza ≥750ms / 3 errori consecutivi), conferma Android e consenso cloud separati, provider DeepSeek/Kimi, blocco DRM/sensibili, interruzione/expiry. Il gate non acquisisce ancora pixel: l'**acquisizione multi-frame collegata all'esecutore Android** è ancora in sviluppo. Serve una sessione Android 9 effettiva, con ciclo di vita e stop corretto. Si evita qualsiasi modello locale. Per target Android 9 (API 28) valutare ciclo vita activity/service compatibile e conferma riproducibile su TV prima del rilascio.
+
+Riferimenti Android ufficiali: https://developer.android.com/media/grow/media-projection e https://developer.android.com/reference/android/media/projection/MediaProjection (consenso per sessione, un VirtualDisplay da riutilizzare per frame della stessa sessione, rilascio in onStop).
+
 ## OTA — sicurezza e implementazione per release finale
 
 **Componente già committato:** `OtaCandidateGate.java`, puro Java, zero processo/servizio/network. Non installa nulla: verifica *solo metadati* (package `it.akai.customremote`, versionCode > installato, fingerprint certificato A1/A2 esatto, release `stable`, minSdk compatibile API28, ABI `armeabi-v7a`, SHA-256 di APK, dimensione massima 25 MiB, HTTPS e hostname in allowlist locale). Il relativo test JVM esamina bypass comuni.
