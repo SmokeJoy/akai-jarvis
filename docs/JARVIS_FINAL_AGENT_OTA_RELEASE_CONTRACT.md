@@ -63,6 +63,21 @@ L'agente finale deve saper navigare **fra tutte le app TV, nei limiti tecnici e 
 
 Riferimenti Android ufficiali: https://developer.android.com/media/grow/media-projection e https://developer.android.com/reference/android/media/projection/MediaProjection (consenso per sessione, un VirtualDisplay da riutilizzare per frame della stessa sessione, rilascio in onStop).
 
+## Implementazione agente autonomo multi-frame (PR #18, non installato sulla TV)
+
+Questa parte era P0 e ora ha **codice reale nel ramo di sviluppo**, distinto dall'A2 sul televisore:
+
+- `VisualProjectionService.java`: nuovo servizio Android 9 **non esportato**, foreground durante la sessione, `START_NOT_STICKY`, una sola `MediaProjection` e un solo `VirtualDisplay`/ImageReader; cattura on-demand nuovi JPEG al cambio UI, RAM soltanto, 960×540, massimo 256 KiB, rifiuto nero/DRM, STOP notifica, pulizia risorse. Mai registrazioni continue, reboot autostart o LLM locale.
+- `LocalVisualCaptureActivity.java`: dialogo specifico di approvazione invio immagini DeepSeek/Kimi per sessione, seguito dal consenso di cattura Android, pulsante di arresto. La vecchia cattura diagnostica singola resta disponibile.
+- `VisualCaptureSessionGate.java`: per sessione fino a 3 minuti / 20 frame on-demand / massimo 3 errori cattura consecutivi, minimo 750 ms fra foto, provider immutabile, schermi sensibili bloccati. Un task JARVIS è limitato a 2 minuti / 8 azioni / 16 chiamate cloud.
+- `VisionSessionCoordinator.java`: attesa limitata del nuovo frame, confronto snapshot Accessibility attuale con fonte di cattura, richiesta HTTPS con API DeepSeek Flash o Kimi K2.6 e azzeramento byte JPEG in RAM; nessun upload per schermata cambiata o revoca consenso.
+- `VisualObservationProvider.java`: interfaccia testabile che rende disponibile la sessione soltanto quando il servizio Android autorizzato è attivo. Il tasto STOP annulla il compito e revoca la sessione.
+- `AkaiAiController.processVisualGoalLocked` con `VisualStepPolicy`: ciclo concreto `observe screenshot → DeepSeek/Kimi vision → plan → prima azione soltanto → accessibility/state verification → screenshot nuovo` fino a conclusione/limiti. Clic basati su etichette sempre filtrati dal `UiClickTargetGate`, mai da coordinate o testo screenshot non verificato. Il goal viene confermato solo da `GoalEvidenceVerifier`.
+- **Auto-apprendimento**: le azioni concatenate vengono salvate tramite `AgentSkillGate.canLearn` e `AkaiMemoryEngine.saveVerifiedProcedure` esclusivamente dopo `STATE_VERIFIED`. Se una vecchia procedura SQLite fallisce, JARVIS registra errore, la ricalcola nella sessione visiva esplicitamente autorizzata e la sostituisce solo in caso di nuovo `STATE_VERIFIED`, conservando il formato SQLite preesistente.
+- **Test simulati**: suite Java + test indipendenti su policy, provider e consent, test E2E mock di due schermate/passaggi; Android APK compilation in CI per SHA. **Non è una prova fisica**: servono TV, DRM, consumo RAM/CPU, regressioni remote/Home/TLS, reboot e test reali di memoria. Non usare i CI APK firmati di test per aggiornare la TV.
+
+**Limiti noti**: MediaProjection può restituire nero o schermate protette DRM; in assenza di Accessibility l'agente può esplorare con comandi D-pad ma NON eseguire tocchi su coordinate dedotte da sola visione. È corretto fallire in modo verificabile piuttosto che fingere di completare un goal. L'OTA rimane opzionale, non bloccante per il rilascio unico finale.
+
 ## OTA — sicurezza e implementazione per release finale
 
 **Componente già committato:** `OtaCandidateGate.java`, puro Java, zero processo/servizio/network. Non installa nulla: verifica *solo metadati* (package `it.akai.customremote`, versionCode > installato, fingerprint certificato A1/A2 esatto, release `stable`, minSdk compatibile API28, ABI `armeabi-v7a`, SHA-256 di APK, dimensione massima 25 MiB, HTTPS e hostname in allowlist locale). Il relativo test JVM esamina bypass comuni.
