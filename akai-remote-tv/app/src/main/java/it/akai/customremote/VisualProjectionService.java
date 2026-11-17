@@ -20,6 +20,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.view.WindowManager;
 
@@ -155,7 +156,7 @@ public final class VisualProjectionService extends Service {
             return START_NOT_STICKY;
         }
         VisualCaptureSessionGate nextGate = VisualCaptureSessionGate.begin(
-                true, true, targetProvider, System.currentTimeMillis());
+                true, true, targetProvider, SystemClock.elapsedRealtime());
         if (nextGate == null) {
             stopSelf(startId);
             return START_NOT_STICKY;
@@ -326,7 +327,7 @@ public final class VisualProjectionService extends Service {
         boolean sensitive = snap == null || snap.hasSensitiveFields
                 || !VisionCapturePolicy.mayCapture(true, snap);
         VisualCaptureSessionGate.Verdict verdict = gate.reserveNextFrame(
-                expectedProvider, cloudConsent, sensitive, false, System.currentTimeMillis());
+                expectedProvider, cloudConsent, sensitive, false, SystemClock.elapsedRealtime());
         if (!verdict.allowed) {
             deliverDenied(callback, verdict.reason);
             if (!gate.isActive()) {
