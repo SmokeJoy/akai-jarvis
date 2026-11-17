@@ -1084,7 +1084,7 @@ public class UnitTests {
         boolean okPreviewBlocked = (rPreviewBlocked.statusCode == 403) && (rPreviewBlocked.json != null);
         boolean previewDenied = okPreviewBlocked && !rPreviewBlocked.json.optBoolean("success") &&
                                 rPreviewBlocked.json.optBoolean("strict_local_only") &&
-                                rPreviewBlocked.json.optString("error").contains("STRICT_LOCAL_ONLY");
+                                rPreviewBlocked.json.optString("error").contains("Voce non autorizzata");
 
         if (previewDenied) {
             System.out.println("[PASS] Test 24 (PR-01 M1): Endpoint /api/ai/tts_preview bloccato con HTTP 403 Forbidden su voci cloud neurali (zero socket verso Microsoft Azure)");
@@ -1100,7 +1100,7 @@ public class UnitTests {
         boolean okCfgBlocked = (rCfgBlocked.statusCode == 403) && (rCfgBlocked.json != null);
         boolean cfgDenied = okCfgBlocked && !rCfgBlocked.json.optBoolean("success") &&
                             rCfgBlocked.json.optBoolean("strict_local_only") &&
-                            rCfgBlocked.json.optString("error").contains("STRICT_LOCAL_ONLY");
+                            rCfgBlocked.json.optString("error").contains("Provider non ammesso");
 
         // An offline-only TTS API must be truthful and usable in every AI mode.
         MockHttpResponse cfgGet = dispatch(router, "GET", "/api/ai/tts_config",
@@ -1141,6 +1141,58 @@ public class UnitTests {
                 && cfgNoToken.statusCode == 401
                 && cfgCloudModeReject.statusCode == 403
                 && previewCloudModeReject.statusCode == 403;
+
+        // Free plan output must be explicitly opt-in and must not expose its key
+        // in any readback. Only the currently approved Italian voice is playable.
+        RestApiRouter.AiHandler approvedFreeHandler = new RestApiRouter.AiHandler() {
+            @Override public JSONObject processQuery(String query, boolean speak) { return new JSONObject(); }
+            @Override public boolean isStrictLocalOnly() { return false; }
+            @Override public JSONArray getSupportedCatalog() { return new JSONArray(); }
+            @Override public boolean previewVoice(String voice, String text) {
+                return "it-IT-DiegoNeural".equals(voice);
+            }
+            @Override public JSONObject getTtsConfig() {
+                JSONObject out = new JSONObject();
+                try {
+                    out.put("active_voice", "it-IT-DiegoNeural");
+                    out.put("mode", "freetts_free");
+                    out.put("free_tts_enabled", true);
+                    out.put("freetts_api_key", "MUST_NOT_EXPOSE"); // negative redaction fixture
+                } catch (Exception ignored) {}
+                return out;
+            }
+            @Override public boolean saveTtsConfig(JSONObject req) {
+                return req != null
+                        && "freetts_free".equals(req.optString("mode"))
+                        && req.optBoolean("free_tts_consent", false)
+                        && req.optBoolean("free_tier_confirmed", false)
+                        && it.akai.customremote.ai.FreeItalianTtsPolicy.voiceAllowed(
+                                req.optString("voice"));
+            }
+        };
+        RestApiRouter approvedFreeRouter = new RestApiRouter(routerSec, cmdHandler, memHandler,
+                pinHandler, approvedFreeHandler, "192.168.1.8", 8088);
+        MockHttpResponse freeGet = dispatch(approvedFreeRouter, "GET", "/api/ai/tts_config",
+                authHeaders, "", "192.168.1.10");
+        MockHttpResponse freePostMissingConsent = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"mode\":\"freetts_free\",\"voice\":\"it-IT-DiegoNeural\"}", "192.168.1.10");
+        MockHttpResponse freePostApproved = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"mode\":\"freetts_free\",\"voice\":\"it-IT-DiegoNeural\",\"free_tts_consent\":true,\"free_tier_confirmed\":true}", "192.168.1.10");
+        MockHttpResponse freePreviewAllowed = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_preview",
+                authHeaders, "{\"voice\":\"it-IT-DiegoNeural\",\"text\":\"Test\"}", "192.168.1.10");
+        MockHttpResponse freePreviewWrong = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_preview",
+                authHeaders, "{\"voice\":\"it-IT-IsabellaNeural\",\"text\":\"Test\"}", "192.168.1.10");
+        MockHttpResponse freeRejectAzure = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"mode\":\"freetts_free\",\"azure_key\":\"danger\"}", "192.168.1.10");
+        cfgDenied = cfgDenied
+                && freeGet.statusCode == 200
+                && !freeGet.json.has("freetts_api_key")
+                && freePostMissingConsent.statusCode == 403
+                && freePostApproved.statusCode == 200
+                && !freePostApproved.json.has("freetts_api_key")
+                && freePreviewAllowed.statusCode == 200
+                && freePreviewWrong.statusCode == 403
+                && freeRejectAzure.statusCode == 403;
 
         if (cfgDenied) {
             System.out.println("[PASS] Test 25 (PR-01 M1): Endpoint /api/ai/tts_config bloccato con HTTP 403 Forbidden su impostazione credenziali cloud Azure in modalità locale");
