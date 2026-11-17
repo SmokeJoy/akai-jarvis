@@ -73,6 +73,48 @@ async function scenario(httpStatus, responseBody) {
     return { returned, elements, messages, expired, requestedTimeoutMs };
 }
 
+// Real client functions under mocked configuration responses; no API/cloud call.
+async function verifyConsentUi() {
+    const loadSource = extractFunction('loadAiConfig', true) + '\nloadAiConfig';
+    for (const cfg of [{}, { cloud_context_consent: false }, { cloud_context_consent: true }]) {
+        const checkbox = { checked: true };
+        const sandbox = {
+            state: { token: 'test-only' },
+            elements: { chkCloudContextConsent: checkbox },
+            document: { getElementsByName() { return []; } },
+            getApiUrl() { return 'https://test.invalid/api/ai/config'; },
+            fetch: async () => ({ ok: true, json: async () => cfg }),
+            console
+        };
+        const load = vm.runInNewContext(loadSource, sandbox);
+        await load();
+        assert.equal(checkbox.checked, cfg.cloud_context_consent === true,
+            'missing or false cloud consent must display as unchecked');
+    }
+
+    const saveSource = extractFunction('saveAiConfig', true) + '\nsaveAiConfig';
+    for (const checkbox of [undefined, { checked: true }]) {
+        let saved = null;
+        const sandbox = {
+            state: { token: 'test-only' },
+            elements: checkbox ? { chkCloudContextConsent: checkbox } : {},
+            document: { querySelector() { return null; } },
+            getApiUrl() { return 'https://test.invalid/api/ai/config'; },
+            fetch: async (_url, options) => {
+                saved = JSON.parse(options.body);
+                return { ok: true, json: async () => ({ success: true }) };
+            },
+            showToast() {},
+            loadAiConfig() {},
+            console
+        };
+        const save = vm.runInNewContext(saveSource, sandbox);
+        await save();
+        assert.equal(saved.cloud_context_consent, Boolean(checkbox && checkbox.checked),
+            'absent consent control must not silently opt the owner in');
+    }
+}
+
 async function run() {
     const verified = await scenario(200, {
         success: true, status: 'SUCCESS_VERIFIED', verified: true,
@@ -187,7 +229,8 @@ async function run() {
     assert.match(tlsRequired.elements.aiResponseText.textContent, /HTTPS/);
     assert.match(tlsRequired.elements.aiBadgeStatus.textContent, /Non Riuscito/);
 
-    console.log('Web AI feedback regression PASS (16 scenarios, no TV or cloud API used)');
+    await verifyConsentUi();
+    console.log('Web AI feedback regression PASS (16 outcomes + 5 consent cases; no TV or cloud API used)');
 }
 
 run().catch(err => {
