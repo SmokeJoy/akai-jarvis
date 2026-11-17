@@ -346,12 +346,7 @@ if (Test-Path $releaseApk) {
     # Handoff machine-readable: only non-sensitive provenance, never passwords,
     # alias, private keystore path, personal database or API credentials.
     $sourceHead = (& git -C $repoRoot rev-parse HEAD 2>$null | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sourceHead -notmatch '^[a-f0-9]{40}
-} else {
-    Write-Host "ERRORE: APK finale non generato." -ForegroundColor Red
-    exit 1
-}
-) {
+    if ($LASTEXITCODE -ne 0 -or $sourceHead.Length -ne 40 -or $sourceHead -notmatch '^[a-f0-9]{40}') {
         throw 'Release fingerprint record failed: Git HEAD not available.'
     }
     $handoff = [ordered]@{
