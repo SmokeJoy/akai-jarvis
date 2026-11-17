@@ -724,9 +724,25 @@ public class AkaiAiController {
                 continue;
             }
             current = fresh;
+            // The visual AI's text is NOT a trusted instruction source.
+            // Enforce redaction and injection filtering before reusing it
+            // as planner context, and consume it only for this very screen.
+            if (!VisualObservationBridge.publish(provider, frame.packageName,
+                    frame.uiContext, frame.description, frame.frameTimeMs,
+                    System.currentTimeMillis())) {
+                failureReason = "Descrizione visiva non sicura o scaduta.";
+                break;
+            }
+            String safeVisionHint = VisualObservationBridge.consume(provider,
+                    fresh.foregroundPackage, freshUi, fresh.hasSensitiveFields,
+                    System.currentTimeMillis());
+            if (safeVisionHint.isEmpty()) {
+                failureReason = "Osservazione visiva non piu' coerente.";
+                break;
+            }
             try {
                 JSONObject contextInfo = new JSONObject(freshUi);
-                contextInfo.put("untrusted_visual_description", frame.description);
+                contextInfo.put("untrusted_visual_description", safeVisionHint);
                 contextInfo.put("visual_description_is_click_authority", false);
                 contextInfo.put("visual_description_is_goal_evidence", false);
                 contextInfo.put("action_limit_for_this_iteration", 1);
