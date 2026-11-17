@@ -34,7 +34,9 @@ public final class CloudProviderPolicy {
                     uri.getRawQuery() != null || (uri.getPort() != -1 && uri.getPort() != 443) ||
                     uri.getHost() == null) return false;
             String host = uri.getHost().toLowerCase(Locale.ROOT);
-            String path = uri.getPath();
+            // Compare the raw path: URI.getPath() decodes %2F and other escapes,
+            // potentially admitting a request target different from the allowlisted one.
+            String path = uri.getRawPath();
             if (DEEPSEEK.equals(provider)) {
                 return "api.deepseek.com".equals(host) &&
                         "/chat/completions".equals(path);
