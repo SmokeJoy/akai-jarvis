@@ -1071,7 +1071,7 @@
                     elements.aiKimiRegionSelect.value = cfg.kimi_region || 'intl';
                 }
                 if (elements.chkCloudContextConsent) {
-                    elements.chkCloudContextConsent.checked = (cfg.cloud_context_consent !== false);
+                    elements.chkCloudContextConsent.checked = (cfg.cloud_context_consent === true);
                 }
 
                 // Masked API Keys
@@ -1178,7 +1178,7 @@
         const executionMode = (provider === 'local') ? 'LOCAL_ONLY' : 'CLOUD_OPTIONAL';
         const model = elements.aiModelSelect ? elements.aiModelSelect.value : 'deepseek-flash';
         const kimiRegion = elements.aiKimiRegionSelect ? elements.aiKimiRegionSelect.value : 'intl';
-        const cloudContextConsent = elements.chkCloudContextConsent ? Boolean(elements.chkCloudContextConsent.checked) : true;
+        const cloudContextConsent = elements.chkCloudContextConsent ? Boolean(elements.chkCloudContextConsent.checked) : false;
         const key = elements.aiApiKeyInput ? elements.aiApiKeyInput.value.trim() : '';
 
         const payload = {
