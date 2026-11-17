@@ -268,6 +268,11 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseApk)) {
 }
 # There is only ONE signed candidate in the out-of-tree release directory.
 # Never leave a duplicate debug-named APK that bypasses verification gates.
+# In case of any failed release verification, the signed candidate must not
+# remain as a tempting installable APK. Delete only this new build's artifacts.
+$releaseApproved = $false
+$handoffPath = Join-Path $releaseOutputDir 'JARVIS_FINAL_BUILD_MANIFEST.json'
+try {
 if (Test-Path $releaseApk) {
     $sha256 = (Get-FileHash -Path $releaseApk -Algorithm SHA256).Hash
     $sizeKb = [Math]::Round((Get-Item $releaseApk).Length / 1024, 2)
@@ -289,7 +294,7 @@ if (Test-Path $releaseApk) {
             Write-Host "      [PASS] android:debuggable assente (default false garantito da Android OS)!" -ForegroundColor Green
         } else {
             Write-Host "      [FAIL] android:debuggable non conforme!" -ForegroundColor Red
-            exit 1
+            throw 'Build finale bloccata: APK debuggable non consentito.'
         }
     }
 
@@ -339,8 +344,7 @@ if (Test-Path $releaseApk) {
 
     if ($foundForbidden.Count -gt 0) {
         Write-Host "FATAL FAIL-CLOSED: Trovati file TLS/certificati non autorizzati nell'APK di release: $($foundForbidden -join ', ')" -ForegroundColor Red
-        Remove-Item $releaseApk -Force -ErrorAction SilentlyContinue
-        exit 1
+        throw 'Build finale bloccata: keystore o materiale TLS privato trovato nell APK.'
     }
     Write-Host "      [PASS] Nessun certificato o chiave privata/keystore incorporato nell'APK release!" -ForegroundColor Green
     # Handoff machine-readable: only non-sensitive provenance, never passwords,
@@ -368,8 +372,15 @@ if (Test-Path $releaseApk) {
     $handoffPath = Join-Path $releaseOutputDir 'JARVIS_FINAL_BUILD_MANIFEST.json'
     $handoff | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $handoffPath -Encoding UTF8
     Write-Host "Manifest provenienza senza segreti: $handoffPath" -ForegroundColor Cyan
+    $releaseApproved = $true
     Write-Host "CANDIDATO PER REVISIONE OFFLINE, NON INSTALLATO: $releaseApk" -ForegroundColor Cyan
 } else {
-    Write-Host "ERRORE: APK finale non generato." -ForegroundColor Red
-    exit 1
+    throw 'Build finale non generata. La TV resta invariata.'
+}
+ finally {
+    if (-not $releaseApproved) {
+        Remove-Item -LiteralPath $releaseApk -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $handoffPath -Force -ErrorAction SilentlyContinue
+        Write-Host 'CANDIDATO NON APPROVATO ELIMINATO: nessuna installazione effettuata.' -ForegroundColor Yellow
+    }
 }
