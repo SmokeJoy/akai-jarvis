@@ -42,11 +42,15 @@ public class RestApiRouter {
         default boolean speak(String text, boolean interrupt) { return false; }
         default boolean previewVoice(String voice, String text) { return false; }
         default JSONObject getTtsConfig() {
-            return new JSONObject().put("mode", "offline_espeak")
-                    .put("active_voice", "offline_espeak")
-                    .put("free_tts_enabled", false)
-                    .put("cloud_tts_enabled", false)
-                    .put("speech_provider_policy", "OWNER_OPT_IN_FREE_TTS_ONLY");
+            JSONObject out = new JSONObject();
+            try {
+                out.put("mode", "offline_espeak");
+                out.put("active_voice", "offline_espeak");
+                out.put("free_tts_enabled", false);
+                out.put("cloud_tts_enabled", false);
+                out.put("speech_provider_policy", "OWNER_OPT_IN_FREE_TTS_ONLY");
+            } catch (Exception ignored) {}
+            return out;
         }
         default boolean saveTtsConfig(JSONObject settings) {
             return settings != null && !settings.has("azure_key")
