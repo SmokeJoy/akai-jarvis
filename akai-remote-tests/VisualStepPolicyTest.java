@@ -31,6 +31,18 @@ public final class VisualStepPolicyTest {
         check(!VisualStepPolicy.mayContinue(0, 0, 100,
                 100 + VisualStepPolicy.MAX_GOAL_MS), "timeout");
         check(!VisualStepPolicy.mayContinue(0, 0, 100, 99), "clock rollback");
+        check(VisualStepPolicy.mayContinueElapsed(0, 0, 0),
+                "monotonic start of goal allowed");
+        check(VisualStepPolicy.mayContinueElapsed(7, 15,
+                VisualStepPolicy.MAX_GOAL_MS - 1), "last elapsed millisecond allowed");
+        check(!VisualStepPolicy.mayContinueElapsed(0, 0,
+                VisualStepPolicy.MAX_GOAL_MS), "monotonic deadline enforced");
+        check(!VisualStepPolicy.mayContinueElapsed(0, 0, -1L),
+                "invalid negative elapsed time denied");
+        check(!VisualStepPolicy.mayContinueElapsed(8, 0, 1L),
+                "action limit applies to elapsed-only gate");
+        check(!VisualStepPolicy.mayContinueElapsed(0, 16, 1L),
+                "cloud limit applies to elapsed-only gate");
         check(VisualStepPolicy.repeatedWithoutProgress(
                 "dpad_right", "same UI + image", "dpad_right", "same UI + image"),
                 "identical action with unchanged screen blocked");
