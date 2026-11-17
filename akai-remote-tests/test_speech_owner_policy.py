@@ -42,11 +42,11 @@ class SpeechOwnerPolicyTests(unittest.TestCase):
         self.assertIn("return null;", fetch)
 
     def test_only_espeak_exposed_to_web_and_rest(self):
-        self.assertIn('return CloudSpeechAdapter.VOICE_OFFLINE;', self.engine)
+        self.assertIn('return mFreeVoice.configuredVoice();', self.engine)
         self.assertIn('if (!CloudSpeechAdapter.VOICE_OFFLINE.equals(voice))', self.engine)
         self.assertIn('"/api/ai/tts_config".equals(path) && "GET".equals(method)', self.router)
         self.assertIn('"/api/ai/tts_config".equals(path) && "POST".equals(method)', self.router)
-        self.assertIn('if (!"offline_espeak".equals(voice))', self.router)
+        self.assertIn('if (!"offline_espeak".equals(voice) && !approvedFreeVoice)', self.router)
         self.assertIn('req.has("azure_key") || req.has("azure_region")', self.router)
         self.assertNotIn('azure-speech-key-input', self.html)
         self.assertNotIn('Diego (Azure', self.html)
