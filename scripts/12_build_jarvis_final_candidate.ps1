@@ -286,9 +286,14 @@ if (Test-Path $releaseApk) {
 
     Write-Host "`nVerifica flag debuggable (FAIL-CLOSED):"
     $aaptCli = Join-Path $buildToolsDir "aapt.exe"
-    if (Test-Path $aaptCli) {
-        $xmlTree = & $aaptCli dump xmltree $releaseApk AndroidManifest.xml 2>&1 | Out-String
-        if ($xmlTree -match "android:debuggable\(0x0101000f\)=\(type 0x12\)0x0") {
+    if (-not (Test-Path -LiteralPath $aaptCli -PathType Leaf)) {
+        throw 'Release gate blocked: aapt.exe required to inspect compiled android:debuggable.'
+    }
+    $xmlTree = (& $aaptCli dump xmltree $releaseApk AndroidManifest.xml 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($xmlTree)) {
+        throw 'Release gate blocked: aapt dump xmltree failed; cannot verify debuggable flag.'
+    }
+    if ($xmlTree -match "android:debuggable\(0x0101000f\)=\(type 0x12\)0x0") {
             Write-Host "      [PASS] android:debuggable = false (0x0) confermato nel manifest compilato!" -ForegroundColor Green
         } elseif ($xmlTree -notmatch "android:debuggable") {
             Write-Host "      [PASS] android:debuggable assente (default false garantito da Android OS)!" -ForegroundColor Green
@@ -296,7 +301,6 @@ if (Test-Path $releaseApk) {
             Write-Host "      [FAIL] android:debuggable non conforme!" -ForegroundColor Red
             throw 'Build finale bloccata: APK debuggable non consentito.'
         }
-    }
 
     Write-Host "`nVerifica firma apksigner:"
     $verifyArgs = @("-jar", $apksignerJar, "verify", "--print-certs", $releaseApk)
