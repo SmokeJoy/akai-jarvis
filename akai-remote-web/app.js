@@ -147,10 +147,7 @@
 
         // Voice & TTS
         aiVoiceSelect: document.getElementById('ai-voice-select'),
-        azureSpeechKeyInput: document.getElementById('azure-speech-key-input'),
-        btnToggleAzureKey: document.getElementById('btn-toggle-azure-key'),
-        azureRegionSelect: document.getElementById('azure-region-select'),
-        ttsCacheSize: document.getElementById('tts-cache-size'),
+
         btnSaveVoice: document.getElementById('btn-save-voice'),
         btnPreviewVoice: document.getElementById('btn-preview-voice'),
         btnClearCache: document.getElementById('btn-clear-cache'),
@@ -1150,20 +1147,20 @@
     }
 
     async function loadTtsConfig() {
+        if (elements.aiVoiceSelect) elements.aiVoiceSelect.value = 'offline_espeak';
         if (!state.token) return;
         try {
             const res = await fetch(getApiUrl('/api/ai/tts_config'), {
                 headers: { 'Authorization': `Bearer ${state.token}` }
             });
-            if (res.ok) {
-                const cfg = await res.json();
-                if (elements.aiVoiceSelect && cfg.active_voice) elements.aiVoiceSelect.value = cfg.active_voice;
-                if (elements.azureRegionSelect && cfg.azure_region) elements.azureRegionSelect.value = cfg.azure_region;
-                if (elements.azureSpeechKeyInput) elements.azureSpeechKeyInput.value = cfg.masked_azure_key || '';
-                if (elements.ttsCacheSize) elements.ttsCacheSize.textContent = `${cfg.cache_size_kb || 0} KB / ${cfg.max_cache_mb || 8} MB`;
+            if (!res.ok) return;
+            const cfg = await res.json();
+            if (elements.aiVoiceSelect) {
+                elements.aiVoiceSelect.value = cfg.active_voice === 'offline_espeak'
+                    ? cfg.active_voice : 'offline_espeak';
             }
         } catch (e) {
-            console.warn('Errore caricamento TTS:', e);
+            console.warn('Errore lettura stato TTS locale:', e);
         }
     }
 
@@ -1220,13 +1217,6 @@
 
     async function saveTtsConfig() {
         if (!state.token) return;
-        const voice = elements.aiVoiceSelect ? elements.aiVoiceSelect.value : 'it-IT-DiegoNeural';
-        const region = elements.azureRegionSelect ? elements.azureRegionSelect.value : 'westeurope';
-        const key = elements.azureSpeechKeyInput ? elements.azureSpeechKeyInput.value.trim() : '';
-
-        const payload = { voice, azure_region: region };
-        if (key && !key.includes('••••')) payload.azure_key = key;
-
         try {
             const res = await fetch(getApiUrl('/api/ai/tts_config'), {
                 method: 'POST',
@@ -1234,41 +1224,35 @@
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${state.token}`
                 },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({ voice: 'offline_espeak' })
             });
-            if (res.ok) {
-                showToast('Impostazioni vocali salvate!');
-                loadTtsConfig();
-            } else {
-                showToast('Errore salvataggio vocale', true);
-            }
+            showToast(res.ok ? 'Sintesi locale eSpeak confermata' :
+                'Configurazione vocale locale non disponibile', !res.ok);
+            if (res.ok) loadTtsConfig();
         } catch (e) {
-            showToast('Errore di comunicazione', true);
+            showToast('Errore comunicazione TTS locale', true);
         }
     }
 
     async function previewVoice() {
         if (!state.token) return;
-        const voice = elements.aiVoiceSelect ? elements.aiVoiceSelect.value : 'it-IT-DiegoNeural';
-        const sampleText = voice.includes('Isabella') ?
-            'Ciao, sono Isabella. Questa è la voce naturale dell\'assistente per la tua televisione AKAI.' :
-            'Ciao, sono Diego. Questa è la voce naturale dell\'assistente per la tua televisione AKAI.';
-
+        const voice = 'offline_espeak';
         try {
-            showToast(`Riproduzione anteprima (${voice})...`);
             const res = await fetch(getApiUrl('/api/ai/tts_preview'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${state.token}`
                 },
-                body: JSON.stringify({ voice, text: sampleText })
+                body: JSON.stringify({
+                    voice,
+                    text: 'Questa è la voce locale di JARVIS sulla tua televisione AKAI.'
+                })
             });
-            if (!res.ok) {
-                showToast('Errore anteprima vocale sulla TV', true);
-            }
+            if (res.ok) showToast('Anteprima eSpeak avviata sulla TV');
+            else showToast('Impossibile avviare il motore vocale locale', true);
         } catch (e) {
-            showToast('Errore anteprima voce', true);
+            showToast('Errore anteprima voce locale', true);
         }
     }
 
@@ -1874,13 +1858,7 @@
                 elements.btnToggleKeyVisibility.textContent = isPw ? '🔒' : '👁';
             });
         }
-        if (elements.btnToggleAzureKey) {
-            elements.btnToggleAzureKey.addEventListener('click', () => {
-                const isPw = elements.azureSpeechKeyInput.type === 'password';
-                elements.azureSpeechKeyInput.type = isPw ? 'text' : 'password';
-                elements.btnToggleAzureKey.textContent = isPw ? '🔒' : '👁';
-            });
-        }
+
 
         // Auto-switch default model when provider radio changes
         document.querySelectorAll('input[name="ai-provider"]').forEach(r => {
