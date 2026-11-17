@@ -107,12 +107,13 @@ public final class VisualProjectionService extends Service {
     public static boolean requestFrame(final String expectedProvider, final FrameCallback callback) {
         final VisualProjectionService service = active;
         if (service == null || service.closed || service.worker == null || callback == null) return false;
-        service.worker.post(new Runnable() {
+        // A stopped HandlerThread may reject a post during shutdown. Do not
+        // claim that a capture was queued when its Looper is already quitting.
+        return service.worker.post(new Runnable() {
             @Override public void run() {
                 service.requestOnWorker(expectedProvider, callback);
             }
         });
-        return true;
     }
 
     public static boolean isSessionActive() {
