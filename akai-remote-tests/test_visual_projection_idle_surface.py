@@ -53,7 +53,10 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         self.assertIn('if (pending == null || closed)', capture)
         self.assertIn('source.acquireLatestImage()', capture)
         self.assertIn('if (stale != null) {', capture)
-        self.assertEqual(capture.count('try { stale.close(); } catch (RuntimeException ignored) {}'), 2)
+        # The second stale-image cleanup lives in requestOnWorker, outside this slice.
+        self.assertEqual(capture.count('try { stale.close(); } catch (RuntimeException ignored) {}'), 1)
+        request = self.method('private void requestOnWorker(', 'private void consumeOnlyOnDemand(')
+        self.assertEqual(request.count('try { stale.close(); } catch (RuntimeException ignored) {}'), 1)
         idle = capture[capture.index('if (pending == null || closed)'):capture.index('Image image = null;')]
         self.assertNotIn('Bitmap.createBitmap', idle)
         self.assertNotIn('bitmap.compress', idle)
