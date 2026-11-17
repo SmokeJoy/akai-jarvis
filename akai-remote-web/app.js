@@ -20,7 +20,9 @@
         pingTimer: null,
         speechRecognition: null,
         isListening: false,
-        caFingerprint: null
+        caFingerprint: null,
+        // Opt-in per page: never switch the TV to phone audio silently.
+        phoneVoiceEnabled: false
     };
 
     // Conversation State Machine (P1-02, P1-03, P1-04)
@@ -147,6 +149,9 @@
 
         // Voice & TTS
         aiVoiceSelect: document.getElementById('ai-voice-select'),
+        phoneVoiceToggle: document.getElementById('phone-voice-toggle'),
+        phoneVoiceStatus: document.getElementById('phone-voice-status'),
+        btnPreviewPhoneVoice: document.getElementById('btn-preview-phone-voice'),
 
         btnSaveVoice: document.getElementById('btn-save-voice'),
         btnPreviewVoice: document.getElementById('btn-preview-voice'),
@@ -466,6 +471,7 @@
     }
 
     async function cancelBackendAiTask() {
+        stopPhoneSpeech();
         const hadInFlight = Boolean(convoSession.aiAbortController);
         if (convoSession.aiAbortController) {
             convoSession.userCancelRequested = true;
@@ -496,6 +502,7 @@
     }
 
     function stopConversation() {
+        stopPhoneSpeech();
         const shouldCancelTv = Boolean(convoSession.aiAbortController) ||
             convoSession.state === JarvisConvoState.THINKING ||
             convoSession.state === JarvisConvoState.SPEAKING;
@@ -564,21 +571,25 @@
 
         // If conversation is still active, poll until TV finished speaking, then reopen microphone
         if (convoSession.active && ok !== false) {
-            await handleTvSpeechTurn();
+            const phoneSpeechTurn = convoSession.phoneSpeechPromise;
+            if (phoneSpeechTurn) await phoneSpeechTurn;
+            if (convoSession.active) await handleTvSpeechTurn(Boolean(phoneSpeechTurn));
         } else {
             convoSession.turnLocked = false;
         }
     }
 
     // P1-03: Robust speech status polling
-    async function handleTvSpeechTurn() {
-        setJarvisState(JarvisConvoState.SPEAKING, 'La TV sta rispondendo...', 'speaking');
+    async function handleTvSpeechTurn(phoneAlreadySpoken = false) {
+        setJarvisState(JarvisConvoState.SPEAKING,
+            phoneAlreadySpoken ? 'Risposta vocale locale completata' : 'La TV sta rispondendo...',
+            'speaking');
 
         let pollCount = 0;
         let speechSeen = false;
 
         // Poll TV speech status until finished
-        while (pollCount < 40 && convoSession.active) {
+        while (!phoneAlreadySpoken && pollCount < 40 && convoSession.active) {
             await new Promise(r => setTimeout(r, 400));
             if (!convoSession.active) return;
 
@@ -656,6 +667,77 @@
         }
     }
 
+    // Optional Web Remote output: the phone/browser's explicitly local Italian
+    // system voice. It plays on that device, NOT on the TV. No new cloud API,
+    // executable neural model or voice package is installed on the AKAI.
+    function getLocalItalianPhoneVoice() {
+        const synth = window.speechSynthesis;
+        if (!synth || typeof synth.getVoices !== 'function'
+                || typeof window.SpeechSynthesisUtterance !== 'function') return null;
+        let available = [];
+        try { available = synth.getVoices() || []; } catch (_) { return null; }
+        const candidates = available.filter(voice => voice
+                && voice.localService === true
+                && /^it(?:-|$)/i.test(voice.lang || ''));
+        // Prefer enhanced Italian voices when already installed by the browser/OS.
+        candidates.sort((a, b) => {
+            const score = v => /premium|enhanced|avanzat|migliorat/i.test(v.name || '') ? 2
+                : /^it-it$/i.test(v.lang || '') ? 1 : 0;
+            return score(b) - score(a);
+        });
+        return candidates.length ? candidates[0] : null;
+    }
+
+    function updatePhoneVoiceStatus() {
+        if (!elements.phoneVoiceStatus) return;
+        const voice = getLocalItalianPhoneVoice();
+        elements.phoneVoiceStatus.textContent = voice
+            ? 'Voce italiana locale disponibile su questo dispositivo: ' + voice.name
+            : 'Nessuna voce italiana locale verificata: JARVIS userà eSpeak sulla TV.';
+    }
+
+    function stopPhoneSpeech() {
+        if (convoSession.phoneSpeechResolve) {
+            convoSession.phoneSpeechResolve();
+            convoSession.phoneSpeechResolve = null;
+        }
+        convoSession.phoneSpeechPromise = null;
+        if (window.speechSynthesis) {
+            try { window.speechSynthesis.cancel(); } catch (_) {}
+        }
+    }
+
+    function speakPhoneReply(text) {
+        const voice = getLocalItalianPhoneVoice();
+        if (!voice || !text || typeof text !== 'string') return false;
+        stopPhoneSpeech();
+        const utterance = new window.SpeechSynthesisUtterance(text.slice(0, 1800));
+        utterance.voice = voice;
+        utterance.lang = 'it-IT';
+        utterance.rate = 0.97;
+        convoSession.phoneSpeechPromise = new Promise(resolve => {
+            let done = false;
+            let watchdog;
+            const finish = () => {
+                if (done) return;
+                done = true;
+                clearTimeout(watchdog);
+                if (convoSession.phoneSpeechResolve === finish) {
+                    convoSession.phoneSpeechResolve = null;
+                }
+                resolve();
+            };
+            convoSession.phoneSpeechResolve = finish;
+            utterance.onend = finish;
+            utterance.onerror = finish;
+            // A suspended/mobile browser must not deadlock the voice conversation.
+            watchdog = setTimeout(finish, 90000);
+            try { window.speechSynthesis.speak(utterance); }
+            catch (error) { finish(); }
+        });
+        return true;
+    }
+
     // =========================================================================
     // AI DISPATCHER & ACCURATE RESPONSE FEEDBACK (P0-01, P1-04, P1-05)
     // =========================================================================
@@ -693,6 +775,10 @@
             return false;
         }
 
+        // Use the TV eSpeak unless an opt-in local Italian voice is available
+        // on the Web Remote device; no third-party cloud speech is requested.
+        const usePhoneSpeech = Boolean(forceSpeak && state.phoneVoiceEnabled && getLocalItalianPhoneVoice());
+
         // Allow the bounded 2-minute autonomous visual task to finish, plus response grace.
         convoSession.userCancelRequested = false;
         convoSession.aiAbortController = new AbortController();
@@ -707,7 +793,7 @@
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${state.token}`
                 },
-                body: JSON.stringify({ query, speak: forceSpeak, source: 'web_remote' }),
+                body: JSON.stringify({ query, speak: forceSpeak && !usePhoneSpeech, source: 'web_remote' }),
                 signal: convoSession.aiAbortController.signal
             });
             clearTimeout(timeoutId);
@@ -716,6 +802,10 @@
 
             if (res.ok || isHandledAiReply(res.status, data)) {
                 displayAiResponse(data, query);
+                if (usePhoneSpeech && data.status !== 'CANCELLED'
+                        && !convoSession.userCancelRequested && typeof data.reply === 'string') {
+                    speakPhoneReply(data.reply);
+                }
                 // A conversational answer is handled even if no TV action was required.
                 return isVerifiedAiReply(data)
                     || (data.status === 'ANSWERED_DIALOG'
@@ -1834,6 +1924,31 @@
         // Voice & TTS
         if (elements.btnSaveVoice) elements.btnSaveVoice.addEventListener('click', saveTtsConfig);
         if (elements.btnPreviewVoice) elements.btnPreviewVoice.addEventListener('click', previewVoice);
+        if (elements.phoneVoiceToggle) {
+            elements.phoneVoiceToggle.checked = false;
+            elements.phoneVoiceToggle.addEventListener('change', () => {
+                if (elements.phoneVoiceToggle.checked && !getLocalItalianPhoneVoice()) {
+                    elements.phoneVoiceToggle.checked = false;
+                    showToast('Voce italiana locale non disponibile: resta attivo eSpeak sulla TV.', true);
+                }
+                state.phoneVoiceEnabled = elements.phoneVoiceToggle.checked;
+                if (!state.phoneVoiceEnabled) stopPhoneSpeech();
+                updatePhoneVoiceStatus();
+            });
+            if (window.speechSynthesis && window.speechSynthesis.addEventListener) {
+                window.speechSynthesis.addEventListener('voiceschanged', updatePhoneVoiceStatus);
+            }
+            updatePhoneVoiceStatus();
+        }
+        if (elements.btnPreviewPhoneVoice) {
+            elements.btnPreviewPhoneVoice.addEventListener('click', () => {
+                if (!getLocalItalianPhoneVoice()) {
+                    showToast('Nessuna voce italiana locale disponibile nel browser.', true);
+                    return;
+                }
+                speakPhoneReply('Ciao, questa è la voce italiana del tuo telefono per JARVIS.');
+            });
+        }
         if (elements.btnClearCache) elements.btnClearCache.addEventListener('click', clearAudioCache);
 
         // Procedural & Preferences
