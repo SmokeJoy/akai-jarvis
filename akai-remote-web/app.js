@@ -722,8 +722,7 @@
                 // A conversational answer is handled even if no TV action was required.
                 return isVerifiedAiReply(data)
                     || (data.status === 'ANSWERED_DIALOG'
-                        && data.execution_outcome === 'NOT_TESTED'
-                        && data.success !== false)
+                        && data.execution_outcome === 'NOT_TESTED')
                     || (data.status === 'MEMORY_HANDLED'
                         && data.execution_outcome === 'NOT_TESTED'
                         && data.success === true);
@@ -817,8 +816,7 @@
                 showToast('Comando verificato con successo');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
             } else if ((data.status === 'ANSWERED_DIALOG'
-                    && data.execution_outcome === 'NOT_TESTED'
-                    && data.success !== false)
+                    && data.execution_outcome === 'NOT_TESTED')
                     || (data.status === 'MEMORY_HANDLED'
                     && data.execution_outcome === 'NOT_TESTED'
                     && data.success === true)) {
