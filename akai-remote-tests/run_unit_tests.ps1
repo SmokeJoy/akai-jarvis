@@ -24,12 +24,13 @@ $localIntentSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai
 $keystoreSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\KeystoreSecurityHelper.java"
 $providerPolicySrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\CloudProviderPolicy.java"
 $cloudVisionPolicySrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\CloudVisionRequestPolicy.java"
+$visualObservationBridgeSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\VisualObservationBridge.java"
 $aiAdapterSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\AiProviderAdapter.java"
 $perceptionSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\ScreenPerceptionEngine.java"
 $aiControllerSrc = Join-Path $workspace "akai-remote-tv\app\src\main\java\it\akai\customremote\ai\AkaiAiController.java"
 $unitTestSrc = Join-Path $workspace "akai-remote-tests\UnitTests.java"
 
-$allSources = @() + $mockSources + $qrSources + @($serviceStateSrc, $rebindCtrlSrc, $securityMgr, $uinputSrc, $commandResultSrc, $tvAppPackagesSrc, $tlsCertSrc, $routerSrc, $localIntentSrc, $keystoreSrc, $providerPolicySrc, $cloudVisionPolicySrc, $aiAdapterSrc, $perceptionSrc, $aiControllerSrc, $unitTestSrc)
+$allSources = @() + $mockSources + $qrSources + @($serviceStateSrc, $rebindCtrlSrc, $securityMgr, $uinputSrc, $commandResultSrc, $tvAppPackagesSrc, $tlsCertSrc, $routerSrc, $localIntentSrc, $keystoreSrc, $providerPolicySrc, $cloudVisionPolicySrc, $visualObservationBridgeSrc, $aiAdapterSrc, $perceptionSrc, $aiControllerSrc, $unitTestSrc)
 
 Write-Host "Compilazione test unitari per SecurityManager e QR Code..."
 & $javac -encoding UTF-8 -d $testBuildDir $allSources
