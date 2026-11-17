@@ -430,7 +430,11 @@ public final class VisualProjectionService extends Service {
         }
     }
 
-    private void stopCapture() {
+    // STOP can arrive on the main thread while MediaProjection.onStop or a
+    // frame timeout is tearing down the same session on the worker thread.
+    // Serialize teardown so VirtualDisplay/ImageReader/MediaProjection are
+    // released once, and callbacks cannot race a second cleanup pass.
+    private synchronized void stopCapture() {
         if (closed) return;
         closed = true;
         if (active == this) active = null;
