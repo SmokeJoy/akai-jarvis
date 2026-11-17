@@ -71,6 +71,7 @@ public final class FreeItalianTtsCoordinator {
                     ? prefs.getString(VOICE, FreeItalianTtsPolicy.VOICE_MALE) : OFFLINE);
             out.put("free_tts_available", true);
             out.put("free_tts_enabled", freeMode && hasKey && consent);
+            out.put("cloud_tts_enabled", freeMode && hasKey && consent);
             out.put("free_tts_consent", consent);
             out.put("free_tts_has_key", hasKey);
             out.put("free_tts_limit_chars", FreeItalianTtsPolicy.MAX_MONTHLY_CHARS);
@@ -273,10 +274,12 @@ public final class FreeItalianTtsCoordinator {
         busy = false;
         audioStarted = false;
         // MediaPlayer must be released on its main Looper.
+        final MediaPlayer stoppedPlayer = player;
         main.post(new Runnable() {
             @Override public void run() {
                 synchronized (FreeItalianTtsCoordinator.this) {
-                    releasePlayer();
+                    // Do not interrupt audio created by a later request.
+                    if (player == stoppedPlayer) releasePlayer();
                 }
             }
         });
