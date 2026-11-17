@@ -122,8 +122,8 @@ public final class VisualProjectionService extends Service {
     }
 
     public static void stopOwnerSession(Context ctx) {
-        VisualProjectionService s = active;
-        if (s == null) return;
+        // Always enqueue STOP, including while START is still initializing.
+        // The service may not yet have published itself in active.
         Intent stop = new Intent(ctx, VisualProjectionService.class).setAction(ACTION_STOP);
         ctx.startService(stop);
     }
