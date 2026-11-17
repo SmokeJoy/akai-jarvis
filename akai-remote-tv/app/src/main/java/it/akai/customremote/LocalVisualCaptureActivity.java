@@ -31,6 +31,7 @@ import it.akai.customremote.ai.VisionCapturePolicy;
 import it.akai.customremote.ai.RgbaFramePacker;
 import it.akai.customremote.ai.AiProviderAdapter;
 import it.akai.customremote.ai.CloudProviderPolicy;
+import it.akai.customremote.ai.VisualObservationBridge;
 
 import java.nio.ByteBuffer;
 import java.io.ByteArrayOutputStream;
@@ -53,6 +54,9 @@ public final class LocalVisualCaptureActivity extends Activity {
     private TextView cloudVisionResult;
     private volatile boolean cloudVisionInFlight = false;
     private boolean capturedNonSensitiveFrame = false;
+    private String capturedForegroundPackage;
+    private String capturedRedactedUiContext;
+    private long capturedFrameTimeMs;
     private TextView status;
     private ImageView preview;
     private Bitmap previewBitmap;
@@ -134,6 +138,15 @@ public final class LocalVisualCaptureActivity extends Activity {
         cloudVisionResult.setTextSize(13);
         cloudVisionResult.setPadding(0, pad / 2, 0, pad / 2);
         content.addView(cloudVisionResult);
+
+        Button returnButton = new Button(this);
+        returnButton.setText("Torna alla TV (usa JARVIS entro 45 secondi)");
+        content.addView(returnButton);
+        returnButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                moveTaskToBack(true); // backend service and pending hint remain, no new install
+            }
+        });
 
         Button clearButton = new Button(this);
         clearButton.setText("Cancella anteprima e chiudi");
@@ -257,7 +270,9 @@ public final class LocalVisualCaptureActivity extends Activity {
             if (frame == null || completed) return;
             long elapsed = SystemClock.elapsedRealtime() - startedAt;
             if (!VisionCapturePolicy.withinBudget(frameWidth, frameHeight, elapsed)) return;
-            if (!VisionCapturePolicy.mayCapture(true, ScreenPerceptionEngine.capture(this))) {
+            final ScreenPerceptionEngine.PerceptionSnapshot sourceSnapshot =
+                    ScreenPerceptionEngine.capture(this);
+            if (!VisionCapturePolicy.mayCapture(true, sourceSnapshot)) {
                 ui.post(new Runnable() {
                     @Override public void run() {
                         finishCapture(null, "Schermata sensibile rilevata; fotogramma scartato.");
@@ -276,11 +291,19 @@ public final class LocalVisualCaptureActivity extends Activity {
             final Bitmap result = full;
             full = null;
             final boolean dark = isMostlyBlack(result);
+            final String imagePackage = sourceSnapshot.foregroundPackage;
+            final String imageContext = sourceSnapshot.toRedactedMinimalContextPrompt();
+            final long imageTimeMs = System.currentTimeMillis();
             ui.post(new Runnable() {
                 @Override public void run() {
                     finishCapture(result, dark
                             ? "Fotogramma acquisito, ma quasi nero: possibile DRM o schermata protetta."
                             : "Fotogramma acquisito SOLO in RAM. Nessuna API chiamata.");
+                    if (!dark && previewBitmap == result) {
+                        capturedForegroundPackage = imagePackage;
+                        capturedRedactedUiContext = imageContext;
+                        capturedFrameTimeMs = imageTimeMs;
+                    }
                 }
             });
         } catch (RuntimeException e) {
@@ -404,9 +427,14 @@ public final class LocalVisualCaptureActivity extends Activity {
                         captureButton.setEnabled(true);
                         cloudVisionButton.setEnabled(previewBitmap != null && capturedNonSensitiveFrame);
                         if (answer.success) {
+                            boolean prepared = VisualObservationBridge.publish(
+                                    adapter.getActiveProvider(), capturedForegroundPackage,
+                                    capturedRedactedUiContext, answer.description,
+                                    capturedFrameTimeMs, System.currentTimeMillis());
                             cloudVisionResult.setText(answer.description);
-                            status.setText("Descrizione AI remota, NON verificata; "
-                                    + "nessun comando eseguito. Token: " + answer.tokens);
+                            if (!prepared) status.setText("Descrizione visiva disponibile, ma troppo vecchia o senza origine verificabile: non utilizzabile nel planner.");
+                            if (prepared) status.setText("Descrizione cloud pronta per un SOLO piano JARVIS sulla stessa schermata (45s). "
+                                    + "Non autorizza clic non visibili. Token: " + answer.tokens);
                         } else {
                             status.setText("Analisi non eseguita: " + answer.error);
                         }
@@ -418,6 +446,10 @@ public final class LocalVisualCaptureActivity extends Activity {
 
     private void clearPreview() {
         capturedNonSensitiveFrame = false;
+        capturedForegroundPackage = null;
+        capturedRedactedUiContext = null;
+        capturedFrameTimeMs = 0L;
+        VisualObservationBridge.clear();
         if (cloudVisionButton != null) cloudVisionButton.setEnabled(false);
         if (cloudVisionResult != null) cloudVisionResult.setText("");
         if (preview != null) preview.setImageBitmap(null);
@@ -459,7 +491,13 @@ public final class LocalVisualCaptureActivity extends Activity {
         destroyed = true;
         completed = true;
         stopResources();
-        clearPreview();
+        // Android may destroy this Activity after user returns to the TV app;
+        // discard pixels but keep the explicit 45s one-shot observation.
+        if (preview != null) preview.setImageBitmap(null);
+        if (previewBitmap != null) {
+            previewBitmap.recycle();
+            previewBitmap = null;
+        }
         super.onDestroy();
     }
 }
