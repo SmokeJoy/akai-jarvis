@@ -2971,6 +2971,7 @@ public class UnitTests {
 
             final AtomicInteger e2eCloudCalls = new AtomicInteger(0);
             final AtomicBoolean visualHintSeen38 = new AtomicBoolean(false);
+            final AtomicInteger visualPlanCalls38 = new AtomicInteger(0);
             final String[] e2eScenario = new String[]{"DISCOVERY_AUDIO"};
 
             mockE2eCloudServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -2992,6 +2993,22 @@ public class UnitTests {
 
                     e2eCloudCalls.incrementAndGet();
                     JSONObject payload = new JSONObject();
+                    if ("VISUAL_MULTI".equals(e2eScenario[0])) {
+                        int iteration = visualPlanCalls38.incrementAndGet();
+                        JSONObject action = iteration == 1
+                                ? new JSONObject().put("type", "launch_app")
+                                        .put("pkg", "com.android.tv.settings")
+                                : new JSONObject().put("type", "click_text")
+                                        .put("text", "Audio");
+                        payload.put("reply", iteration == 1
+                                        ? "Apro impostazioni" : "Entro in Audio")
+                                .put("intent_key", "visual_open_audio")
+                                .put("learn_procedure", true)
+                                .put("actions", new JSONArray().put(action))
+                                .put("success_condition", new JSONObject()
+                                        .put("type", "contains_text")
+                                        .put("value", "Uscita digitale"));
+                    } else {
                     payload.put("reply", "Apro impostazioni audio avanzate")
                            .put("intent_key", "open_audio_advanced")
                            .put("learn_procedure", true)
@@ -3000,6 +3017,7 @@ public class UnitTests {
                                .put(new JSONObject().put("type", "wait").put("ms", 200).put("expect_pkg", "com.android.tv.settings"))
                                .put(new JSONObject().put("type", "click_text").put("text", "Audio")))
                            .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Uscita digitale"));
+                    }
 
                     String apiBody = new JSONObject()
                         .put("usage", new JSONObject().put("prompt_tokens", 90).put("completion_tokens", 35).put("total_tokens", 125))
@@ -3048,7 +3066,9 @@ public class UnitTests {
                         return new ScreenPerceptionEngine.PerceptionSnapshot(
                             "com.android.tv.settings",
                             Arrays.asList("Impostazioni", "Rete", "Dispositivo", "Audio"),
-                            Collections.emptyList(),
+                            Arrays.asList(new ScreenPerceptionEngine.ClickableElement(
+                                    "Audio", "android.widget.TextView", "mock_audio",
+                                    new android.graphics.Rect(12, 22, 120, 66))),
                             "Audio",
                             false, false, false
                         );
@@ -3272,10 +3292,55 @@ public class UnitTests {
 
             boolean part5Ok = okStop && okFailHandled && okLegacyResilient;
 
-            test38Passed = part1Ok && part2Ok && part3Ok && part4Ok && part5Ok;
+            // =================================================================
+            // (6) REAL AGENT LOGIC / MOCK HARDWARE: each step requires a FRESH
+            // owner's vision observation; no local LLM or paid API calls.
+            // =================================================================
+            mem38.resetForTest(); // ensure no cached skill bypasses cloud loop
+            inAudioSettings38[0] = false;
+            currentPkg38[0] = "it.akai.customhome.v8";
+            e2eScenario[0] = "VISUAL_MULTI";
+            final AtomicInteger visualFrames38 = new AtomicInteger(0);
+            it.akai.customremote.ai.VisualObservationProvider.Session visual38 =
+                    new it.akai.customremote.ai.VisualObservationProvider.Session() {
+                @Override public it.akai.customremote.ai.VisualObservationProvider.Result observe(
+                        String provider, String pkg, String ui,
+                        it.akai.customremote.ai.VisualObservationProvider.Cancellation cancel) {
+                    visualFrames38.incrementAndGet();
+                    return it.akai.customremote.ai.VisualObservationProvider.Result.observed(
+                            provider, pkg, ui, "Menu audio per navigazione in " + pkg,
+                            System.currentTimeMillis(), 15, 0.001);
+                }
+            };
+            boolean part6Ok = false;
+            if (it.akai.customremote.ai.VisualObservationProvider.install(visual38)) {
+                try {
+                    int cloudBeforeVisual = e2eCloudCalls.get();
+                    JSONObject visualResult38 = ctrl38.processQuery(
+                            "apri impostazioni audio avanzate visivo", false);
+                    part6Ok = visualResult38.optBoolean("verified")
+                            && "STATE_VERIFIED".equals(visualResult38.optString("execution_outcome"))
+                            && visualResult38.optInt("visual_frames", 0) == 2
+                            && visualFrames38.get() == 2
+                            && visualPlanCalls38.get() == 2
+                            && visualResult38.optInt("executed_steps", 0) == 2
+                            && visualResult38.optBoolean("learned_new_procedure")
+                            && (e2eCloudCalls.get() == cloudBeforeVisual + 2)
+                            && mem38.getSavedProceduresCount() >= 1;
+                    if (!part6Ok) {
+                        System.err.println("[DEBUG Test38 visual] " + visualResult38
+                                + " frames=" + visualFrames38.get()
+                                + " plans=" + visualPlanCalls38.get());
+                    }
+                } finally {
+                    it.akai.customremote.ai.VisualObservationProvider.clear(visual38);
+                }
+            }
+
+            test38Passed = part1Ok && part2Ok && part3Ok && part4Ok && part5Ok && part6Ok;
             if (!test38Passed) {
                 System.err.println("[FAIL] Test 38: Fallimento collaudo E2E (p1=" + part1Ok + " [req=" + okPairReq + ", bad=" + okPairBad + ", good=" + okPairGood + ", keys=" + okLegacyKeys + ", static=" + okStaticAssets + ", sec=" + okNegativeSecurity + "]" +
-                        ", p2=" + part2Ok + ", p3=" + part3Ok + ", p4=" + part4Ok + ", p5=" + part5Ok + " [stop=" + okStop + ", fail=" + okFailHandled + ", legacy=" + okLegacyResilient + "])");
+                        ", p2=" + part2Ok + ", p3=" + part3Ok + ", p4=" + part4Ok + ", p5=" + part5Ok + ", p6=" + part6Ok + " [stop=" + okStop + ", fail=" + okFailHandled + ", legacy=" + okLegacyResilient + "])");
             }
         } catch (Throwable t38) {
             System.err.println("[FAIL] Test 38 eccezione: " + t38.getMessage());
