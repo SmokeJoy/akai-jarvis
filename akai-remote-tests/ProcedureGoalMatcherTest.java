@@ -29,6 +29,13 @@ public final class ProcedureGoalMatcherTest {
         expect(false, "vai", "vai alla home", "generic command forbidden");
         expect(false, "apri youtube", "apri netflix", "different installed apps");
         expect(false, "youtube kids", "youtube", "different product variant");
+        expect(false, "Apri YouTube Kids", "apri YouTube", "longer app command collision");
+        expect(false, "Metti Rai 10", "metti Rai 1", "longer channel collision");
+        expect(false, "Per favore non aprire YouTube", "youtube", "embedded negation");
+        expect(false, "Non mettere Italia 2", "italia2", "negation with inflected verb");
+        expect(false, "Apri YouTube su Netflix", "youtube", "extra destination is ambiguous");
+        expect(true, "Metti Rai 1 in diretta", "rai1", "live channel target");
+
         expect(false, "Non aprire YouTube", "youtube", "negated command");
         expect(false, "Evita Italia 2", "italia2", "negative channel request");
         expect(false, "Come apro YouTube", "youtube", "question is not execution");
