@@ -15,6 +15,10 @@ public final class VisualObservationProvider {
     public interface Session {
         Result observe(String provider, String expectedPackage,
                 String expectedUiContext, Cancellation cancel);
+
+        default void stopByOwner() {
+            // Host tests can use a no-op. Production stops MediaProjection.
+        }
     }
 
     public static final class Result {
@@ -68,6 +72,14 @@ public final class VisualObservationProvider {
 
     public static boolean active() {
         return ACTIVE.get() != null;
+    }
+
+    /** Cancelling a task also revokes its live screen capture authorization. */
+    public static void stopAndRevoke() {
+        Session current = ACTIVE.getAndSet(null);
+        if (current != null) {
+            try { current.stopByOwner(); } catch (RuntimeException ignored) {}
+        }
     }
 
     /**
