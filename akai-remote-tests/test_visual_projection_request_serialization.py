@@ -19,3 +19,11 @@ assert guard < denial < return_pos < reserve < assign
 assert "callback.onFrame(FrameResult.denied" in method[guard:reserve]
 assert method.count("pending = callback;") == 1
 print("PASS: overlapping frame request rejected before quota reservation and callback assignment")
+
+# A racing stop may quit the worker before post() accepts the request.
+# requestFrame must propagate Handler.post(false), not report a phantom capture.
+entry = source[source.index("public static boolean requestFrame("):source.index("public static boolean isSessionActive()")]
+assert "return service.worker.post(new Runnable()" in entry
+assert "service.worker.post(new Runnable()" in entry
+assert "return true;" not in entry
+print("PASS: stopped worker cannot falsely acknowledge a queued frame")
