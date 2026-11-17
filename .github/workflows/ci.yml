@@ -229,6 +229,15 @@ jobs:
             akai-remote-tests/ProcedureGoalMatcherTest.java
           java -cp test_memory_matcher it.akai.customremote.ProcedureGoalMatcherTest
 
+      - name: 4j. Android offline TTS owner policy and stale callback regression
+        run: |
+          mkdir -p test_speech_gate
+          javac -encoding UTF-8 -source 8 -target 8 -d test_speech_gate \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/SpeechUtteranceGate.java \
+            akai-remote-tests/SpeechUtteranceGateTest.java
+          java -cp test_speech_gate it.akai.customremote.SpeechUtteranceGateTest
+          python3 akai-remote-tests/test_speech_owner_policy.py -v
+
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |
           echo "=== Compiling Native JNI Driver (uinput_jni.c) for ARMv7 ==="
