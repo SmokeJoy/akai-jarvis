@@ -72,6 +72,20 @@ public final class VisualObservationProviderTest {
         VisualObservationProvider.clear(stale);
         verify(!VisualObservationProvider.observe("kimi", PKG, UI, null).success,
                 "after teardown, no capture possible");
+        final int[] stopCalls = {0};
+        VisualObservationProvider.Session stopping = new VisualObservationProvider.Session() {
+            @Override public VisualObservationProvider.Result observe(String provider,
+                    String pkg, String ui, VisualObservationProvider.Cancellation cancel) {
+                return VisualObservationProvider.Result.unavailable("SESSION_REVOKED");
+            }
+            @Override public void stopByOwner() { stopCalls[0]++; }
+        };
+        verify(VisualObservationProvider.install(stopping), "new owner-approved session");
+        VisualObservationProvider.stopAndRevoke();
+        verify(stopCalls[0] == 1, "owner stop was sent exactly once");
+        verify(!VisualObservationProvider.active(), "session revoked on stop");
+        verify(!VisualObservationProvider.observe("deepseek", PKG, UI, null).success,
+                "cannot observe after cancel");
         System.out.println("VisualObservationProviderTest PASS: " + checks + " assertions");
     }
 }
