@@ -61,44 +61,25 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         mContext = context;
         mAudioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         mMemoryEngine = AkaiMemoryEngine.getInstance(context);
-        mCloudAdapter = new CloudSpeechAdapter(context);
-
-        mCloudAdapter.setPlaybackListener(new CloudSpeechAdapter.PlaybackListener() {
-            @Override
-            public void onPreparing() {
-                mSpeechState = SpeechState.FETCHING;
-            }
-
-            @Override
-            public void onPlaying() {
-                mSpeechState = SpeechState.PLAYING;
-            }
-
-            @Override
-            public void onCompleted() {
-                mSpeechState = SpeechState.IDLE;
-            }
-
-            @Override
-            public void onError(String error) {
-                mSpeechState = SpeechState.IDLE;
-            }
-        });
-
+        // Legacy cloud adapter is deliberately not allocated (no cache or player).
+        // Compatibility API methods below tolerate a null adapter.
+        mCloudAdapter = null;
         initOfflineTts();
     }
 
     private void initOfflineTts() {
+        // Do not construct a second engine while the first one is connecting.
+        if (mTts != null) return;
         try {
-            Log.i(TAG, "Initializing Android TextToSpeech with engine: " + PREFERRED_OFFLINE_ENGINE);
+            Log.i(TAG, "Initializing bundled offline TextToSpeech: " + PREFERRED_OFFLINE_ENGINE);
+            mIsInitialized.set(false);
             mTts = new TextToSpeech(mContext, this, PREFERRED_OFFLINE_ENGINE);
         } catch (Exception e) {
-            Log.w(TAG, "Failed with " + PREFERRED_OFFLINE_ENGINE + ", trying system default: " + e.getMessage());
-            try {
-                mTts = new TextToSpeech(mContext, this);
-            } catch (Exception ex) {
-                Log.e(TAG, "Fatal TTS initialization error: " + ex.getMessage());
-            }
+            mIsInitialized.set(false);
+            mTts = null;
+            // Unknown Android default engines can use third-party cloud speech.
+            // Prefer no voice over violating the owner's provider policy.
+            Log.e(TAG, "Offline eSpeak unavailable; no other provider fallback: " + e.getMessage());
         }
     }
 
@@ -115,8 +96,8 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                     Log.i(TAG, "Italian voice successfully loaded in offline TTS engine.");
                 }
 
-                mTts.setSpeechRate(1.0f);
-                mTts.setPitch(1.0f);
+                // The stock 1.0 speech rate/pitch are already defaults.
+                // Avoid redundant OEM eSpeak parameter writes during startup.
 
                 mTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                     @Override
@@ -147,6 +128,12 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         } else {
             Log.e(TAG, "Offline TTS initialization failed with code: " + status);
             mIsInitialized.set(false);
+            // Dispose failed engine so a later explicit request can retry.
+            TextToSpeech failed = mTts;
+            mTts = null;
+            if (failed != null) {
+                try { failed.shutdown(); } catch (Exception ignored) {}
+            }
         }
     }
 
