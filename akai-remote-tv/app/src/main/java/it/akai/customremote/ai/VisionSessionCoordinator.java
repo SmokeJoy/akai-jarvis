@@ -1,6 +1,7 @@
 package it.akai.customremote.ai;
 
 import android.content.Context;
+import android.os.SystemClock;
 
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
@@ -88,10 +89,10 @@ public final class VisionSessionCoordinator {
                 });
         if (!accepted) return Observation.denied("CAPTURE_SERVICE_UNAVAILABLE");
 
-        long begun = System.currentTimeMillis();
+        long begun = SystemClock.elapsedRealtime();
         boolean ready = false;
         try {
-            while (System.currentTimeMillis() - begun < FRAME_WAIT_MS) {
+            while (SystemClock.elapsedRealtime() - begun < FRAME_WAIT_MS) {
                 if (cancel != null && cancel.isCancelled()) break;
                 if (latch.await(100L, TimeUnit.MILLISECONDS)) {
                     ready = true;
@@ -120,6 +121,14 @@ public final class VisionSessionCoordinator {
                     || !expectedPackage.equals(frame.foregroundPackage)
                     || !expectedUi.equals(frame.redactedUiContext)) {
                 return Observation.denied("UI_CHANGED_BEFORE_UPLOAD");
+            }
+            // STOP may race the frame callback or the wait above. Avoid starting
+            // a billable cloud request after the user revoked visual capture.
+            if ((cancel != null && cancel.isCancelled())
+                    || !VisualObservationProvider.active()
+                    || !VisualProjectionService.isSessionActive()
+                    || !adapter.hasCloudContextConsent()) {
+                return Observation.denied("SESSION_REVOKED_BEFORE_UPLOAD");
             }
             AiProviderAdapter.VisionCloudResult described = adapter.describeScreenJpegOnce(
                     frame.jpeg, frame.width, frame.height,
