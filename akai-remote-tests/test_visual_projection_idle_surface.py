@@ -58,5 +58,12 @@ class VisualIdleSurfaceTests(unittest.TestCase):
         self.assertNotIn('bitmap.compress', idle)
 
 
+    def test_concurrent_stop_cannot_crash_frame_finally_cleanup(self):
+        capture = self.method('private void consumeOnlyOnDemand(', 'private static boolean mostlyBlack(')
+        cleanup = capture[capture.index('} finally {', capture.index('Bitmap bitmap = null;')):]
+        self.assertRegex(cleanup, r'if \\(image != null\\) \\{\\s*try \\{ image\\.close\\(\\); \\} catch \\(RuntimeException ignored\\)')
+        self.assertRegex(cleanup, r'if \\(bitmap != null\\) \\{\\s*try \\{ bitmap\\.recycle\\(\\); \\} catch \\(RuntimeException ignored\\)')
+
+
 if __name__ == "__main__":
     unittest.main()
