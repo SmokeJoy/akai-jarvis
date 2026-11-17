@@ -44,6 +44,9 @@ jobs:
       - name: 1a. Web AI feedback regression (handled HTTP 400 vs verified result)
         run: node akai-remote-tests/test_web_ai_feedback.js
 
+      - name: 1a2. Optional local Italian Web Remote voice (no cloud TTS)
+        run: node akai-remote-tests/test_web_local_italian_voice.js
+
       - name: 1b. Parse and safety-audit Windows A1 candidate build script
         shell: pwsh
         run: |
