@@ -91,6 +91,20 @@ La TV ha circa 1,5 GB di RAM e non deve sostenere rendering continuo della sessi
 
 **Stop gate:** questa modifica resta PR draft; non installare la build CI sulla TV, non riavviare A2, non effettuare merge senza approvazione. Il test fisico deve misurare RAM/CPU idle e sotto compito, provare 20 catture successive e verificare errore DRM/cancel/reboot.
 
+## Robustezza iterazione schermi e memoria — aggiornamento del 17/11/2026
+
+**Screenshot dopo cambio app:**
+- Nuovo `FrameSequenceGate.java` puro Java (nessun LLM locale) conserva solo l'ultimo `Image.getTimestamp()` valido all'interno della **stessa sessione ImageReader**. Blocca fotogrammi con timestamp non valido, duplicato o precedente. La richiesta resta aperta fino all'arrivo di un frame successivo o al timeout previsto; non viene fornito un JPEG potenzialmente obsoleto alla API DeepSeek/Kimi.
+- Non confrontare mai timestamp dei frame con `System.nanoTime()` o `elapsedRealtimeNanos()`: [Android Image.getTimestamp](https://developer.android.com/reference/android/media/Image#getTimestamp()) precisa che le sorgenti possono avere timebase differenti. Questa verifica ha l'obiettivo di prevenire il riutilizzo di immagini vecchie; la reale progressione sulla TV va testata durante cambio app, app senza animazione, DRM, sessione nuova e resume.
+- Nuovo `FrameSequenceGateTest.java` test Java host (CI step `4f4`) copre ordine crescente, duplicato, frame fuori ordine, timestamp 0 e sessione nuova. Un dispositivo che produce solo timestamp nulli fallirà esplicitamente e dovrà essere diagnosticato nella singola release finale, senza fingere immagini fresche.
+
+**Recupero procedure SQLite:**
+- Nuovo `ProcedureGoalMatcher.java` sostituisce il precedente recupero basato su sottostringhe (`clean.contains(ikClean)`). Richiede parole complete, normalizza gli accenti ed ammette nomi compatti con numeri (es. `italia2` ↔ `Italia 2`) senza confondere `Rai 1` con `Rai 10`, `Italia 2` con `Italia 20`, `YouTube` con `YouTube Kids`, o `tv` con `attiva`.
+- `AkaiMemoryEngine.findProcedureByGoal` mantiene le precedenti regole di separazione **Guest Mode** e quarantena delle procedure con troppi fallimenti, ma richiede il nuovo matching anche negli hit esatti e normalizza la domanda una sola volta.
+- Nuovo `ProcedureGoalMatcherTest.java` nella CI step `4i`; non comporta modifiche allo schema SQLite, né cancella/reinizializza i dati o sostituisce una procedura senza `STATE_VERIFIED`. Il test host misura il comportamento della policy, non prova sul dispositivo.
+
+La PR #18 è sempre draft, nessuna installazione sulla TV e nessuna API fatturabile eseguita dai test. Il deploy rimane bloccato fino al collaudo e alla distinta approvazione del proprietario.
+
 ## OTA — sicurezza e implementazione per release finale
 
 **Componente già committato:** `OtaCandidateGate.java`, puro Java, zero processo/servizio/network. Non installa nulla: verifica *solo metadati* (package `it.akai.customremote`, versionCode > installato, fingerprint certificato A1/A2 esatto, release `stable`, minSdk compatibile API28, ABI `armeabi-v7a`, SHA-256 di APK, dimensione massima 25 MiB, HTTPS e hostname in allowlist locale). Il relativo test JVM esamina bypass comuni.
