@@ -377,7 +377,7 @@ if (Test-Path $releaseApk) {
 } else {
     throw 'Build finale non generata. La TV resta invariata.'
 }
- finally {
+} finally {
     if (-not $releaseApproved) {
         Remove-Item -LiteralPath $releaseApk -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $handoffPath -Force -ErrorAction SilentlyContinue
