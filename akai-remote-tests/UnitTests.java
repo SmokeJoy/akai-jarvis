@@ -1102,6 +1102,46 @@ public class UnitTests {
                             rCfgBlocked.json.optBoolean("strict_local_only") &&
                             rCfgBlocked.json.optString("error").contains("STRICT_LOCAL_ONLY");
 
+        // An offline-only TTS API must be truthful and usable in every AI mode.
+        MockHttpResponse cfgGet = dispatch(router, "GET", "/api/ai/tts_config",
+                authHeaders, "", "192.168.1.10");
+        MockHttpResponse cfgSetOffline = dispatch(router, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"voice\":\"offline_espeak\"}", "192.168.1.10");
+        MockHttpResponse cfgRejectAzureVoice = dispatch(router, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"voice\":\"it-IT-DiegoNeural\"}", "192.168.1.10");
+        MockHttpResponse cfgRejectAzureRegion = dispatch(router, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"voice\":\"offline_espeak\",\"azure_region\":\"westeurope\"}", "192.168.1.10");
+        MockHttpResponse offlinePreview = dispatch(router, "POST", "/api/ai/tts_preview",
+                authHeaders, "{\"voice\":\"offline_espeak\",\"text\":\"Test\"}", "192.168.1.10");
+        MockHttpResponse cfgNoToken = dispatch(router, "GET", "/api/ai/tts_config",
+                new java.util.HashMap<String,String>(), "", "192.168.1.10");
+
+        RestApiRouter.AiHandler cloudModeHandler = new RestApiRouter.AiHandler() {
+            @Override public JSONObject processQuery(String query, boolean speak) { return new JSONObject(); }
+            @Override public boolean isStrictLocalOnly() { return false; }
+            @Override public JSONArray getSupportedCatalog() { return new JSONArray(); }
+            @Override public boolean previewVoice(String voice, String text) { return true; }
+        };
+        RestApiRouter cloudModeRouter = new RestApiRouter(routerSec, cmdHandler, memHandler,
+                pinHandler, cloudModeHandler, "192.168.1.8", 8088);
+        MockHttpResponse cfgCloudModeReject = dispatch(cloudModeRouter, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"azure_key\":\"not_a_real_key\"}", "192.168.1.10");
+        MockHttpResponse previewCloudModeReject = dispatch(cloudModeRouter, "POST", "/api/ai/tts_preview",
+                authHeaders, reqPreviewCloud.toString(), "192.168.1.10");
+        cfgDenied = cfgDenied
+                && cfgGet.statusCode == 200
+                && "offline_espeak".equals(cfgGet.json.optString("active_voice"))
+                && cfgGet.json.has("cloud_tts_enabled")
+                && !cfgGet.json.optBoolean("cloud_tts_enabled")
+                && cfgSetOffline.statusCode == 200 && cfgSetOffline.json.optBoolean("success")
+                && cfgRejectAzureVoice.statusCode == 403
+                && cfgRejectAzureRegion.statusCode == 403
+                && offlinePreview.statusCode == 200
+                && "offline_espeak".equals(aiHandler.lastPreviewVoice)
+                && cfgNoToken.statusCode == 401
+                && cfgCloudModeReject.statusCode == 403
+                && previewCloudModeReject.statusCode == 403;
+
         if (cfgDenied) {
             System.out.println("[PASS] Test 25 (PR-01 M1): Endpoint /api/ai/tts_config bloccato con HTTP 403 Forbidden su impostazione credenziali cloud Azure in modalità locale");
             passed++;
