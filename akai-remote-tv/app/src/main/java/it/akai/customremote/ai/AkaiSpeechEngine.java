@@ -266,29 +266,22 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         mMemoryEngine.setPreference("tts_voice", CloudSpeechAdapter.VOICE_OFFLINE, "tts", 0);
     }
 
+    // Compatibility methods remain for older callers but cannot expose, write
+    // or reactivate legacy third-party speech credentials.
     public String getAzureRegion() {
-        return mMemoryEngine.getPreference("azure_speech_region", "westeurope");
+        return "";
     }
 
     public void setAzureRegion(String region) {
-        if (region != null && !region.isEmpty()) {
-            mMemoryEngine.setPreference("azure_speech_region", region, "tts", 0);
-        }
+        Log.w(TAG, "Legacy Azure speech configuration is disabled.");
     }
 
     public String getAzureKey() {
-        String enc = mMemoryEngine.getPreference("azure_speech_key_enc", "");
-        if (enc == null || enc.isEmpty()) return "";
-        return KeystoreSecurityHelper.decrypt(enc);
+        return "";
     }
 
     public void setAzureKey(String key) {
-        if (key == null || key.trim().isEmpty()) {
-            mMemoryEngine.deletePreference("azure_speech_key_enc");
-        } else {
-            String enc = KeystoreSecurityHelper.encrypt(key.trim());
-            mMemoryEngine.setPreference("azure_speech_key_enc", enc, "tts_security", 0);
-        }
+        Log.w(TAG, "Legacy Azure speech credentials are not accepted.");
     }
 
     public long getCacheSizeBytes() {
