@@ -300,10 +300,20 @@ public final class VisualProjectionService extends Service {
             deliverDenied(callback, "FRAME_REQUEST_BUSY");
             return;
         }
-        ScreenPerceptionEngine.PerceptionSnapshot snap = ScreenPerceptionEngine.capture(this);
+        // OEM Accessibility and preference reads can fail during an app switch
+        // or shutdown. Reject the request rather than losing its callback or
+        // leaving the MediaProjection worker with an uncaught exception.
+        final ScreenPerceptionEngine.PerceptionSnapshot snap;
+        final boolean cloudConsent;
+        try {
+            snap = ScreenPerceptionEngine.capture(this);
+            cloudConsent = new AiProviderAdapter(this).hasCloudContextConsent();
+        } catch (RuntimeException unavailable) {
+            deliverDenied(callback, "FRAME_CONTEXT_UNAVAILABLE");
+            return;
+        }
         boolean sensitive = snap == null || snap.hasSensitiveFields
                 || !VisionCapturePolicy.mayCapture(true, snap);
-        boolean cloudConsent = new AiProviderAdapter(this).hasCloudContextConsent();
         VisualCaptureSessionGate.Verdict verdict = gate.reserveNextFrame(
                 expectedProvider, cloudConsent, sensitive, false, System.currentTimeMillis());
         if (!verdict.allowed) {
