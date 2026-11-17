@@ -711,7 +711,8 @@
             if (res.ok || isHandledAiReply(res.status, data)) {
                 displayAiResponse(data, query);
                 // A conversational answer is handled even if no TV action was required.
-                return data.success === true || data.status === 'ANSWERED_DIALOG';
+                return (data.success === true && data.execution_outcome !== 'FAILED')
+                    || data.status === 'ANSWERED_DIALOG';
             } else if (res.status === 426) {
                 displayAiResponse({
                     success: false,
