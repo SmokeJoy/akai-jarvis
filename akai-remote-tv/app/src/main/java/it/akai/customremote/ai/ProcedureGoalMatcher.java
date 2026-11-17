@@ -68,7 +68,16 @@ public final class ProcedureGoalMatcher {
                     || user.endsWith(" " + stored + " in diretta")) return true;
         }
         // User may shorten a stored description: "YouTube" vs "apri YouTube".
-        if (user.length() >= 5 && wholeWords(stored, user)) return true;
+        if (user.length() >= 5 && wholeWords(stored, user)) {
+            // A shortened command must identify the complete target, not a
+            // prefix of a different app/channel (YouTube vs YouTube Kids).
+            // Only strip known command verbs and the optional live-TV suffix.
+            String target = stored.replaceFirst("^(apri|metti|avvia|vai) ", "");
+            if (target.endsWith(" in diretta")) {
+                target = target.substring(0, target.length() - " in diretta".length());
+            }
+            if (user.equals(target)) return true;
+        }
         // Avoid substring-based matches by comparing exact token windows.
         return compactTokenWindow(user, stored);
     }
