@@ -179,6 +179,9 @@ jobs:
             akai-remote-tests/VisualCaptureSessionGateTest.java
           java -cp test_capture_session it.akai.customremote.VisualCaptureSessionGateTest
 
+      - name: 4f2. MediaProjection overlapping-request regression (source contract)
+        run: python3 akai-remote-tests/test_visual_projection_request_serialization.py
+
       - name: 4g. Vision observer handoff to planner (provider lock, cancellation)
         run: |
           mkdir -p test_obs_provider
