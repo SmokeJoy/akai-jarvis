@@ -768,6 +768,14 @@ public class AkaiAiController {
                 JSONObject prefs = memoryEngine.getAllPreferences();
                 prefs.put("agent_relevant_facts",
                         AgentFactMemory.relevantFacts(memoryEngine, query, 3));
+                // Owner STOP can arrive after screenshot upload but before
+                // planning. Do not initiate another billable cloud call.
+                if (isTokenCancelled(token) || !VisualObservationProvider.active()
+                        || !aiAdapter.hasCloudContextConsent()) {
+                    cancelled = true;
+                    failureReason = "Sessione visiva revocata prima della pianificazione.";
+                    break;
+                }
                 AiProviderAdapter.AiResponse plan = aiAdapter.planActionSequence(
                         query, contextInfo.toString(), prefs,
                         memoryEngine.getRecentConversations(2));
@@ -775,6 +783,14 @@ public class AkaiAiController {
                 tokens += plan.totalTokens;
                 costEur += plan.costEur;
 
+                // The cloud result has no authority after capture permission
+                // has been stopped during its network round trip.
+                if (isTokenCancelled(token) || !VisualObservationProvider.active()
+                        || !aiAdapter.hasCloudContextConsent()) {
+                    cancelled = true;
+                    failureReason = "Sessione visiva revocata durante la pianificazione.";
+                    break;
+                }
                 if (!plan.success) {
                     failureReason = "Pianificazione DeepSeek/Kimi non riuscita.";
                     break;
@@ -800,6 +816,11 @@ public class AkaiAiController {
                 lastAction = actionSignature;
                 lastPerceivedState = stateSignature;
                 JSONArray single = new JSONArray().put(new JSONObject(chosen.toString()));
+                if (isTokenCancelled(token) || !VisualObservationProvider.active()) {
+                    cancelled = true;
+                    failureReason = "Sessione visiva revocata prima dell'azione.";
+                    break;
+                }
                 StepwiseResult step = executeActionsStepwise(single, token);
                 executed += step.executedSteps;
                 if (step.cancelled || isTokenCancelled(token)) {
@@ -827,7 +848,9 @@ public class AkaiAiController {
         }
 
         boolean learned = false;
-        if (verified && !cancelled
+        if (verified && !cancelled && !isTokenCancelled(token)
+                && VisualObservationProvider.active()
+                && aiAdapter.hasCloudContextConsent()
                 && AgentSkillGate.canLearn(true, fullPath, lastCondition)) {
             try {
                 learned = memoryEngine.saveVerifiedProcedure(
