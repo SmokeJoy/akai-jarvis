@@ -27,3 +27,11 @@ assert "return service.worker.post(new Runnable()" in entry
 assert "service.worker.post(new Runnable()" in entry
 assert "return true;" not in entry
 print("PASS: stopped worker cannot falsely acknowledge a queued frame")
+
+# Timeout scheduling can fail when the worker Looper is shutting down.
+# A request must fail closed instead of leaving its callback pending forever.
+timeout = method[method.index("pendingTimeout = new Runnable()"):]
+assert 'if (!worker.postDelayed(pendingTimeout, FRAME_TIMEOUT_MS))' in timeout
+assert 'finishRequest(FrameResult.denied("FRAME_TIMEOUT_SCHEDULE_REJECTED"))' in timeout
+assert timeout.index('if (!worker.postDelayed') < timeout.index('FRAME_TIMEOUT_SCHEDULE_REJECTED')
+print("PASS: rejected timeout scheduling completes pending request with failure")
