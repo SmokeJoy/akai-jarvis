@@ -11,7 +11,7 @@
 - Explicitly distinguish local **deterministic software** (buttons, Accessibility, package inventory, parsed commands, SQLite, rule-based UI guards, orchestration) from a local **AI model** (forbidden). The historical `LOCAL_ONLY` label means "cloud disabled, deterministic operations only" and MUST NOT implement or promise local inference.
 - If DeepSeek/Kimi is unavailable, unconfigured, unauthorized or out of budget, fail closed for AI reasoning. Existing deterministic TV remote controls may continue.
 - Verify the active provider and request destination with `CloudProviderPolicy`. API keys are provider-specific, kept in Android Keystore; no cross-provider redirects, no public credentials and no API charges without owner consent.
-- Cloud screenshot inference (if any) requires separate per-image consent after Android MediaProjection approval, no sensitive UI, bounded JPEG/timeout/budget, and must not execute unverified AI text as actions.
+- Cloud screenshot inference requires explicit consent at capture/session start **separately** from Android MediaProjection approval, no sensitive UI, bounded JPEG/timeout/budget, and must not execute unverified AI text as actions. One owner-approved visual session may capture up to 20 on-demand frames (3 minutes) without prompting on every frame, but must always offer immediate STOP and a visible foreground notification.
 
 ## RELEASE AND HARDWARE FREEZE
 
@@ -23,6 +23,17 @@
 - Update memory and issue only with verified substantive results, SHA, CI state and remaining blocker; avoid reviews in comment loops.
 - No promises of fully autonomous vision until visual fallback feeds the planner and goal verifier with verified evidence; MediaProjection cannot reliably capture DRM-protected apps.
 - Release OTA is optional and must require owner confirmation, signed manifest, exact APK SHA/signing cert checks and a verified rollback path; private GitHub is not a secret-free OTA endpoint.
+
+## MULTI-FRAME AUTONOMY + SELF-IMPROVEMENT (active implementation)
+
+- **Real Android service**: `VisualProjectionService.java` reuses one MediaProjection/VirtualDisplay on Android 9, captures a fresh 960x540 RAM frame only on task request, provides a foreground STOP notification and expires automatically. It must not run on boot or keep a local LLM resident.
+- **Owner approval UI**: `LocalVisualCaptureActivity.java` requests separate cloud session permission then Android's standard MediaProjection prompt; startup is opt-in only. No paid cloud call without approved active DeepSeek/Kimi key and budget.
+- **Vision API and wiring**: `VisionSessionCoordinator` handles on-demand JPEG handoff via the bounded `VisualCaptureSessionGate`; `VisualObservationProvider` exposes the active session to the planner; `CloudVisionRequestPolicy` gates cloud image; `VisualObservationBridge` sanitizes results and blocks stale UI; `VisualStepPolicy` limits planning to one action before the next observation. No screenshot persisted.
+- **Autonomous goal**: `AkaiAiController.processVisualGoalLocked` executes fresh screenshot -> chosen DeepSeek/Kimi image model -> text plan -> exactly one validated Android action -> re-observation -> native goal verifier. Limit 8 steps / 16 cloud calls / 2 minutes per task; maintain separate 3-minute MediaProjection cap and client-side budget.
+- **Learning and adaptation**: `AkaiMemoryEngine` SQLite stores *only STATE_VERIFIED* skills; success/failure counters and `AgentSkillGate` quarantine unreliable skills. When a previously learned procedure fails, and the owner-approved vision session is active, JARVIS may rediscover the route and replace it **only after STATE_VERIFIED**. This is self-improvement of TV procedures, not self-editing code.
+- **Owner Stop**: `AkaiAiController.cancelActiveTask` must revoke the capture session immediately via `VisualObservationProvider.stopAndRevoke`. No silent restart.
+- **Test rigor**: host Java 40 tests, supplemental policy tests, simulated HTTP E2E and Android9 APK build. Do NOT claim the feature operates on real AKAI until a human confirms actual MediaProjection consent, JPEG frame updates across apps, remote vision API, memory preservation and rollback.
+- **No intermediate OTA/deploy**; prepare the single final user-authorized update. Continue development until all explicit release gates pass.
 
 ## CURRENT ENTRYPOINTS
 
