@@ -22,6 +22,7 @@ function extractFunction(name, asyncFunction = false) {
 
 const functions = [
     extractFunction('isHandledAiReply'),
+    extractFunction('isVerifiedAiReply'),
     extractFunction('askAi', true),
     extractFunction('displayAiResponse')
 ].join('\n');
@@ -128,6 +129,36 @@ async function run() {
         'FAILED must never be a successful voice turn');
     assert.match(contradictoryVerified.elements.aiBadgeStatus.textContent, /Non Riuscito/);
 
+    const spoofedVerifiedFlag = await scenario(200, {
+        success: false, status: 'ERROR', verified: true,
+        execution_outcome: 'COMMAND_SENT', reply: 'Esito contraddittorio.'
+    });
+    assert.equal(spoofedVerifiedFlag.returned, false,
+        'verified=true without STATE_VERIFIED must not advance voice session');
+    assert.match(spoofedVerifiedFlag.elements.aiBadgeStatus.textContent, /Non Riuscito/);
+
+    const spoofedSuccessStatus = await scenario(200, {
+        success: false, status: 'SUCCESS_VERIFIED', verified: false,
+        execution_outcome: 'COMMAND_SENT', reply: 'Stato incoerente.'
+    });
+    assert.equal(spoofedSuccessStatus.returned, false);
+    assert.match(spoofedSuccessStatus.elements.aiBadgeStatus.textContent, /Non Riuscito/);
+
+    const contradictedDialog = await scenario(400, {
+        success: false, status: 'ANSWERED_DIALOG', verified: false,
+        execution_outcome: 'FAILED', reply: 'Risposta non attendibile.'
+    });
+    assert.equal(contradictedDialog.returned, false,
+        'failed dialog must not resume the voice conversation');
+    assert.match(contradictedDialog.elements.aiBadgeStatus.textContent, /Non Riuscito/);
+
+    const contradictedUnverified = await scenario(200, {
+        success: true, status: 'COMPLETED_UNVERIFIED', verified: false,
+        execution_outcome: 'COMMAND_SENT', reply: 'Comando senza prova.'
+    });
+    assert.equal(contradictedUnverified.returned, false);
+    assert.match(contradictedUnverified.elements.aiBadgeStatus.textContent, /Non Riuscito/);
+
     const memoryHandled = await scenario(200, {
         success: true, status: 'MEMORY_HANDLED', verified: false,
         execution_outcome: 'NOT_TESTED', reply: 'Ho salvato la tua preferenza.'
@@ -148,7 +179,7 @@ async function run() {
     assert.match(tlsRequired.elements.aiResponseText.textContent, /HTTPS/);
     assert.match(tlsRequired.elements.aiBadgeStatus.textContent, /Non Riuscito/);
 
-    console.log('Web AI feedback regression PASS (11 scenarios, no TV or cloud API used)');
+    console.log('Web AI feedback regression PASS (15 scenarios, no TV or cloud API used)');
 }
 
 run().catch(err => {
