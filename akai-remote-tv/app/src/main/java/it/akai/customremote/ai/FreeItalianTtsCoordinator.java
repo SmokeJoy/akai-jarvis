@@ -169,7 +169,20 @@ public final class FreeItalianTtsCoordinator {
         try {
             worker.execute(new Runnable() {
                 @Override public void run() {
-                    final File mp3 = FreeItalianTtsClient.synthesize(context, text, voice, apiKey);
+                    // STOP and owner opt-out must prevent upload when a queued
+                    // worker starts after its original speech task was revoked.
+                    final FreeItalianTtsClient.Cancellation cancelled =
+                            new FreeItalianTtsClient.Cancellation() {
+                        @Override public boolean isCancelled() {
+                            synchronized (FreeItalianTtsCoordinator.this) {
+                                return request != generation
+                                        || !prefs.getBoolean(CONSENT, false);
+                            }
+                        }
+                    };
+                    if (cancelled.isCancelled()) return;
+                    final File mp3 = FreeItalianTtsClient.synthesize(
+                            context, text, voice, apiKey, cancelled);
                     if (!main.post(new Runnable() {
                         @Override public void run() {
                             synchronized (FreeItalianTtsCoordinator.this) {
