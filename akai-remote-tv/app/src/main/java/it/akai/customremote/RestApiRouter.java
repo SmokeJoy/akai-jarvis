@@ -45,6 +45,7 @@ public class RestApiRouter {
             return new JSONObject().put("mode", "offline_espeak")
                     .put("active_voice", "offline_espeak")
                     .put("free_tts_enabled", false)
+                    .put("cloud_tts_enabled", false)
                     .put("speech_provider_policy", "OWNER_OPT_IN_FREE_TTS_ONLY");
         }
         default boolean saveTtsConfig(JSONObject settings) {
@@ -647,7 +648,7 @@ public class RestApiRouter {
             return true;
         }
 
-        // TTS configuration is always offline-only, independently of AI cloud mode.
+        // Free-tier voice configuration is opt-in and separate from AI model selection.
         if ("/api/ai/tts_config".equals(path) && "GET".equals(method)) {
             String token = extractBearerToken(headers);
             if (!securityManager.validateToken(token)) {
