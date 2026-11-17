@@ -59,3 +59,14 @@ assert "catch (RuntimeException ignored)" in helper
 assert 'deliverDenied(callback, "SESSION_CLOSED")' in method
 assert 'deliverDenied(callback, verdict.reason)' in method
 print("PASS: denied frame callbacks cannot crash the worker")
+
+# Accessibility or cloud-consent reads may throw during OEM UI transitions.
+# A failed context read must fail closed without reserving quota or attaching
+# the VirtualDisplay surface, and must notify the original frame caller.
+context = method[method.index("final ScreenPerceptionEngine.PerceptionSnapshot snap;"):method.index("gate.reserveNextFrame(")]
+assert "try {" in context and "catch (RuntimeException unavailable)" in context
+assert 'deliverDenied(callback, "FRAME_CONTEXT_UNAVAILABLE")' in context
+assert context.index('deliverDenied(callback, "FRAME_CONTEXT_UNAVAILABLE")') < context.index("return;", context.index('deliverDenied(callback, "FRAME_CONTEXT_UNAVAILABLE")'))
+assert "ScreenPerceptionEngine.capture(this)" in context
+assert "hasCloudContextConsent()" in context
+print("PASS: failed Accessibility/context read denies capture before quota reservation")
