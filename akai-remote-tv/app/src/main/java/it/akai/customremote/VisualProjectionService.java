@@ -173,13 +173,18 @@ public final class VisualProjectionService extends Service {
             projection.registerCallback(new MediaProjection.Callback() {
                 @Override public void onStop() {
                     Handler handler = worker;
-                    if (handler != null) handler.post(new Runnable() {
+                    // Projection revocation must terminate the service even if
+                    // the frame worker is already quitting and rejects post().
+                    boolean queued = handler != null && handler.post(new Runnable() {
                         @Override public void run() {
                             stopCapture();
                             stopSelf();
                         }
                     });
-                    else stopSelf();
+                    if (!queued) {
+                        stopCapture();
+                        stopSelf();
+                    }
                 }
             }, worker);
             DisplayMetrics dm = new DisplayMetrics();
