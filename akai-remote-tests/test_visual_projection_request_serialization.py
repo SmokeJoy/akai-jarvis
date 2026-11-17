@@ -7,7 +7,7 @@ It is not a device concurrency test.
 from pathlib import Path
 
 source = Path("akai-remote-tv/app/src/main/java/it/akai/customremote/VisualProjectionService.java").read_text()
-start = source.index("private void requestOnWorker(")
+start = source.index("private synchronized void requestOnWorker(")
 end = source.index("private void consumeOnlyOnDemand(", start)
 method = source[start:end]
 guard = method.index("if (pending != null)")
@@ -15,9 +15,13 @@ denial = method.index('deliverDenied(callback, "FRAME_REQUEST_BUSY")', guard)
 return_pos = method.index("return;", denial)
 reserve = method.index("gate.reserveNextFrame(", return_pos)
 assign = method.index("pending = callback;", reserve)
+assert "private synchronized void requestOnWorker(" in source
+assert "private synchronized void finishRequest(" in source
+assert "private synchronized void stopCapture(" in source
 assert guard < denial < return_pos < reserve < assign
 assert 'deliverDenied(callback, "FRAME_REQUEST_BUSY")' in method[guard:reserve]
 assert method.count("pending = callback;") == 1
+print("PASS: frame reservation, completion and STOP share the same service monitor")
 print("PASS: overlapping frame request rejected before quota reservation and callback assignment")
 
 # A racing stop may quit the worker before post() accepts the request.
@@ -53,7 +57,7 @@ assert reject.index("stopCapture();") < reject.index("stopSelf();")
 print("PASS: rejected session-expiry scheduling releases MediaProjection resources")
 
 # A rejected request callback is untrusted and must not terminate the worker.
-helper = source[source.index("private static void deliverDenied("):source.index("private void requestOnWorker(")]
+helper = source[source.index("private static void deliverDenied("):source.index("private synchronized void requestOnWorker(")]
 assert "try { callback.onFrame(FrameResult.denied(reason)); }" in helper
 assert "catch (RuntimeException ignored)" in helper
 assert 'deliverDenied(callback, "SESSION_CLOSED")' in method
