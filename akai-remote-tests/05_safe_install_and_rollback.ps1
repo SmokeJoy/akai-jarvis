@@ -1051,7 +1051,8 @@ function Test-PackageUpgradeGate {
         [string]$AdbExe,
         [string]$TargetAdb,
         [string]$PackageName,
-        [string]$CandidateApkPath
+        [string]$CandidateApkPath,
+        [switch]$PreviousAbsentConfirmed = $false
     )
 
     # P0 pre-install audit: metadata MUST be independently parsed, never inferred from ZIP magic.
@@ -1100,6 +1101,10 @@ function Test-PackageUpgradeGate {
             throw "ERRORE FAIL-CLOSED: package/versionCode APK candidato non valido."
         }
 
+        if ($PreviousAbsentConfirmed) {
+            # Only caller-confirmed absence allows first install; candidate metadata remains mandatory.
+            return @{ InstalledVersionCode = $null; CandidatePackageName = $candidatePkg; CandidateVersionCode = $candidateVersionCode }
+        }
         $dumpsysOut = (& $AdbExe -s $TargetAdb shell "dumpsys package $PackageName" 2>&1 | Out-String)
         $dumpsysExit = $LASTEXITCODE
         if ($dumpsysExit -ne 0) {
@@ -2542,7 +2547,7 @@ switch ($Action) {
         Assert-CandidateApkNoForbiddenTlsAssets $ApkPath | Out-Null
 
         # 3. Gate pre-install (applicationId + versionCode) e installazione conservativa (no -d su install)
-        $upgradeGate = Test-PackageUpgradeGate -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -CandidateApkPath $ApkPath
+        $upgradeGate = Test-PackageUpgradeGate -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -CandidateApkPath $ApkPath -PreviousAbsentConfirmed:((-not $hasPrevious) -and $GreenfieldStart)
         if ($upgradeGate.CandidateVersionCode) {
             Write-Host "      Gate pacchetto verificato (target=$PackageName, installedVC=$($upgradeGate.InstalledVersionCode), candidateVC=$($upgradeGate.CandidateVersionCode))." -ForegroundColor Green
         }
