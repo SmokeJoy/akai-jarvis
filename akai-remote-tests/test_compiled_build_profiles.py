@@ -54,7 +54,8 @@ def check_badging(text: str, version: int, name: str) -> None:
     if len(matches) != 1 or matches[0] != (PACKAGE, str(version), name):
         raise ValueError("APK package/version metadata missing, invalid or ambiguous")
     if not re.search(r"(?m)^sdkVersion:'21'\s*$", text):
-        raise ValueError("wrong or missing min SDK")
+        metadata = [line.strip() for line in text.splitlines() if "sdkVersion" in line or line.startswith("package:")]
+        raise ValueError(f"wrong or missing min SDK; observed={metadata[:6]!r}")
     if not re.search(r"(?m)^targetSdkVersion:'28'\s*$", text):
         raise ValueError("wrong or missing target SDK")
 
