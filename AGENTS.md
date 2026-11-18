@@ -13,6 +13,15 @@
 - Verify the active provider and request destination with `CloudProviderPolicy`. API keys are provider-specific, kept in Android Keystore; no cross-provider redirects, no public credentials and no API charges without owner consent.
 - Cloud screenshot inference requires explicit consent at capture/session start **separately** from Android MediaProjection approval, no sensitive UI, bounded JPEG/timeout/budget, and must not execute unverified AI text as actions. One owner-approved visual session may capture up to 20 on-demand frames (3 minutes) without prompting on every frame, but must always offer immediate STOP and a visible foreground notification.
 
+## OWNER DECISION 18 NOV — STAGED DIAGNOSTIC TEST AND PRODUCTION
+
+- **Owner has authorized the DEVELOPMENT of an initial debuggable test build**, followed by real-TV tests performed by the owner, and only *after* successful testing a final non-debuggable update. This is **NOT** permission to remotely install, deploy, or modify the TV.
+- Diagnostic APK **versionCode 4**: `scripts/12_build_jarvis_final_candidate.ps1` default `-BuildProfile Diagnostic`; AAPT2 `--debug-mode` sets `android:debuggable=true` **in the APK compiled manifest**, although the canonical repository `AndroidManifest.xml` remains `false` for production safety. The builder must independently inspect and verify the compiled flag before signing approval. Use original owner's signing key/cert, never debug.keystore or transient CI signer. Explicit output name `jarvis-v4-owner-signed-diagnostic.apk` and provenance `buildProfile=Diagnostic, debuggable=true`.
+- Production APK **versionCode 5 or greater**: explicit `-BuildProfile Release`; `android:debuggable=false` or attribute absent **in APK compiled manifest**, same signing key/cert, versionCode strictly greater than actually installed. The owner decides after device tests; do not flip it prematurely or issue a second update now.
+- Diagnostic builds are private, local-network test only, with owner-authorized ADB. A debuggable v4 does **NOT** guarantee Android accepts downgrade to the old non-debuggable A2 vCode3. The pre-install APK/SQLite/WAL/TLS backup and recoverability gates remain mandatory.
+- P0 installer metadata was hardened in `05_safe_install_and_rollback.ps1` via fail-closed `aapt` version/package comparison. Mock E2E fixtures now emulate `aapt` and installed version explicitly instead of bypassing the production validator. All CI still must be green on exact final SHA, plus owner-original signing key and preflight before install.
+- Important CI limitation: runs #44256709238 and #44261816387 etc reported failure with GitHub jobs showing 0 steps / empty runner, so code test conclusions cannot be inferred from those runs. Investigate runner/Actions scheduling or policy, retry on the exact head. Do not claim PASS until full completed/success run.
+
 ## RELEASE AND HARDWARE FREEZE
 
 - The owner has installed A2 preview `it.akai.customremote` versionCode 3 (17 Nov 2026). It is being tested separately.
