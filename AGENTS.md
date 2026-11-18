@@ -2,6 +2,15 @@
 
 > Canonical developer instructions for all agents, coding assistants, GitHub automations and reviewers contributing to this branch. Explicit owner decisions take precedence over historical PR comments.
 
+## HARD RULE — OWNER FINAL QUALITY GATE (18 Nov 2026)
+
+**PERMANENT AND BLOCKING. Before stating a JARVIS change is DONE, READY, FIXED, SAFE or RELEASE-APPROVED, apply the full mandatory two-pass review protocol:** `docs/JARVIS_MANDATORY_SECOND_PASS_REVIEW.md`.
+
+1. First verify the **saved exact Git HEAD**, diff, invariants, implementation and tests appropriate to the scope. Second, deliberately challenge the implementation, seek latent bugs, regressions, race conditions, corner cases, privacy and performance risks, and compare simpler or better alternatives. If a defect is fixed, restart both passes on the NEW HEAD. Prefer a different reviewer for the second pass; never misrepresent one review as independently verified.
+2. Consult current **official** project/vendor documentation for all material compatibility/security/API/build assertions; record sources, versions and what was actually verified. Never assume Android OEM, github runner, API provider, APK signature or rollback behavior from mock tests.
+3. Provide evidence: exact SHA, check/test execution (PASS/FAIL/BLOCKED/NOT_RUN), APK package/version/signature where relevant, limitations, residual P0/P1/P2, and explicit GO/NO-GO *for the stated stage*. `CI_BLOCKED_NOT_EXECUTED` is NOT green. Do not claim the TV was tested without TV evidence.
+4. Only declare a stage finished after the second review; if evidence is missing, state **INCOMPLETE/BLOCKED** rather than a success claim. Do not weaken gates, introduce unnecessary refactors or install/deploy without the owner's separate authorization. Perfect absence of defects cannot be guaranteed; rigor and auditability are mandatory.
+
 ## HARD RULE — AI PROVIDERS (17 Nov 2026)
 
 **All JARVIS reasoning, image understanding and autonomous AI inference MUST use only official DeepSeek or Kimi (Moonshot) cloud APIs. A narrowly scoped optional personal free voice-output exception is documented below; it is not an agent reasoning provider.**
@@ -71,6 +80,8 @@
 - The original phone-local voice option remains separate: FreeTTS personal free-tier speech, if enabled by the owner, can instead speak directly from the AKAI TV. Neither mode implies any APK deployment before the final owner-authorized update.
 
 ## CURRENT ENTRYPOINTS
+
+- **MANDATORY two-pass final review and adversarial bug/optimization hunt:** `docs/JARVIS_MANDATORY_SECOND_PASS_REVIEW.md`.
 
 - Final-release contract: `docs/JARVIS_FINAL_AGENT_OTA_RELEASE_CONTRACT.md`
 - **Current P0 pre-install audit / NO-GO gates:** `docs/JARVIS_FINAL_PREINSTALL_AUDIT_20261118.md` (rollback Android9 + fail-open candidate package/version check). Do not request install until owner-approved conservative recovery and strict metadata validation are demonstrated.
