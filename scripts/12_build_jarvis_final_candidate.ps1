@@ -296,7 +296,12 @@ $signArgs = @(
 )
 & $java $signArgs
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseApk)) {
-    throw 'Firma APK finale fallita. Nessun tentativo di installazione.'
+    # apksigner can leave a partially written output on failure.
+    # Never leave an APK that looks installable but has no verified signer.
+    if (Test-Path -LiteralPath $releaseApk) {
+        Remove-Item -LiteralPath $releaseApk -Force -ErrorAction SilentlyContinue
+    }
+    throw 'Firma APK finale fallita. File incompleto eliminato; nessun tentativo di installazione.'
 }
 # There is only ONE signed candidate in the out-of-tree release directory.
 # Never leave a duplicate debug-named APK that bypasses verification gates.
@@ -309,7 +314,7 @@ if (Test-Path $releaseApk) {
     $sha256 = (Get-FileHash -Path $releaseApk -Algorithm SHA256).Hash
     $sizeKb = [Math]::Round((Get-Item $releaseApk).Length / 1024, 2)
     Write-Host "`n========================================================" -ForegroundColor Green
-    Write-Host " JARVIS $BuildProfile v$VersionCode firmato: NON INSTALLATO!" -ForegroundColor Green
+    Write-Host " JARVIS $BuildProfile v$VersionCode: firma generata, VERIFICA IN CORSO (NON INSTALLATO)" -ForegroundColor Yellow
     Write-Host "========================================================" -ForegroundColor Green
     Write-Host " Release APK : $releaseApk"
     Write-Host " Profilo     : $BuildProfile"
@@ -426,7 +431,12 @@ if (Test-Path $releaseApk) {
         apkFilename = $apkFileName
         buildProfile = $BuildProfile
         debuggable = ($BuildProfile -eq 'Diagnostic')
-        productionReady = ($BuildProfile -eq 'Release')
+        # A production-profile build is not a production authorization.
+        # Real TV and owner acceptance gates are deliberately outside the builder.
+        productionProfile = ($BuildProfile -eq 'Release')
+        productionReady = $false
+        ownerTvApproved = $false
+        recoveryVerified = $false
         apkSha256 = $sha256.ToLowerInvariant()
         signerSha256 = $actualSigner
         abi = 'armeabi-v7a'
