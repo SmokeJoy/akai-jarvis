@@ -44,7 +44,7 @@ git pull --ff-only
   -SigningAlias "alias-originale"
 ```
 
-L'output Diagnostic v4 è nella cartella privata `%LOCALAPPDATA%\AkaiJarvisBuilds\FINAL-v4-*\outputs\apk\release\jarvis-v4-owner-signed-diagnostic.apk` (la successiva Release v5 genera `app-release.apk`), con `JARVIS_FINAL_BUILD_MANIFEST.json` (Git SHA, SHA-256, certificato SHA-256, versione e `installed=false`); **non** nel repository. La compilazione verifica in modo fail-closed impronta firmatario attesa, SHA-256, nome pacchetto `it.akai.customremote`, vCode >3, minSdk 21, targetSdk 28, risorse, `android:debuggable=false`, componenti ARMv7 e assenza di certificati TLS privati nell'APK. Non generare o distribuire alcun APK che fallisce uno dei gate.
+L'output Diagnostic v4 è nella cartella privata `%LOCALAPPDATA%\AkaiJarvisBuilds\FINAL-v4-*\outputs\apk\release\jarvis-v4-owner-signed-diagnostic.apk` (la successiva Release v5 genera `app-release.apk`), con `JARVIS_FINAL_BUILD_MANIFEST.json` (Git SHA, SHA-256, certificato SHA-256, versione e `installed=false`); **non** nel repository. La compilazione verifica in modo fail-closed impronta firmatario attesa, SHA-256, nome pacchetto `it.akai.customremote`, vCode >3, minSdk 21, targetSdk 28, risorse, flag `android:debuggable` del manifest compilato coerente con il profilo (`true` per Diagnostic v4, `false` per Release v5+), componenti ARMv7 e assenza di certificati TLS privati nell'APK. Non generare o distribuire alcun APK che fallisce uno dei gate.
 
 **Limite:** né GitHub né questa procedura possiedono la chiave di firma dell'owner. Se manca la chiave originale, il rilascio come aggiornamento in-place è BLOCCATO; non creare una nuova firma e non disinstallare A2 per aggirare l'errore.
 
