@@ -25,7 +25,7 @@
 ## RELEASE AND HARDWARE FREEZE
 
 - The owner has installed A2 preview `it.akai.customremote` versionCode 3 (17 Nov 2026). It is being tested separately.
-- **No intermediate installs/upgrades/ADB write/root/reset/deploy/merge** until one final full agent release, barring a distinct, explicitly owner-approved emergency.
+- **NO installation, ADB write, root, reset, deploy or merge without explicit owner authorization.** The owner has approved DEVELOPMENT of v4 Diagnostic for a separate owner-led installation/test after all gates pass; v5+ Release remains a second distinct approval. No unattended TV changes.
 - Keep existing Launcher Home v8, Web Remote LAN, HTTPS TLS Root CA, native uinput, Android signing and SQLite memory intact.
 - Build/test code on draft branches and PRs; GitHub Actions CI artifacts use ephemeral test signing/TLS and MUST NOT be installed on the TV.
 - The real TV is not a CI runner. Report host/mock tests, Android APK build, remote API mock and real hardware evidence separately.
@@ -42,7 +42,7 @@
 - **Learning and adaptation**: `AkaiMemoryEngine` SQLite stores *only STATE_VERIFIED* skills; success/failure counters and `AgentSkillGate` quarantine unreliable skills. When a previously learned procedure fails, and the owner-approved vision session is active, JARVIS may rediscover the route and replace it **only after STATE_VERIFIED**. This is self-improvement of TV procedures, not self-editing code.
 - **Owner Stop**: `AkaiAiController.cancelActiveTask` must revoke the capture session immediately via `VisualObservationProvider.stopAndRevoke`. No silent restart.
 - **Test rigor**: host Java 40 tests, supplemental policy tests, simulated HTTP E2E and Android9 APK build. Do NOT claim the feature operates on real AKAI until a human confirms actual MediaProjection consent, JPEG frame updates across apps, remote vision API, memory preservation and rollback.
-- **No intermediate OTA/deploy**; prepare the single final user-authorized update. Continue development until all explicit release gates pass.
+- **No unattended OTA/deploy.** Prepare owner-signed v4 Diagnostic for owner-led testing, then v5+ non-debuggable only after the separate owner approval. Preserve all release gates.
 
 ## LEGACY SPEECH POLICY AND TTS LIFECYCLE (17 NOV 2026)
 
@@ -60,7 +60,7 @@
 - Use the official FreeTTS POST https://freetts.org/api/v1/tts and returned validated file ID with GET https://freetts.org/api/audio/{id} only; direct HTTPS host allowlist and no redirects. Skip requests containing sensitive-looking text; all network on a bounded worker, one active speech stream, STOP invalidates late responses, delete temporary MP3 after playback. On any error, fall back to offline eSpeak.
 - FreeTTS synthesizes speech output only: permitted voice IDs it-IT-DiegoNeural and it-IT-IsabellaNeural. Never send image, code, private memory or credentials as TTS content. It uses Azure behind the FreeTTS proxy, but the user does NOT need an Azure account; do not misrepresent upstream processing or promise free availability forever.
 - Code: FreeItalianTtsPolicy.java, FreeItalianTtsClient.java, FreeItalianTtsCoordinator.java, AkaiSpeechEngine.java, RestApiRouter.java, RemoteServerService.java, Web Remote voice configuration. CI: pure Java policy, Android build, TTS source-contract and REST mock. No paid API calls, no tested free account, no device playback verification yet.
-- The narrowly scoped TTS exception is NOT permission to expand AI provider policy, install neural models on the TV or merge/install an intermediate release. PR #18 remains Draft pending full CI, real TV tests and owner final release approval.
+- The narrowly scoped TTS exception is NOT permission to expand AI provider policy, install neural models on the TV or bypass the owner-authorized staged v4/v5 installation gates. PR #18 remains Draft pending full CI, real TV tests and owner final release approval.
 ## OPTIONAL WEB REMOTE ITALIAN VOICE (17 NOV 2026)
 
 - Important limitation: **JARVIS still speaks through eSpeak on the TV**. No natural Italian TTS voice has been installed on the AKAI TV. DeepSeek's official TTS docs do not currently list Italian; Kimi's official API does not offer TTS/ASR. Never claim that a natural voice is available on the television without device evidence.
@@ -75,12 +75,12 @@
 - Final-release contract: `docs/JARVIS_FINAL_AGENT_OTA_RELEASE_CONTRACT.md`
 - **Current P0 pre-install audit / NO-GO gates:** `docs/JARVIS_FINAL_PREINSTALL_AUDIT_20261118.md` (rollback Android9 + fail-open candidate package/version check). Do not request install until owner-approved conservative recovery and strict metadata validation are demonstrated.
 - Owner-led single-install handoff (signed APK, backups, TV test matrix): `docs/JARVIS_FINAL_OWNER_HANDOFF.md`
-- Owner-local no-TV build recipe: `scripts/12_build_jarvis_final_candidate.ps1` (versionCode 4+, same TV signing cert; no debug/CI APK).
+- Owner-local no-TV build recipe: `scripts/12_build_jarvis_final_candidate.ps1` (Diagnostic v4 **debuggable** for tests, later Release v5+ non-debuggable, original TV signing certificate; never CI ephemeral APK).
 - GitHub tracking issue: #17
 - Draft implementation PR: #18, stacked on A2 PR #16; A2 preparatory PRs #10, #12, #13, #14, #15.
 - AI core: `akai-remote-tv/app/src/main/java/it/akai/customremote/ai/`
 - Android activity: `akai-remote-tv/app/src/main/java/it/akai/customremote/LocalVisualCaptureActivity.java`
-- CI: `.github/workflows/ci.yml` and host mock suite.
+- CI: `.github/workflows/ci.yml` and host mock suite. **Runner blocked / offline gate:** `docs/JARVIS_CI_RUNNER_BLOCKER_20261118.md`, `python scripts/13_jarvis_offline_host_gate.py` (partial, not hardware/complete CI evidence).
 
 ## 17 NOV 2026 — REVOKED VISION / DEADLINES / FINAL CHANNEL EVIDENCE (SOURCE GATES)
 
