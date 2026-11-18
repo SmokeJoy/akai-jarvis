@@ -365,63 +365,7 @@ if (Test-Path $releaseApk) {
             if (-not $entryNames.Add($entry.FullName)) {
                 throw "APK candidato rifiutato: entry ZIP duplicata $($entry.FullName)"
             }
-            if ($entry.FullName -match '\.(p12|jks|key|der|crt|pass) -or $entry.FullName -match 'server_keystore') {
-                $foundForbidden += $entry.FullName
-            }
-        }
-        foreach ($required in $requiredEntries) {
-            $requiredEntry = $zipTest.GetEntry($required)
-            if ($null -eq $requiredEntry -or $requiredEntry.Length -le 0) {
-                throw "APK candidato rifiutato: componente obbligatorio assente/vuoto: $required"
-            }
-        }
-    } finally {
-        $zipTest.Dispose()
-    }
-
-    if ($foundForbidden.Count -gt 0) {
-        Write-Host "FATAL FAIL-CLOSED: Trovati file TLS/certificati non autorizzati nell'APK di release: $($foundForbidden -join ', ')" -ForegroundColor Red
-        throw 'Build finale bloccata: keystore o materiale TLS privato trovato nell APK.'
-    }
-    Write-Host "      [PASS] Nessun certificato o chiave privata/keystore incorporato nell'APK release!" -ForegroundColor Green
-    # Handoff machine-readable: only non-sensitive provenance, never passwords,
-    # alias, private keystore path, personal database or API credentials.
-    $sourceHead = (& git -C $repoRoot rev-parse HEAD 2>$null | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sourceHead.Length -ne 40 -or $sourceHead -notmatch '^[a-f0-9]{40}') {
-        throw 'Release fingerprint record failed: Git HEAD not available.'
-    }
-    $handoff = [ordered]@{
-        packageName = 'it.akai.customremote'
-        versionCode = $VersionCode
-        versionName = $VersionName
-        sourceCommit = $sourceHead
-        apkFilename = 'app-release.apk'
-        apkSha256 = $sha256.ToLowerInvariant()
-        signerSha256 = $actualSigner
-        abi = 'armeabi-v7a'
-        minSdk = 21
-        targetSdk = 28
-        androidTvTested = $false
-        signedWithOwnerOriginalCert = $true
-        installed = $false
-        buildUtc = (Get-Date).ToUniversalTime().ToString('o')
-    }
-    $handoffPath = Join-Path $releaseOutputDir 'JARVIS_FINAL_BUILD_MANIFEST.json'
-    $handoff | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $handoffPath -Encoding UTF8
-    Write-Host "Manifest provenienza senza segreti: $handoffPath" -ForegroundColor Cyan
-    $releaseApproved = $true
-    Write-Host "CANDIDATO PER REVISIONE OFFLINE, NON INSTALLATO: $releaseApk" -ForegroundColor Cyan
-} else {
-    throw 'Build finale non generata. La TV resta invariata.'
-}
-} finally {
-    if (-not $releaseApproved) {
-        Remove-Item -LiteralPath $releaseApk -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $handoffPath -Force -ErrorAction SilentlyContinue
-        Write-Host 'CANDIDATO NON APPROVATO ELIMINATO: nessuna installazione effettuata.' -ForegroundColor Yellow
-    }
-}
- -or $entry.FullName -match 'server_keystore') {
+            if ($entry.FullName -match '\.(p12|jks|key|der|crt|pass)
                 $foundForbidden += $entry.FullName
             }
         }
