@@ -1,10 +1,15 @@
 name: AKAI JARVIS CI
 
 on:
+  # The JARVIS final-agent branch must be built on its exact pushed HEAD.
+  # Previously only main/fix branches were eligible for push checks.
   push:
-    branches: [ main, "fix/*" ]
+    branches: [ main, "fix/*", "feat/jarvis-final-agent-ota-foundation-20261117" ]
   pull_request:
     branches: [ main, "fix/*", "feat/a2-*", "feat/jarvis-agent-a0-memory-learning", "feat/jarvis-a1-integration-candidate" ]
+  # Manual re-run without an artificial code commit (available when workflow
+  # exists on repository default branch; not a way around account-runner limits).
+  workflow_dispatch:
 
 
 # Cancel stale in-progress runs on the SAME PR when automation pushes a new
