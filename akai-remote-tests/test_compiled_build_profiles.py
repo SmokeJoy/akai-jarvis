@@ -52,7 +52,165 @@ def check_badging(text: str, version: int, name: str) -> None:
         raise ValueError("wrong or missing target SDK")
 
 
+def require_version_override(manifest_source: str, windows_builder: str, ci_test_source: str) -> None:
+    # AAPT2 --version-code/--version-name inject ONLY IF ABSENT by default.
+    # Our tracked A2 manifest declares both, so both build paths must use
+    # --replace-version to make v4 Diagnostic / v5 Release real upgrades.
+    if not re.search(r'android:versionCode="3"', manifest_source):
+        raise ValueError("A2 baseline versionCode source unexpectedly changed; audit migration")
+    if not re.search(r'android:versionName="1\\.2\\.0-a2-preview"', manifest_source):
+        raise ValueError("A2 baseline versionName source unexpectedly changed")
+    if not re.search(r"(?m)^\\s*\\$linkArgs = @\\(.*?'--replace-version'\\)", windows_builder):
+        raise ValueError("Windows owner-signed builder must override existing manifest version")
+    if not re.search(r'(?m)^\\s*"--replace-version",\\s*
+    def test_android_true_encodings(self):
+        for value in ("0x1", "0xffffffff"):
+            with self.subTest(value=value):
+                self.assertTrue(compiled_debug_value(
+                    f"E: application (line=1)\n    A: android:debuggable(0x0101000f)=(type 0x12){value}\n"
+                ))
+
+    def test_false_and_absent(self):
+        self.assertFalse(compiled_debug_value(
+            "E: application (line=1)\n    A: android:debuggable(0x0101000f)=(type 0x12)0x0\n"))
+        self.assertFalse(compiled_debug_value("E: application (line=1)\n"))
+
+    def test_malformed_values_are_not_silent_false(self):
+        for value in ("0x2", "garbage", "(type 0x10)0x1"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                compiled_debug_value(
+                    "E: application\n A: android:debuggable(0x0101000f)=" + value + "\n"
+                )
+
+    def test_duplicate_flag_rejected(self):
+        with self.assertRaises(ValueError):
+            compiled_debug_value(
+                "E: application\n A: android:debuggable(0x0101000f)=(type 0x12)0x1\n"
+                " A: android:debuggable(0x0101000f)=(type 0x12)0x0\n"
+            )
+
+    def test_metadata_negative_cases(self):
+        valid = ("package: name='it.akai.customremote' versionCode='4' "
+                 "versionName='1.3.0-diagnostic-rc1'\n"
+                 "sdkVersion:'21'\ntargetSdkVersion:'28'\n")
+        check_badging(valid, 4, "1.3.0-diagnostic-rc1")
+        for broken in (
+            valid.replace("it.akai.customremote", "untrusted.package"),
+            valid.replace("versionCode='4'", "versionCode='3'"),
+            valid.replace("sdkVersion:'21'", "sdkVersion:'29'"),
+            valid.replace("targetSdkVersion:'28'", "targetSdkVersion:'35'"),
+            valid + valid.splitlines()[0] + "\n",
+            "package: name='it.akai.customremote'",
+        ):
+            with self.subTest(text=broken[:65]), self.assertRaises(ValueError):
+                check_badging(broken, 4, "1.3.0-diagnostic-rc1")
+
+
+def checked(argv: list[str]) -> str:
+    try:
+        process = subprocess.run(argv, text=True, capture_output=True, timeout=90, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f"timeout: {argv[1]}") from error
+    if process.returncode:
+        raise RuntimeError(
+            f"command failed ({argv[1]}), exit {process.returncode}: "
+            + (process.stderr + process.stdout)[-1500:]
+        )
+    return process.stdout
+
+
+def build_and_check(aapt2: Path, android_jar: Path, compiled: Path,
+                    manifest: Path, out_dir: Path, *,
+                    profile: str, version: int, version_name: str) -> None:
+    apk = out_dir / (profile + ".apk")
+    argv = [
+        str(aapt2), "link", "-I", str(android_jar),
+        "--manifest", str(manifest), "-o", str(apk),
+        str(compiled), "--auto-add-overlay",
+        "--min-sdk-version", "21", "--target-sdk-version", "28",
+        "--version-code", str(version), "--version-name", version_name,
+        # Manifest source explicitly contains A2 v3; without this AAPT2 keeps it.
+        "--replace-version",
+    ]
+    if profile == "Diagnostic":
+        argv.append("--debug-mode")
+    elif profile != "Release":
+        raise ValueError("unknown build profile")
+    checked(argv)
+    if not apk.is_file() or not apk.stat().st_size:
+        raise RuntimeError(f"missing compiled APK for {profile}")
+    tree = checked([str(aapt2), "dump", "xmltree", str(apk), "--file", "AndroidManifest.xml"])
+    observed = compiled_debug_value(tree)
+    expected = profile == "Diagnostic"
+    if observed != expected:
+        raise RuntimeError(f"{profile} compiled debuggable={observed}; expected {expected}")
+    badging = checked([str(aapt2), "dump", "badging", str(apk)])
+    check_badging(badging, version, version_name)
+    print(f"[PASS] {profile} v{version}: actual compiled debuggable={observed}, "
+          "package, SDK and version verified; unsigned CI-only APK.", flush=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--aapt2", type=Path)
+    parser.add_argument("--android-jar", type=Path)
+    parser.add_argument("--compiled-res", type=Path)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--self-test-only", action="store_true")
+    args = parser.parse_args()
+    result = unittest.TextTestRunner(verbosity=2).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ParserNegativeTests)
+    )
+    if not result.wasSuccessful():
+        return 1
+    if args.self_test_only:
+        print("[PASS] parser negative tests only; compiled APK tests NOT RUN.")
+        return 0
+    paths = (args.aapt2, args.android_jar, args.compiled_res, args.manifest)
+    if any(value is None or not value.is_file() for value in paths):
+        parser.error("all four existing Android tooling/source files are required")
+    with tempfile.TemporaryDirectory(prefix="jarvis_profiles_") as directory:
+        try:
+            build_and_check(*paths, Path(directory),
+                            profile="Diagnostic", version=4,
+                            version_name="1.3.0-diagnostic-rc1")
+            build_and_check(*paths, Path(directory),
+                            profile="Release", version=5,
+                            version_name="1.3.0-final")
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f"[NO-GO] Compiled profiles not verified: {exc}", file=sys.stderr)
+            return 1
+    print("[PASS] Both compiled profile manifests verified. No signing / TV deployment.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+, ci_test_source):
+        raise ValueError("CI AAPT2 compiled profile build must override A2 manifest version")
+
+
 class ParserNegativeTests(unittest.TestCase):
+    def test_existing_a2_versions_are_replaced_in_both_paths(self):
+        root = Path(__file__).resolve().parents[1]
+        manifest = (root / "akai-remote-tv/app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+        builder = (root / "scripts/12_build_jarvis_final_candidate.ps1").read_text(encoding="utf-8-sig")
+        ci_source = Path(__file__).read_text(encoding="utf-8")
+        require_version_override(manifest, builder, ci_source)
+
+    def test_missing_replace_flag_is_rejected(self):
+        root = Path(__file__).resolve().parents[1]
+        manifest = (root / "akai-remote-tv/app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+        builder = (root / "scripts/12_build_jarvis_final_candidate.ps1").read_text(encoding="utf-8-sig")
+        ci_source = Path(__file__).read_text(encoding="utf-8")
+        self.assertIn("'--replace-version'", builder)
+        with self.assertRaises(ValueError):
+            require_version_override(manifest, builder.replace("'--replace-version'", ""), ci_source)
+        self.assertIn('"--replace-version",', ci_source)
+        with self.assertRaises(ValueError):
+            require_version_override(manifest, builder, ci_source.replace('"--replace-version",', '"--keep-old-version",'))
+
+
     def test_android_true_encodings(self):
         for value in ("0x1", "0xffffffff"):
             with self.subTest(value=value):
