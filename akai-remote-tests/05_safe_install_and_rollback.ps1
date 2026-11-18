@@ -46,7 +46,11 @@ $PackageName = "it.akai.customremote"
 $StatusUrl = "http://$($TargetTv):$HttpPort/api/status"
 $WebUrl = "http://$($TargetTv):$HttpPort/index.html"
 $HttpsUrl = "https://$($TargetTv):$HttpsPort/"
-$MemoryUrl = "http://$($TargetTv):$HttpPort/api/ai/memory"
+# Memory and Bearer tokens MUST NEVER be sent over legacy HTTP/8088.
+# HTTPS uses the OS trusted CA chain; if trust is unavailable, optional REST
+# snapshot is skipped and mandatory binary SQLite/WAL backup remains fail-closed.
+# NEVER add -SkipCertificateCheck or fallback to HTTP for this endpoint.
+$MemoryUrl = "https://$($TargetTv):$HttpsPort/api/ai/memory"
 
 # -----------------------------------------------------------------------------
 # SAFETY FREEZE GUARD
@@ -2172,7 +2176,7 @@ switch ($Action) {
         }
         Write-Host "      APK salvato: $backupApk ($((Get-Item $backupApk).Length) bytes)" -ForegroundColor Green
 
-        # 2. Snapshot logico preventivo REST (se server HTTP e' online)
+        # 2. Snapshot logico opzionale REST: HTTPS con CA trusted, mai HTTP/Bearer in chiaro
         $logicalBackupPath = Join-Path $sessionDir "akai_memory_logical_backup.json"
         try {
             $headers = @{}
@@ -2370,7 +2374,7 @@ switch ($Action) {
             }
             Write-Host "      Backup APK salvato: $backupApk ($((Get-Item $backupApk).Length) bytes)" -ForegroundColor Green
 
-            # 1.2 Backup logico preventivo REST (se server e' attivo)
+            # 1.2 Snapshot logico opzionale REST: HTTPS con CA trusted, mai HTTP/Bearer in chiaro
             $logicalBackupPath = Join-Path $sessionDir "akai_memory_logical_backup.json"
             try {
                 $headers = @{}
