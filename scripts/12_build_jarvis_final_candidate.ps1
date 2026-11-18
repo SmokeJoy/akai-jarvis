@@ -349,12 +349,26 @@ if (Test-Path $releaseApk) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
     $zipTest = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $releaseApk))
     $foundForbidden = @()
-    foreach ($entry in $zipTest.Entries) {
-        if ($entry.FullName -match '\.(p12|jks|key|der|crt|pass)$' -or $entry.FullName -match 'server_keystore') {
-            $foundForbidden += $entry.FullName
+    $requiredEntries = @('classes.dex', 'lib/armeabi-v7a/libakai_uinput.so', 'assets/www/index.html')
+    $entryNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    try {
+        foreach ($entry in $zipTest.Entries) {
+            if (-not $entryNames.Add($entry.FullName)) {
+                throw "APK candidato rifiutato: entry ZIP duplicata $($entry.FullName)"
+            }
+            if ($entry.FullName -match '\\.(p12|jks|key|der|crt|pass)$' -or $entry.FullName -match 'server_keystore') {
+                $foundForbidden += $entry.FullName
+            }
         }
+        foreach ($required in $requiredEntries) {
+            $requiredEntry = $zipTest.GetEntry($required)
+            if ($null -eq $requiredEntry -or $requiredEntry.Length -le 0) {
+                throw "APK candidato rifiutato: componente obbligatorio assente/vuoto: $required"
+            }
+        }
+    } finally {
+        $zipTest.Dispose()
     }
-    $zipTest.Dispose()
 
     if ($foundForbidden.Count -gt 0) {
         Write-Host "FATAL FAIL-CLOSED: Trovati file TLS/certificati non autorizzati nell'APK di release: $($foundForbidden -join ', ')" -ForegroundColor Red
