@@ -49,15 +49,48 @@ def compiled_debug_value(xml_tree: str) -> bool:
     return parsed != 0
 
 
-def check_badging(text: str, version: int, name: str) -> None:
+def compiled_sdk_value(xml_tree: str, name: str, attr_id: str) -> int:
+    """Require one exact typed integer from the real compiled manifest."""
+    full_name = r"(?:android:|http://schemas\.android\.com/apk/res/android:)"
+    pat = re.compile(
+        rf"(?m)^\s*A:\s+{full_name}{re.escape(name)}\({re.escape(attr_id)}\)="
+        r"(?:\(type 0x10\))?(0x[0-9a-fA-F]+|[0-9]+)(?=\s|$)"
+    )
+    matches = pat.findall(xml_tree)
+    observed = [line.strip() for line in xml_tree.splitlines()
+                if f":{name}" in line]
+    if len(matches) != 1 or len(observed) != 1:
+        raise ValueError(f"compiled {name} missing or ambiguous; observed={observed[:4]!r}")
+    raw = matches[0]
+    return int(raw, 16 if raw.startswith("0x") else 10)
+
+
+def check_badging(text: str, version: int, name: str,
+                  compiled_manifest: str | None = None) -> None:
     matches = PACKAGE_LINE.findall(text)
     if len(matches) != 1 or matches[0] != (PACKAGE, str(version), name):
         raise ValueError("APK package/version metadata missing, invalid or ambiguous")
-    if not re.search(r"(?m)^sdkVersion:'21'\s*$", text):
-        metadata = [line.strip() for line in text.splitlines() if "sdkVersion" in line or line.startswith("package:")]
-        raise ValueError(f"wrong or missing min SDK; observed={metadata[:6]!r}")
-    if not re.search(r"(?m)^targetSdkVersion:'28'\s*$", text):
-        raise ValueError("wrong or missing target SDK")
+    # AAPT2 build-tools 37 omits SDK lines in resource-only APK badging.
+    # Never accept missing metadata unless the compiled manifest proves
+    # both SDK levels, with exact Android attribute resource IDs.
+    for key, expected, attr_id in (
+        ("sdkVersion", 21, "0x0101020c"),
+        ("targetSdkVersion", 28, "0x01010270"),
+    ):
+        visible = [line.strip() for line in text.splitlines()
+                   if line.startswith(key + ":")]
+        if visible:
+            if visible != [f"{key}:'{expected}'"]:
+                raise ValueError(f"wrong or ambiguous {key} in APK badging")
+        else:
+            observed = ([line.strip() for line in text.splitlines()
+                         if "sdkVersion" in line or line.startswith("package:")])
+            if compiled_manifest is None:
+                raise ValueError(f"missing {key} in APK badging; observed={observed[:6]!r}")
+            actual = compiled_sdk_value(compiled_manifest, key.replace("sdkVersion", "minSdkVersion")
+                                        if key == "sdkVersion" else key, attr_id)
+            if actual != expected:
+                raise ValueError(f"wrong compiled {key}: {actual}, expected {expected}")
 
 
 def require_version_override(manifest_source: str, windows_builder: str, ci_test_source: str) -> None:
@@ -135,6 +168,24 @@ class ParserNegativeTests(unittest.TestCase):
                 " A: android:debuggable(0x0101000f)=(type 0x12)0x0\n"
             )
 
+    def test_sdk_badging_fallback_requires_real_compiled_exact_values(self):
+        badging = ("package: name='it.akai.customremote' versionCode='4' "
+                   "versionName='1.3.0-diagnostic-rc1' platformBuildVersionName='9'\n")
+        tree = (
+            "E: uses-sdk (line=10)\n"
+            " A: http://schemas.android.com/apk/res/android:minSdkVersion(0x0101020c)=21\n"
+            " A: http://schemas.android.com/apk/res/android:targetSdkVersion(0x01010270)=28\n"
+        )
+        check_badging(badging, 4, "1.3.0-diagnostic-rc1", tree)
+        with self.assertRaises(ValueError):
+            check_badging(badging, 4, "1.3.0-diagnostic-rc1")
+        for bad in (tree.replace("=21", "=22"),
+                    tree.replace("=28", "=29"),
+                    tree.replace("minSdkVersion", "unknownMinSdkVersion"),
+                    tree + tree.splitlines()[1] + "\n"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                check_badging(badging, 4, "1.3.0-diagnostic-rc1", bad)
+
     def test_metadata_negative_cases(self):
         valid = ("package: name='it.akai.customremote' versionCode='4' "
                  "versionName='1.3.0-diagnostic-rc1'\n"
@@ -191,7 +242,7 @@ def build_and_check(aapt2: Path, android_jar: Path, compiled: Path,
     if observed != expected:
         raise RuntimeError(f"{profile} compiled debuggable={observed}; expected {expected}")
     badging = checked([str(aapt2), "dump", "badging", str(apk)])
-    check_badging(badging, version, version_name)
+    check_badging(badging, version, version_name, tree)
     print(f"[PASS] {profile} v{version}: actual compiled debuggable={observed}, "
           "package, SDK and version verified; unsigned CI-only APK.", flush=True)
 
