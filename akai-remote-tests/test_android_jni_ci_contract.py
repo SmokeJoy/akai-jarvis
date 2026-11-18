@@ -53,6 +53,29 @@ def require_apk_secrets_policy(ci: str) -> None:
             raise ValueError("Mandatory secret-free packaging gate missing: " + token)
 
 
+def require_owner_signing_handoff_policy(windows: str) -> None:
+    # A successful signing invocation is NOT the same as an owner-approved
+    # production release, and a failed invocation must not leave an APK.
+    for token in (
+        "productionReady = $false",
+        "ownerTvApproved = $false",
+        "recoveryVerified = $false",
+        "productionProfile = ($BuildProfile -eq 'Release')",
+    ):
+        if token not in windows:
+            raise ValueError("Unsigned/unapproved release may be mislabeled: " + token)
+    failed = windows.split("if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseApk)) {", 1)
+    if len(failed) != 2:
+        raise ValueError("Signer failure branch missing")
+    branch = failed[1].split("# There is only ONE signed candidate", 1)[0]
+    for token in (
+        "Remove-Item -LiteralPath $releaseApk -Force",
+        "throw 'Firma APK finale fallita.",
+    ):
+        if token not in branch:
+            raise ValueError("Partial APK not cleaned after signer failure: " + token)
+
+
 class NativeAndPackagingSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -76,6 +99,23 @@ class NativeAndPackagingSourceTests(unittest.TestCase):
 
     def test_ci_never_packages_test_tls_private_keys(self):
         require_apk_secrets_policy(self.ci)
+
+    def test_builder_handoff_is_not_automatically_released(self):
+        require_owner_signing_handoff_policy(self.windows)
+
+    def test_rejects_false_production_ready(self):
+        invalid = self.windows.replace("productionReady = $false",
+                                       "productionReady = ($BuildProfile -eq 'Release')")
+        self.assertNotEqual(invalid, self.windows)
+        with self.assertRaises(ValueError):
+            require_owner_signing_handoff_policy(invalid)
+
+    def test_rejects_partially_signed_apk_without_cleanup(self):
+        invalid = self.windows.replace("Remove-Item -LiteralPath $releaseApk -Force -ErrorAction SilentlyContinue",
+                                       "Write-Host 'Leave partially signed output'")
+        self.assertNotEqual(invalid, self.windows)
+        with self.assertRaises(ValueError):
+            require_owner_signing_handoff_policy(invalid)
 
     def test_fails_if_ci_embeds_keystore(self):
         with self.assertRaises(ValueError):
