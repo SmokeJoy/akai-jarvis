@@ -31,7 +31,8 @@ def compiled_debug_value(xml_tree: str) -> bool:
     values = DEBUG_ATTR.findall(xml_tree)
     # Unrecognized textual variants are UNKNOWN, not equivalent to absent.
     if "android:debuggable" in xml_tree and len(values) != 1:
-        raise ValueError("debuggable attribute absent from parser or ambiguous")
+        observed_lines = [line.strip() for line in xml_tree.splitlines() if "debuggable" in line or "E: application" in line]
+        raise ValueError(f"debuggable attribute absent from parser or ambiguous; observed={observed_lines[:5]!r}")
     if len(values) > 1:
         raise ValueError("duplicate debuggable attributes")
     if not values:
