@@ -10,7 +10,11 @@ param(
     [string]$VersionName = '1.3.0-final-rc1',
     # Exact 40-character HEAD of a completed/success CI run, supplied by owner.
     [Parameter(Mandatory=$true)]
-    [ValidatePattern('^[a-fA-F0-9]{40}
+    [ValidatePattern('^[a-fA-F0-9]{40}$')]
+    [string]$ExpectedCiHeadSha,
+    [Parameter(Mandatory=$true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$SigningKeystorePath,
     [Parameter(Mandatory=$true)]
     [ValidatePattern('^[A-Za-z0-9._-]{1,100}$')]
     [string]$SigningAlias
@@ -24,10 +28,12 @@ if ($LASTEXITCODE -ne 0 -or $actualBranch -ne $expectedBranch) {
     throw "Build finale bloccata: branch locale '$actualBranch', atteso '$expectedBranch'."
 }
 # Bind the private signed candidate to the exact source SHA already approved in CI.
-# The builder does not query GitHub: the owner must independently verify that
-# ExpectedCiHeadSha has a completed/success run before starting the build.
+# The builder does not query GitHub: owner verifies completed/success externally.
 $actualHeadSha = (& git -C $repoRoot rev-parse HEAD 2>$null | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $actualHeadSha -notmatch '^[a-fA-F0-9]{40}
+if ($LASTEXITCODE -ne 0 -or $actualHeadSha -notmatch '^[a-fA-F0-9]{40}$' -or $actualHeadSha -ne $ExpectedCiHeadSha.ToLowerInvariant()) {
+    throw "Build finale bloccata: HEAD locale non corrisponde a ExpectedCiHeadSha approvato."
+}
+$dirty = (& git -C $repoRoot status --porcelain 2>$null | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $dirty) {
     throw "Build finale bloccata: working tree non pulita. Nessun file modificato dal builder."
 }
