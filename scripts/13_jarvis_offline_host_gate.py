@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PURE_PYTHON = (
     "akai-remote-tests/test_visual_stop_source.py",
     "akai-remote-tests/test_android_jni_ci_contract.py",
+    "akai-remote-tests/test_backup_memory_transport_policy.py",
     "akai-remote-tests/test_visual_projection_request_serialization.py",
     "akai-remote-tests/test_visual_projection_idle_surface.py",
     "akai-remote-tests/test_free_italian_voice_source.py",
