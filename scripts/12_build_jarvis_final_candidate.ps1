@@ -365,7 +365,7 @@ if (Test-Path $releaseApk) {
             if (-not $entryNames.Add($entry.FullName)) {
                 throw "APK candidato rifiutato: entry ZIP duplicata $($entry.FullName)"
             }
-            if ($entry.FullName -match '\.(p12|jks|key|der|crt|pass)
+            if ($entry.FullName -match '\\.(p12|jks|key|der|crt|pass)\\z' -or $entry.FullName -match 'server_keystore') {
                 $foundForbidden += $entry.FullName
             }
         }
