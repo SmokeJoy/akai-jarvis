@@ -197,7 +197,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $compiledResZip)) {
 
 # 4. Linking manifest e risorse
 Write-Host "[4/8] Linking manifest e risorse con aapt2..."
-$linkArgs = @('link', '-I', $platformJar, '--manifest', $manifestPath, '-o', $baseApk, '--java', $genDir, $compiledResZip, '--auto-add-overlay', '--min-sdk-version', '21', '--target-sdk-version', '28', '--version-code', $VersionCode, '--version-name', $VersionName)
+$linkArgs = @('link', '-I', $platformJar, '--manifest', $manifestPath, '-o', $baseApk, '--java', $genDir, $compiledResZip, '--auto-add-overlay', '--min-sdk-version', '21', '--target-sdk-version', '28', '--version-code', $VersionCode, '--version-name', $VersionName, '--replace-version')
 if ($BuildProfile -eq 'Diagnostic') {
     # AAPT2 injects debuggable=true in the compiled AndroidManifest, NOT tracked source.
     $linkArgs += '--debug-mode'
