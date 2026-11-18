@@ -29,6 +29,13 @@ if ($BuildProfile -eq 'Diagnostic' -and $VersionCode -ne 4) {
 if ($BuildProfile -eq 'Release' -and $VersionCode -lt 5) {
     throw 'Profilo Release richiede versionCode>=5 dopo il collaudo v4.'
 }
+# Release commands must never silently inherit the Diagnostic default versionName.
+if ($BuildProfile -eq 'Release' -and $VersionName -match '(?i)(diagnostic|debug)') {
+    throw 'RELEASE FAIL-CLOSED: VersionName ancora diagnostico. Specificare esplicitamente il nome finale.'
+}
+if ($BuildProfile -eq 'Diagnostic' -and $VersionName -notmatch '(?i)diagnostic') {
+    throw 'DIAGNOSTIC FAIL-CLOSED: VersionName deve identificare il pacchetto come diagnostico.'
+}
 # Sorgenti finali Git puliti e firmati dal proprietario: nessun deploy.
 $expectedBranch = 'feat/jarvis-final-agent-ota-foundation-20261117'
 $repoRoot = (Split-Path -Parent $PSScriptRoot)
