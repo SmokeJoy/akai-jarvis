@@ -9,7 +9,6 @@ replace the CI Android APK/ARMv7 build and mocked rollback suite.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import subprocess
@@ -101,10 +100,9 @@ def assert_release_contract() -> None:
         "RELEASE FAIL-CLOSED", "ExpectedCiHeadSha",
         "JARVIS_SIGNING_STOREPASS", "JARVIS_SIGNING_KEYPASS",
         "FIRMA DIVERSA DA TV", "apksigner",
-        "buildProfile = $BuildProfile", "debbugable",
+        "buildProfile = $BuildProfile",
     )
-    # Spelling 'debuggable' is verified separately from the file's content.
-    for needle in required_builder[:-1]:
+    for needle in required_builder:
         if needle not in builder:
             raise AssertionError(f"Builder safety contract missing: {needle}")
     if not re.search(r"debuggable\s*=\s*\(\$BuildProfile\s+-eq\s+'Diagnostic'\)", builder):
@@ -139,9 +137,10 @@ def check_required_tools() -> tuple[str, str, str]:
 
 def run_checked(label: str, command: list[str], timeout: int = 180) -> None:
     # Hard whitelist to prevent accidental use of connected-TV tools.
-    permitted = {"python", "python3", "python.exe", "node", "node.exe", "java", "java.exe",
-                 "javac", "javac.exe"}
-    if Path(command[0]).name.lower() not in permitted:
+    executable = Path(command[0]).name.lower()
+    permitted = {"python", "python3", "python.exe", "python3.exe",
+                 "node", "node.exe", "java", "java.exe", "javac", "javac.exe"}
+    if executable not in permitted and not re.fullmatch(r"python3?\.\d+(?:\.exe)?", executable):
         raise RuntimeError(f"Unexpected executable in offline gate: {command[0]}")
     print(f"[RUN] {label}", flush=True)
     try:
