@@ -2,13 +2,14 @@
 
 > Canonical developer instructions for all agents, coding assistants, GitHub automations and reviewers contributing to this branch. Explicit owner decisions take precedence over historical PR comments.
 
-## HARD RULE — OWNER V5 COMPLETE RELEASE (18 Nov 2026, supersedes optional OTA)
+## HARD RULE — V4 COMPLETE FIRST, V5 DEBUG-OFF ONLY (OWNER LATEST, 18 NOV 2026)
 
-**The owner requires all four acceptance gates before any v5 Release is called READY or installed:** (1) robust multipass app navigation and verified goals within actual Android/DRM boundaries, (2) working owner-confirmed OTA from the TV with PC off, (3) measured on-device AKAI RAM/CPU/stability/performance without regressions, (4) original-signer v5 non-debug APK with validated APK/SQLite/WAL/TLS backup and real recoverability plan. The canonical evidence checklist is `docs/JARVIS_V5_MANDATORY_RELEASE_GATES.md`.
+**This is the owner's most recent release decision and OVERRIDES all older v5-first / optional OTA wording.** All four features are mandatory and implemented **already in v4 Diagnostic**: (1) robust multi-app navigation and validated goals within lawful Android/DRM limits, (2) owner-confirmed OTA usable on TV with PC powered off, (3) measured real-AKAI CPU/RAM/stability and no major regressions, (4) original-key-signed diagnostic APK plus proven APK/SQLite/WAL/TLS backup and device recovery path. Full binding acceptance plan: `docs/JARVIS_V4_COMPLETE_ACCEPTANCE.md`.
 
-- **OTA is MANDATORY for v5**, although never silent or automatic installation. Historical optional-OTA text applies only to exploratory v4 development and is superseded for v5. The v4 Diagnostic remains the owner-led test stage; CI success alone does not prove any of these hardware gates.
-- Navigation must handle apps through authorized Android APIs, Accessibility, D-pad and consensual cloud vision; do not promise DRM bypass or universal control of protected screens. Unsupported capabilities must be reported as test limitations, not fabricated PASS.
-- If any required v5 evidence is incomplete, report `NO_GO_V5_RELEASE`. Never merge, install, or deploy on the TV without distinct owner approval; never upload private signing keys. Inference stays strictly DeepSeek/Kimi cloud only.
+- Do not call v4 complete until these four gates have actually passed, including real hardware and OTA tests; before owner-authorized v4 device test, status is `V4_INCOMPLETE`. GitHub CI passing or an APK built with a temporary key is NOT equivalent.
+- **The v5 adds NO new functions**: after v4 has been accepted on the TV, build the SAME audited application source with `BuildProfile=Release`, `android:debuggable=false` and only necessary monotonically increasing `versionCode`/`versionName` metadata. Keep the original signer; do not change AI, UI, OTA, memory, protocol or recovery logic while making v5. Verify the functional diff is empty.
+- OTA is required **already in v4**; it remains owner-confirmed (no silent installs), authenticated and independently usable on TV with PC off. Never bypass protected DRM content to meet a navigation target; clearly label unsupported cases.
+- If any v4 gate is missing, report `V4_INCOMPLETE` rather than moving the feature to v5. No automatic TV changes, no signing secrets on public GitHub, and no use of non-DeepSeek/Kimi LLM inference.
 
 ## HARD RULE — OWNER FINAL QUALITY GATE (18 Nov 2026)
 
@@ -49,7 +50,7 @@
 - The real TV is not a CI runner. Report host/mock tests, Android APK build, remote API mock and real hardware evidence separately.
 - Update memory and issue only with verified substantive results, SHA, CI state and remaining blocker; avoid reviews in comment loops.
 - No promises of fully autonomous vision until visual fallback feeds the planner and goal verifier with verified evidence; MediaProjection cannot reliably capture DRM-protected apps.
-- For v5 Release, OTA is **mandatory** and must require owner confirmation, signed manifest, exact APK SHA/signing cert checks, an on-TV check at PC off, and a verified recovery path. A GitHub repository being public does not replace authenticated release checks. See `docs/JARVIS_V5_MANDATORY_RELEASE_GATES.md`.
+- **Already in v4 Diagnostic**, OTA must work on-TV with PC off, require owner confirmation, signed/authenticated manifest, exact real APK SHA/signing cert checks and a verified recovery path. Its implementation must be verified before accepting v4. The v5 only disables debug and increments release metadata. See `docs/JARVIS_V4_COMPLETE_ACCEPTANCE.md`.
 
 ## MULTI-FRAME AUTONOMY + SELF-IMPROVEMENT (active implementation)
 
@@ -92,6 +93,7 @@
 
 - **MANDATORY two-pass final review and adversarial bug/optimization hunt:** `docs/JARVIS_MANDATORY_SECOND_PASS_REVIEW.md`.
 
+- **LATEST mandatory full-v4 acceptance gates:** `docs/JARVIS_V4_COMPLETE_ACCEPTANCE.md`
 - Final-release contract: `docs/JARVIS_FINAL_AGENT_OTA_RELEASE_CONTRACT.md`
 - **Current P0 pre-install audit / NO-GO gates:** `docs/JARVIS_FINAL_PREINSTALL_AUDIT_20261118.md` (historic fail-open package/version bug was patched in installer, but full mock/Android CI still NOT_RUN; Android9 rollback remains unproven). Additional source review: `docs/JARVIS_PREHOME_HARDENING_SECOND_PASS_20261118.md`. Do not request install until owner-approved conservative recovery, APK signed original and strict metadata checks are actually demonstrated.
 - Owner-led single-install handoff (signed APK, backups, TV test matrix): `docs/JARVIS_FINAL_OWNER_HANDOFF.md`
