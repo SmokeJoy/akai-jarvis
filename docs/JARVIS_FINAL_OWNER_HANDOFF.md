@@ -3,11 +3,11 @@
 **Stato:** procedura di HANDOFF, non autorizzazione all'installazione.  
 **Hardware:** AKAI AKTV5037N, Android 9/API28, ARMv7; installato A2 Preview `it.akai.customremote` vCode 3.  
 **Sorgente finale:** PR #18, branch `feat/jarvis-final-agent-ota-foundation-20261117`, stacked su PR #16.  
-**Obiettivo:** un solo APK finale vCode >=4, dati conservati, possibilità di recupero. Niente update intermedi o OTA automatico.
+**Obiettivo aggiornato 18/11:** due APK con lo stesso firmatario originale: v4 Diagnostic debuggable per collaudo owner-led; soltanto dopo test e nuova autorizzazione v5+ Release non-debuggable. Dati e possibilità di recupero da preservare; niente OTA automatico.
 
 ## 1. Verifiche da completare in GitHub PRIMA di costruire l'APK destinato alla TV
 
-- [ ] HEAD della PR #18 esatto e **tutta** la CI GitHub Actions `completed/success`: Java, SQLite, policy DeepSeek/Kimi, visione, privacy, Web Remote, TTS FreeTTS, JNI ARMv7, APK Android 9, mock rollback.
+- [ ] HEAD della PR #18 esatto e **tutta** la CI GitHub Actions `completed/success`: Java, SQLite, policy DeepSeek/Kimi, visione, privacy, Web Remote, TTS FreeTTS, JNI ARMv7, APK Android 9, mock rollback. **Nota runner attuale:** vedi `docs/JARVIS_CI_RUNNER_BLOCKER_20261118.md`. Il gate host locale è soltanto parziale e non sostituisce questa prova.
 - [ ] Verificare che PR #16 e tutti i cambiamenti richiesti da PR #18 siano compresi nel checkout finale. Non compilare da un branch o un worktree parziale.
 - [ ] Assenza di segreti nel repository; non utilizzare il pacchetto CI `app-ci-test-nondistributable.apk` per aggiornare la TV: è firmato solo per test.
 - [ ] Confermare che l'APK originale A2 vCode3 e il suo certificato di firma siano preservati in un backup privato esterno al repository, insieme a procedura di recupero/test dei dati SQLite. Nessun reset e nessun `pm clear`.
@@ -21,10 +21,10 @@ Il proprietario desidera **provare JARVIS sulla TV con un APK debuggable** prima
 - **Seconda fase, v5 Release dopo test utente:** build `-BuildProfile Release -VersionCode 5 -VersionName '1.3.0-final'`, con `android:debuggable=false` verificato nel manifest compilato; stessa firma. Se la versione installata supera v4 per altri collaudi, assegnare a v5 un versionCode *superiore a quello realmente installato*; non ridurre versionCode.
 - Un APK debuggable può consentire `run-as` e il debugger Android, ma **non prova la possibilità di effettuare downgrade alla vecchia A2 v3 non debuggable**, né bypassa le restrizioni su dati e firma Android. La strategia di backup/recupero va verificata a parte. La fase v4 deve rimanere su rete domestica fidata con ADB autorizzato solo dal proprietario e non deve essere distribuita.
 - Entrambi i profili compilano senza eseguire ADB, installazioni o accesso a chiavi remote. Il debug è consentito *solo* al profilo Diagnostic; il profilo Release rifiuta vCode inferiore a 5 e qualsiasi output debuggable.
-- **Non autorizzare ancora l'installazione v4** fino a chiusura del gate `Test-PackageUpgradeGate` e dei test con metadati APK reali, controllo della disponibilità della firma originale e backup APK/SQLite/TLS verificato. Vedi `docs/JARVIS_FINAL_PREINSTALL_AUDIT_20261118.md`.
+- **Non autorizzare ancora l'installazione v4** finché non siano effettivamente eseguiti i test del gate `Test-PackageUpgradeGate` con metadati di APK reali, verificata la firma originale, risolto il blocco CI e preservato un backup APK/SQLite/TLS recuperabile. La correzione del codice del gate è già stata applicata; non chiamare la mancanza di prove un bug ancora aperto. Vedi `docs/JARVIS_FINAL_PREINSTALL_AUDIT_20261118.md`.
 - La PR #18 rimane Draft e il team non modifica la TV: il proprietario farà installazione e test dopo esplicita autorizzazione per la singola operazione.
 
-## 2. Creazione APK finale sul PC dell'owner — compilazione SENZA installazione
+## 2. Creazione APK v4 Diagnostic (o successiva v5 Release) sul PC dell'owner — SENZA installazione
 
 Il builder **non** modifica la TV e rifiuta una firma diversa da quella attesa dell'APK installato. Richiede inoltre `-ExpectedCiHeadSha`: il commit completo (40 caratteri) della **stessa HEAD** con CI GitHub Actions `completed/success`, controllata manualmente dall’owner. Se nel frattempo il branch avanza o il checkout non corrisponde, la compilazione viene bloccata. Il confronto locale dello SHA non certifica da solo lo stato della CI. Va usata **la stessa chiave di firma originaria**, conservata privatamente fuori dal repository, non un nuovo debug keystore.
 
