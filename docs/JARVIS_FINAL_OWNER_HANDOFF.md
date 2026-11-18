@@ -5,6 +5,17 @@
 **Sorgente finale:** PR #18, branch `feat/jarvis-final-agent-ota-foundation-20261117`, stacked su PR #16.  
 **Obiettivo aggiornato 18/11:** due APK con lo stesso firmatario originale: v4 Diagnostic debuggable per collaudo owner-led; soltanto dopo test e nuova autorizzazione v5+ Release non-debuggable. Dati e possibilità di recupero da preservare; niente OTA automatico.
 
+## Vincolo release v5 aggiornato dal proprietario (18/11/2026)
+
+**La v5 non può essere rilasciata limitandosi a ricompilare la v4 con debug disattivato.** Sono obbligatori e documentati in `docs/JARVIS_V5_MANDATORY_RELEASE_GATES.md`:
+
+- navigazione multipasso fra app con esiti verificati, STOP, apprendimento solo dopo successo; limiti Android/DRM esplicitati senza aggirarli;
+- OTA operativa dalla TV a PC spento con HTTPS, manifest autenticato, certificato e hash APK controllati e consenso PackageInstaller;
+- test prestazioni reali sulla AKAI per RAM, CPU, tempo di risposta, stabilità, consumo idle e regressioni Home/remote/tuner;
+- APK v5 originale firmato con lo stesso certificato, non-debuggable, package/version esatti, backup e **recuperabilità reale** di APK+SQLite/WAL+TLS verificate.
+
+Ogni gate privo di evidenza: **NO_GO_V5_RELEASE**. L'OTA precedentemente definita "opzionale" è diventata obbligatoria **solo per il rilascio v5**. La v4 Diagnostic rimane una prova distinta, da autorizzare separatamente; nulla autorizza un aggiornamento TV automatico.
+
 ## 1. Verifiche da completare in GitHub PRIMA di costruire l'APK destinato alla TV
 
 - [ ] HEAD della PR #18 esatto e **tutta** la CI GitHub Actions `completed/success`: Java, SQLite, policy DeepSeek/Kimi, visione, privacy, Web Remote, TTS FreeTTS, JNI ARMv7, APK Android 9, mock rollback. **Nota runner attuale:** vedi `docs/JARVIS_CI_RUNNER_BLOCKER_20261118.md`. Il gate host locale è soltanto parziale e non sostituisce questa prova.
