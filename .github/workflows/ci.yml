@@ -484,6 +484,7 @@ jobs:
 
       - name: 7. Explicit APK Contents Inspection and Verification (unzip -l)
         run: |
+          set -euo pipefail
           echo "=== Verifying internal contents of candidate CI APK ==="
           unzip -l build_ci/app-ci-test-nondistributable.apk > build_ci/apk_contents.txt
           cat build_ci/apk_contents.txt
@@ -494,13 +495,7 @@ jobs:
           grep "assets/www/index.html" build_ci/apk_contents.txt || (echo "FATAL: assets/www/index.html missing from APK!" && exit 1)
           grep "assets/www/app.js" build_ci/apk_contents.txt || (echo "FATAL: assets/www/app.js missing from APK!" && exit 1)
           grep "AndroidManifest.xml" build_ci/apk_contents.txt || (echo "FATAL: AndroidManifest.xml missing from APK!" && exit 1)
-          if unzip -Z1 build_ci/app-ci-test-nondistributable.apk | grep -Ei '(^|/)(server_keystore|ca_key)|\.(p12|jks|key|der|crt|pass)
-
-      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (35 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, ADB Root/Unroot, Watchdog HTTPS Down/SAN Mismatch Auto-Rollback, HTTP 426 LAN Regression, Provisional vs Approved OOB Trust, Read-Only verify-tls & Candidate TLS Forbidden Asset Negative Gate)"
-        shell: pwsh
-        run: |
-          ./akai-remote-tests/test_safe_install_mocked_adb.ps1
-; then
+          if unzip -Z1 build_ci/app-ci-test-nondistributable.apk | grep -Ei '(^|/)(server_keystore|ca_key)|\.(p12|jks|key|der|crt|pass)$'; then
             echo "NO-GO: APK contains TLS/private signing material; NOT equivalent to production package."
             exit 1
           fi
