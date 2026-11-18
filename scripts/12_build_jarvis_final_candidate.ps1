@@ -314,7 +314,7 @@ if (Test-Path $releaseApk) {
     $sha256 = (Get-FileHash -Path $releaseApk -Algorithm SHA256).Hash
     $sizeKb = [Math]::Round((Get-Item $releaseApk).Length / 1024, 2)
     Write-Host "`n========================================================" -ForegroundColor Green
-    Write-Host " JARVIS $BuildProfile v$VersionCode: firma generata, VERIFICA IN CORSO (NON INSTALLATO)" -ForegroundColor Yellow
+    Write-Host " JARVIS $BuildProfile v${VersionCode}: firma generata, VERIFICA IN CORSO (NON INSTALLATO)" -ForegroundColor Yellow
     Write-Host "========================================================" -ForegroundColor Green
     Write-Host " Release APK : $releaseApk"
     Write-Host " Profilo     : $BuildProfile"
