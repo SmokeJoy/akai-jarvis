@@ -312,6 +312,15 @@ if (Test-Path $releaseApk) {
             throw 'Build finale bloccata: APK debuggable non consentito.'
         }
 
+    # Alignment must be verified on the final signed APK, not just assumed
+    # from the zipalign invocation on the unsigned intermediate artifact.
+    Write-Host "`nVerifica allineamento APK firmato:"
+    $alignmentResult = & $zipalign -c -p 4 $releaseApk 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release gate blocked: signed APK zipalign verification failed: $alignmentResult"
+    }
+    Write-Host "      [PASS] APK finale allineato (zipalign -c -p 4)." -ForegroundColor Green
+
     Write-Host "`nVerifica firma apksigner:"
     $verifyArgs = @("-jar", $apksignerJar, "verify", "--print-certs", $releaseApk)
     $verification = & $java $verifyArgs 2>&1
