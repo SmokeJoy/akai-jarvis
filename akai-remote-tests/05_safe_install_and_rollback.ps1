@@ -2020,6 +2020,9 @@ switch ($Action) {
                 "UNKNOWN / INACCESSIBLE (build release non-debuggable o privilegi limitati)"
             }
             Write-Host "      Accesso run-as  : $dbAccessStatus"
+            if ($dbAccessStatus -notmatch '^DISPONIBILE') {
+                Write-Host "      [NO-GO DATI] run-as non consente accesso al DB: questo inventario NON dimostra un backup SQLite/WAL recuperabile. Non installare." -ForegroundColor Red
+            }
         } else {
             Write-Host "      Stato pacchetto : NON INSTALLATO (Clean-Start Greenfield applicabile)" -ForegroundColor Yellow
         }
@@ -2051,6 +2054,11 @@ switch ($Action) {
         $platform = (& $adb -s $TargetAdb shell "getprop ro.board.platform" 2>&1 | Out-String).Trim()
         Write-Host "      Modello / Piattaforma : $(if ($model) { "$model ($platform)" } else { "NON RILEVABILE" })"
         Write-Host "      Build Fingerprint     : $(if ($buildFp) { $buildFp } else { "NON RILEVABILE" })"
+        $buildType = (& $adb -s $TargetAdb shell "getprop ro.build.type" 2>&1 | Out-String).Trim()
+        $roDebuggable = (& $adb -s $TargetAdb shell "getprop ro.debuggable" 2>&1 | Out-String).Trim()
+        Write-Host "      Android build type    : $(if ($buildType) { $buildType } else { "NON RILEVABILE" })"
+        Write-Host "      ro.debuggable         : $(if ($roDebuggable) { $roDebuggable } else { "NON RILEVABILE" })"
+        Write-Host "      Recupero downgrade    : NON DIMOSTRATO per A2 v3 non-debuggable; adb install -d NON e' un piano di ripristino garantito." -ForegroundColor Yellow
 
         $idRes = (& $adb -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
         Write-Host "      Contesto Shell (id)   : $(if ($idRes) { $idRes } else { "NON RILEVABILE" })"
@@ -2086,7 +2094,7 @@ switch ($Action) {
         Write-Host "      | Storico Memoria AI / Comandi   | Reset: inizializzato ex novo alla prima richiesta     |"
         Write-Host "      | Preferenze Web UI              | Reset: ripristinate ai valori predefiniti             |"
         Write-Host "      +--------------------------------+-------------------------------------------------------+"
-        Write-Host "`nPreflight completato con successo. Nessuna modifica apportata alla TV." -ForegroundColor Green
+        Write-Host "`nInventario di sola lettura concluso. NON autorizza installazione, downgrade o dichiarazioni di backup recuperabile." -ForegroundColor Yellow
     }
 
     "status" {
