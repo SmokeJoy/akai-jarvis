@@ -6,8 +6,10 @@
 param(
     [ValidateRange(4, 999999)]
     [int]$VersionCode = 4,
+    [ValidateSet('Diagnostic', 'Release')]
+    [string]$BuildProfile = 'Diagnostic',
     [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9._-]{0,60}$')]
-    [string]$VersionName = '1.3.0-final-rc1',
+    [string]$VersionName = '1.3.0-diagnostic-rc1',
     # Exact 40-character HEAD of a completed/success CI run, supplied by owner.
     [Parameter(Mandatory=$true)]
     [ValidatePattern('^[a-fA-F0-9]{40}$')]
@@ -20,6 +22,13 @@ param(
     [string]$SigningAlias
 )
 $ErrorActionPreference = "Stop"
+# This branch builds a debug-capable owner-signed v4 first. Release is v5+ only.
+if ($BuildProfile -eq 'Diagnostic' -and $VersionCode -ne 4) {
+    throw 'Profilo Diagnostic richiede versionCode=4.'
+}
+if ($BuildProfile -eq 'Release' -and $VersionCode -lt 5) {
+    throw 'Profilo Release richiede versionCode>=5 dopo il collaudo v4.'
+}
 # Sorgenti finali Git puliti e firmati dal proprietario: nessun deploy.
 $expectedBranch = 'feat/jarvis-final-agent-ota-foundation-20261117'
 $repoRoot = (Split-Path -Parent $PSScriptRoot)
@@ -97,7 +106,8 @@ $alignedApk = Join-Path $buildDir "aligned.apk"
 $outputDir = Join-Path $buildDir "outputs\apk\debug"
 $finalApk = Join-Path $outputDir "app-ci-not-for-install.apk"
 $releaseOutputDir = Join-Path $buildDir "outputs\apk\release"
-$releaseApk = Join-Path $releaseOutputDir "app-release.apk"
+$apkFileName = if ($BuildProfile -eq 'Diagnostic') { 'jarvis-v4-owner-signed-diagnostic.apk' } else { 'app-release.apk' }
+$releaseApk = Join-Path $releaseOutputDir $apkFileName
 $releaseKeystore = $SigningKeystorePath
 
 # 1. Preparazione cartelle
@@ -180,7 +190,12 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $compiledResZip)) {
 
 # 4. Linking manifest e risorse
 Write-Host "[4/8] Linking manifest e risorse con aapt2..."
-& $aapt2 link -I $platformJar --manifest $manifestPath -o $baseApk --java $genDir $compiledResZip --auto-add-overlay --min-sdk-version 21 --target-sdk-version 28 --version-code $VersionCode --version-name $VersionName
+$linkArgs = @('link', '-I', $platformJar, '--manifest', $manifestPath, '-o', $baseApk, '--java', $genDir, $compiledResZip, '--auto-add-overlay', '--min-sdk-version', '21', '--target-sdk-version', '28', '--version-code', $VersionCode, '--version-name', $VersionName)
+if ($BuildProfile -eq 'Diagnostic') {
+    # AAPT2 injects debuggable=true in the compiled AndroidManifest, NOT tracked source.
+    $linkArgs += '--debug-mode'
+}
+& $aapt2 $linkArgs
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $baseApk)) {
     Write-Host "ERRORE durante aapt2 link." -ForegroundColor Red
     exit 1
@@ -287,10 +302,10 @@ if (Test-Path $releaseApk) {
     $sha256 = (Get-FileHash -Path $releaseApk -Algorithm SHA256).Hash
     $sizeKb = [Math]::Round((Get-Item $releaseApk).Length / 1024, 2)
     Write-Host "`n========================================================" -ForegroundColor Green
-    Write-Host " APK FINALE NON-DEBUGGABLE PREPARATO: NON INSTALLATO!" -ForegroundColor Green
+    Write-Host " JARVIS $BuildProfile v$VersionCode firmato: NON INSTALLATO!" -ForegroundColor Green
     Write-Host "========================================================" -ForegroundColor Green
     Write-Host " Release APK : $releaseApk"
-    Write-Host " Nessun APK di debug prodotto"
+    Write-Host " Profilo     : $BuildProfile"
     Write-Host " Peso        : $sizeKb KB" -ForegroundColor Yellow
     Write-Host " SHA-256     : $sha256" -ForegroundColor Yellow
 
@@ -303,14 +318,20 @@ if (Test-Path $releaseApk) {
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($xmlTree)) {
         throw 'Release gate blocked: aapt dump xmltree failed; cannot verify debuggable flag.'
     }
-    if ($xmlTree -match "android:debuggable\(0x0101000f\)=\(type 0x12\)0x0") {
-            Write-Host "      [PASS] android:debuggable = false (0x0) confermato nel manifest compilato!" -ForegroundColor Green
-        } elseif ($xmlTree -notmatch "android:debuggable") {
-            Write-Host "      [PASS] android:debuggable assente (default false garantito da Android OS)!" -ForegroundColor Green
-        } else {
-            Write-Host "      [FAIL] android:debuggable non conforme!" -ForegroundColor Red
-            throw 'Build finale bloccata: APK debuggable non consentito.'
+    $compiledDebugTrue = $xmlTree -match 'android:debuggable\(0x0101000f\)=\(type 0x12\)0x1(?:\s|$)'
+    $compiledDebugFalse = $xmlTree -match 'android:debuggable\(0x0101000f\)=\(type 0x12\)0x0(?:\s|$)'
+    $compiledDebugAbsent = $xmlTree -notmatch 'android:debuggable'
+    if ($BuildProfile -eq 'Diagnostic') {
+        if (-not $compiledDebugTrue) {
+            throw 'DIAGNOSTIC FAIL-CLOSED: android:debuggable=true non verificato nel manifest compilato.'
         }
+        Write-Host '      [PASS] APK diagnostico firmato, android:debuggable=true confermato.' -ForegroundColor Yellow
+    } else {
+        if (-not ($compiledDebugFalse -or $compiledDebugAbsent)) {
+            throw 'RELEASE FAIL-CLOSED: android:debuggable=false obbligatorio.'
+        }
+        Write-Host '      [PASS] APK finale NON debuggabile confermato.' -ForegroundColor Green
+    }
 
     # Alignment must be verified on the final signed APK, not just assumed
     # from the zipalign invocation on the unsigned intermediate artifact.
@@ -395,7 +416,10 @@ if (Test-Path $releaseApk) {
         versionCode = $VersionCode
         versionName = $VersionName
         sourceCommit = $sourceHead
-        apkFilename = 'app-release.apk'
+        apkFilename = $apkFileName
+        buildProfile = $BuildProfile
+        debuggable = ($BuildProfile -eq 'Diagnostic')
+        productionReady = ($BuildProfile -eq 'Release')
         apkSha256 = $sha256.ToLowerInvariant()
         signerSha256 = $actualSigner
         abi = 'armeabi-v7a'
