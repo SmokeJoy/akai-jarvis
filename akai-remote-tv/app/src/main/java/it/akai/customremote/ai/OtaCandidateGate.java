@@ -1,5 +1,6 @@
 package it.akai.customremote.ai;
 
+import java.io.InputStream;
 import java.net.URI;
 import java.security.MessageDigest;
 import java.security.PublicKey;
@@ -157,6 +158,43 @@ public final class OtaCandidateGate {
             verifier.update(rawManifest);
             return verifier.verify(detachedSignature);
         } catch (Exception error) {
+            return false;
+        }
+    }
+
+    /**
+     * Independently re-read a previously downloaded private APK file stream
+     * and verify the exact declared length and SHA-256 of its bytes.
+     * Callers own/close this stream and must enforce I/O timeouts externally.
+     * Bytes from this check must be the *same file* later inspected by Android
+     * PackageManager; the method does NOT authenticate the APK signer.
+     *
+     * Returns false on truncation, extra data, hash mismatch or read failure.
+     */
+    public static boolean verifyApkStream(InputStream apkBytes, long declaredBytes,
+                                          String declaredSha256) {
+        if (apkBytes == null || declaredBytes < 1024L ||
+                declaredBytes > MAX_APK_BYTES || !validSha256(declaredSha256)) {
+            return false;
+        }
+        try {
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[16 * 1024];
+            long total = 0;
+            int consecutiveEmptyReads = 0;
+            int n;
+            while ((n = apkBytes.read(buffer)) != -1) {
+                if (n == 0) {
+                    if (++consecutiveEmptyReads >= 3) return false;
+                    continue;
+                }
+                consecutiveEmptyReads = 0;
+                total += n;
+                if (total > declaredBytes) return false;
+                sha256.update(buffer, 0, n);
+            }
+            return total == declaredBytes && digestMatches(sha256.digest(), declaredSha256);
+        } catch (Exception readFailure) {
             return false;
         }
     }
