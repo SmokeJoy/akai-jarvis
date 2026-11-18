@@ -40,9 +40,11 @@ L'output è nella cartella privata `%LOCALAPPDATA%\AkaiJarvisBuilds\FINAL-v4-*\o
 
 - [ ] Backup originale A2 e dati verificati su un supporto privato. Mai cancellare SQLite. Accertarsi che il backup sia leggibile e recuperabile.
 - [ ] Confermare indirizzo LAN, certificato HTTPS Web Remote e accessibilità; prendere nota dello stato prima dell'aggiornamento. Nessuna modifica a Home LTvLauncher.
+- [ ] Usare HTTPS e fingerprint Root CA confermato fuori banda per pairing e credenziali. Il codice mantiene endpoint legacy PIN/comandi su HTTP 8088 per compatibilità: la LAN privata da sola **non cifra** questi dati. Non utilizzare le rotte legacy HTTP quando è richiesto un pairing riservato; nessun inoltro porte WAN.
 - [ ] Verificare stessa firma APK, versione superiore e spazio eMMC libero. Se la firma non coincide, STOP.
 - [ ] Autorizzazione **esplicita e visibile** all'installazione di questo singolo APK. Non eseguire installazioni automatiche o da automazioni.
-- [ ] In caso di regressione, interrompere il test e applicare la procedura di recupero approvata. Android 9 **non** garantisce downgrade installabile né rollback automatico del database: non promettere ripristino senza test.
+- [ ] **Gate recupero reale (BLOCCANTE):** lo script storico `akai-remote-tests/05_safe_install_and_rollback.ps1` usa `adb install -r -d` per tornare alla versione precedente. Android documenta `-d` come consentito per app debuggable; su build Android `userdebug` può esserci eccezione, ma va verificata sulla AKAI e non può essere inferita dalla CI mock. Prima di installare acquisire *solo in lettura e con autorizzazione owner* `adb shell getprop ro.debuggable`, `adb shell getprop ro.build.type` e stato del pacchetto, più hash dell'APK A2 originale. Se non è dimostrata una strada di recupero conservativa per APK+SQLite+TLS, **NO-GO**: niente install, niente disinstallazione, niente `pm clear`. L'alternativa è un APK di ripristino A2 firmato con la stessa chiave e `versionCode` maggiore del candidato (da costruire e validare separatamente), non un downgrade dato per certo.
+- [ ] In caso di regressione, interrompere il test e applicare soltanto una procedura di recupero già dimostrata e approvata. Lo script non rende il rollback atomico per magia: la simulazione non prova Android9 OEM, permessi `run-as/su/root`, né la disponibilità delle chiavi/private backup.
 
 ## 4. Test sul televisore affidati al proprietario
 
