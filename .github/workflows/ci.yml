@@ -94,6 +94,8 @@ jobs:
           }
           $src = Get-Content $path -Raw
           if ($src -notmatch 'VersionCode = 4') { throw 'Diagnostic vCode4 default required' }
+          if (-not $src.Contains('$VersionName -match ''(?i)(diagnostic|debug)''')) { throw 'Release must refuse diagnostic versionName' }
+          if (-not $src.Contains('$VersionName -notmatch ''(?i)diagnostic''')) { throw 'Diagnostic must keep explicit versionName tag' }
           if ($src -notmatch 'ValidateSet\(''Diagnostic'', ''Release''\)') { throw 'Explicit build profiles missing' }
           if ($src -notmatch '\$BuildProfile -eq ''Diagnostic''' -or $src -notmatch '\$VersionCode -ne 4') { throw 'Diagnostic v4 version gate missing' }
           if ($src -notmatch '\$BuildProfile -eq ''Release''' -or $src -notmatch '\$VersionCode -lt 5') { throw 'Non-debuggable v5+ version gate missing' }
