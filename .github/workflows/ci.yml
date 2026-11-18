@@ -233,14 +233,17 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaArchiveIdentityGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSignedReleaseManifest.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaPinnedReleaseKey.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaHttpsTransport.java \
             akai-remote-tests/OtaCandidateGateTest.java \
             akai-remote-tests/OtaArchiveIdentityGateTest.java \
             akai-remote-tests/OtaSignedReleaseManifestTest.java \
-            akai-remote-tests/OtaPinnedReleaseKeyTest.java
+            akai-remote-tests/OtaPinnedReleaseKeyTest.java \
+            akai-remote-tests/OtaHttpsTransportTest.java
           java -cp test_ota it.akai.customremote.OtaCandidateGateTest
           java -cp test_ota it.akai.customremote.OtaArchiveIdentityGateTest
           java -cp test_ota it.akai.customremote.OtaSignedReleaseManifestTest
           java -cp test_ota it.akai.customremote.OtaPinnedReleaseKeyTest
+          java -cp test_ota it.akai.customremote.OtaHttpsTransportTest
           echo "Archive policy and manifest crypto gates passed; OTA download, owner UI and Android real-device installer are NOT verified."
 
       - name: 4c. DeepSeek/Kimi-only provider guard (no local AI models)
