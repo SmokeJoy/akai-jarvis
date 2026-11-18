@@ -135,6 +135,9 @@ jobs:
           }
           Write-Host 'Final v4 source-only build recipe parses and is gated; no APK/device built in this step.'
 
+      - name: 1d. Android JNI Bionic and secret-free packaging source regressions
+        run: python3 akai-remote-tests/test_android_jni_ci_contract.py
+
       - name: 2. Secrets Leak Detection
         run: |
           echo "=== Scanning for leaked private keys or hardcoded API credentials ==="
