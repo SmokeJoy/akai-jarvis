@@ -2,6 +2,14 @@
 
 > Canonical developer instructions for all agents, coding assistants, GitHub automations and reviewers contributing to this branch. Explicit owner decisions take precedence over historical PR comments.
 
+## HARD RULE — OWNER V5 COMPLETE RELEASE (18 Nov 2026, supersedes optional OTA)
+
+**The owner requires all four acceptance gates before any v5 Release is called READY or installed:** (1) robust multipass app navigation and verified goals within actual Android/DRM boundaries, (2) working owner-confirmed OTA from the TV with PC off, (3) measured on-device AKAI RAM/CPU/stability/performance without regressions, (4) original-signer v5 non-debug APK with validated APK/SQLite/WAL/TLS backup and real recoverability plan. The canonical evidence checklist is `docs/JARVIS_V5_MANDATORY_RELEASE_GATES.md`.
+
+- **OTA is MANDATORY for v5**, although never silent or automatic installation. Historical optional-OTA text applies only to exploratory v4 development and is superseded for v5. The v4 Diagnostic remains the owner-led test stage; CI success alone does not prove any of these hardware gates.
+- Navigation must handle apps through authorized Android APIs, Accessibility, D-pad and consensual cloud vision; do not promise DRM bypass or universal control of protected screens. Unsupported capabilities must be reported as test limitations, not fabricated PASS.
+- If any required v5 evidence is incomplete, report `NO_GO_V5_RELEASE`. Never merge, install, or deploy on the TV without distinct owner approval; never upload private signing keys. Inference stays strictly DeepSeek/Kimi cloud only.
+
 ## HARD RULE — OWNER FINAL QUALITY GATE (18 Nov 2026)
 
 **PERMANENT AND BLOCKING. Before stating a JARVIS change is DONE, READY, FIXED, SAFE or RELEASE-APPROVED, apply the full mandatory two-pass review protocol:** `docs/JARVIS_MANDATORY_SECOND_PASS_REVIEW.md`.
@@ -41,7 +49,7 @@
 - The real TV is not a CI runner. Report host/mock tests, Android APK build, remote API mock and real hardware evidence separately.
 - Update memory and issue only with verified substantive results, SHA, CI state and remaining blocker; avoid reviews in comment loops.
 - No promises of fully autonomous vision until visual fallback feeds the planner and goal verifier with verified evidence; MediaProjection cannot reliably capture DRM-protected apps.
-- Release OTA is optional and must require owner confirmation, signed manifest, exact APK SHA/signing cert checks and a verified rollback path; private GitHub is not a secret-free OTA endpoint.
+- For v5 Release, OTA is **mandatory** and must require owner confirmation, signed manifest, exact APK SHA/signing cert checks, an on-TV check at PC off, and a verified recovery path. A GitHub repository being public does not replace authenticated release checks. See `docs/JARVIS_V5_MANDATORY_RELEASE_GATES.md`.
 
 ## MULTI-FRAME AUTONOMY + SELF-IMPROVEMENT (active implementation)
 
