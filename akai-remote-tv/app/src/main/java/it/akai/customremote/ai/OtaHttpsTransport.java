@@ -113,9 +113,14 @@ public final class OtaHttpsTransport {
      * perform OtaAndroidArchiveInspector against the returned file before any
      * separately approved PackageInstaller action.
      */
-    public static File stageVerifiedApk(OtaCandidateGate.Candidate signedCandidate,
+    public static File stageVerifiedApk(OtaSignedReleaseManifest.Result verifiedManifest,
                                         Set<String> trustedHosts,
                                         File privateFilesDir) throws IOException {
+        // Cannot accept a caller-constructed Candidate: only an already
+        // RSA-verified manifest Result may authorize staging this URL.
+        if (verifiedManifest == null || !verifiedManifest.verified())
+            throw new IOException("UNVERIFIED_MANIFEST");
+        OtaCandidateGate.Candidate signedCandidate = verifiedManifest.candidate;
         if (signedCandidate == null || privateFilesDir == null ||
                 !safeHttpsEndpoint(signedCandidate.downloadUrl, trustedHosts, ".apk") ||
                 signedCandidate.sizeBytes < 1024 ||
