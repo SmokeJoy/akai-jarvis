@@ -64,6 +64,7 @@
 ## CURRENT ENTRYPOINTS
 
 - Final-release contract: `docs/JARVIS_FINAL_AGENT_OTA_RELEASE_CONTRACT.md`
+- **Current P0 pre-install audit / NO-GO gates:** `docs/JARVIS_FINAL_PREINSTALL_AUDIT_20261118.md` (rollback Android9 + fail-open candidate package/version check). Do not request install until owner-approved conservative recovery and strict metadata validation are demonstrated.
 - Owner-led single-install handoff (signed APK, backups, TV test matrix): `docs/JARVIS_FINAL_OWNER_HANDOFF.md`
 - Owner-local no-TV build recipe: `scripts/12_build_jarvis_final_candidate.ps1` (versionCode 4+, same TV signing cert; no debug/CI APK).
 - GitHub tracking issue: #17
