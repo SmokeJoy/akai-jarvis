@@ -131,7 +131,7 @@ Write-Host "[2/8] Preparazione driver JNI ARMv7..."
 $soTarget = Join-Path $libDir "libakai_uinput.so"
 if (Test-Path $clang) {
     Write-Host "      NDK rilevato: compilo driver da sorgente..."
-    & cmd.exe /c "`"$clang`" -shared -fPIC -O2 -llog `"$jniSrc`" -o `"$soTarget`""
+    & cmd.exe /c "`"$clang`" -shared -fPIC -O2 `"$jniSrc`" -llog -o `"$soTarget`""
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $soTarget) -or (Get-Item $soTarget).Length -lt 1024) {
         throw 'Driver JNI: compilazione NDK fallita; non uso un fallback implicito a compilazione fallita.'
     }
