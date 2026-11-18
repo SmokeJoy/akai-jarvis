@@ -95,6 +95,8 @@ def assert_release_contract() -> None:
         "[string]$BuildProfile", "[int]$VersionCode = 4",
         "$BuildProfile -eq 'Diagnostic'", "$VersionCode -ne 4",
         "$BuildProfile -eq 'Release'", "$VersionCode -lt 5",
+        "$VersionName -match '(?i)(diagnostic|debug)'",
+        "$VersionName -notmatch '(?i)diagnostic'",
         "$linkArgs += '--debug-mode'", "$compiledDebugTrue",
         "$compiledDebugFalse", "DIAGNOSTIC FAIL-CLOSED",
         "RELEASE FAIL-CLOSED", "ExpectedCiHeadSha",
