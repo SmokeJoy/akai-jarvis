@@ -102,6 +102,17 @@ jobs:
           if ($src -notmatch 'GetEntry\(\$required\)' -or $src -notmatch '\$requiredEntry\.Length -le 0') { throw 'Mandatory APK entry must exist and be nonempty' }
           if ($src -notmatch '\$entryNames\.Add\(\$entry\.FullName\)') { throw 'Duplicate ZIP entry rejection missing' }
           if ($src -notmatch 'finally\s*\{\s*\$zipTest\.Dispose\(\)') { throw 'ZIP handle must close even when a gate fails' }
+          # Execute the same PowerShell regex used by the APK ZIP security gate.
+          # A doubled backslash in a single-quoted PowerShell regex fails to match '.key'.
+          $forbiddenExtension = [regex]::Match($src, [regex]::Escape('$entry.FullName') + "\s+-match\s+'([^']*p12[^']*)'")
+          if (-not $forbiddenExtension.Success) { throw 'APK forbidden-extension regex missing' }
+          $extensionPattern = $forbiddenExtension.Groups[1].Value
+          foreach ($filename in @('assets/private.key', 'assets/secret.jks', 'assets/cert.p12', 'assets/ca.crt', 'assets/tls.der', 'assets/password.pass')) {
+            if ($filename -notmatch $extensionPattern) { throw "Private APK material was not rejected: $filename" }
+          }
+          foreach ($filename in @('assets/www/index.html', 'assets/www/app.js', 'assets/public.svg', 'assets/certificate.crt.txt')) {
+            if ($filename -match $extensionPattern) { throw "Benign APK asset falsely rejected: $filename" }
+          }
           Write-Host 'Final v4 source-only build recipe parses and is gated; no APK/device built in this step.'
 
       - name: 2. Secrets Leak Detection
