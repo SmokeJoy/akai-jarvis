@@ -48,6 +48,22 @@ L'output Diagnostic v4 è nella cartella privata `%LOCALAPPDATA%\AkaiJarvisBuild
 
 **Limite:** né GitHub né questa procedura possiedono la chiave di firma dell'owner. Se manca la chiave originale, il rilascio come aggiornamento in-place è BLOCCATO; non creare una nuova firma e non disinstallare A2 per aggirare l'errore.
 
+## Prima operazione quando il proprietario torna a casa: SOLO INVENTARIO (NO INSTALL)
+
+Da un PowerShell aperto nella cartella del repository sul PC già autorizzato alla TV, **solo dopo esplicito assenso del proprietario a collegare ADB per questa diagnostica**:
+
+```powershell
+.\akai-remote-tests\05_safe_install_and_rollback.ps1 -Action preflight -TargetTv "<IP_EFFETTIVO_TV_IN_LAN>"
+```
+
+**Non aggiungere** `-AllowHardwareExecution`, `-Action install`, `-Action backup`, `-GreenfieldStart`, `adb root`, `adb uninstall`, `pm clear` o flash. Il preflight collega ADB in lettura, raccoglie informazioni di sistema, prova a copiare temporaneamente l'APK installato sul PC per controllarne il certificato, legge `ro.build.type`/`ro.debuggable`, stato `run-as`, memoria disponibile e salvaguardia Home. Non modifica firmware, dati Android o launcher.
+
+Se `run-as` è `UNKNOWN / INACCESSIBLE`, oppure APK/firma/DB/TLS non sono recuperabili, **NO-GO installazione**: anche il profilo diagnostico v4 debuggable non garantisce downgrade alla vecchia A2 v3 non-debuggable. L'esito `Inventario di sola lettura concluso` NON significa `APK v4 installabile`.
+
+Il preflight può mostrare indirizzo/IP TV, firma pubblica e identificativi tecnici. Per assistenza condividere esclusivamente l'output **oscurando** PIN, token, API key, percorsi personali e altri dati privati; non condividere keystore privato o password. Prima dell'install, verificare separatamente CI/host test su SHA esatta, originale keystore firma, APK owner-signed verificato e recovery reale.
+
+**Nota CI:** la pipeline che non assegna un runner resta `CI_BLOCKED_NOT_EXECUTED`, mai `PASS`; vedi `docs/JARVIS_CI_RUNNER_BLOCKER_20261118.md`. Finché blocca i test, il codice non è collaudato per il rilascio e non esiste un APK v4 owner-signed già pronto.
+
 ## 3. Preparazione backup e consenso sul televisore (solo quando il proprietario decide di procedere)
 
 - [ ] Backup originale A2 e dati verificati su un supporto privato. Mai cancellare SQLite. Accertarsi che il backup sia leggibile e recuperabile.
