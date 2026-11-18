@@ -51,6 +51,35 @@ public final class OtaAndroidArchiveInspector {
         }
     }
 
+    /** Trusted installed package identity from Android, NEVER from OTA JSON/HTML. */
+    public static final class InstalledIdentity {
+        public final long versionCode;
+        public final String signerSha256;
+
+        private InstalledIdentity(long versionCode, String signerSha256) {
+            this.versionCode = versionCode;
+            this.signerSha256 = signerSha256;
+        }
+    }
+
+    public static InstalledIdentity readInstalledIdentity(Context context) {
+        if (context == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.P)
+            return null;
+        try {
+            PackageInfo installed = context.getPackageManager().getPackageInfo(
+                    OtaCandidateGate.PACKAGE, PackageManager.GET_SIGNING_CERTIFICATES);
+            if (installed == null || installed.getLongVersionCode() < 1 ||
+                    installed.getLongVersionCode() > Integer.MAX_VALUE)
+                return null;
+            String signer = signerSha256(installed.signingInfo);
+            if (signer == null || !OtaCandidateGate.EXPECTED_SIGNER_SHA256.equalsIgnoreCase(signer))
+                return null;
+            return new InstalledIdentity(installed.getLongVersionCode(), signer);
+        } catch (Exception unavailable) {
+            return null;
+        }
+    }
+
     /**
      * Exactly one same-signer, higher-version package on the installed Android 9
      * device. The archive MUST already be in the app's private files directory;
