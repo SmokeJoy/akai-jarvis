@@ -1,14 +1,16 @@
 # AKAI JARVIS — Contratto di rilascio dell'agente autonomo e OTA (17/11/2026)
 
-## Aggiornamento vincolante v5 — 18/11/2026
+## Aggiornamento vincolante v4 COMPLETA — decisione owner più recente, 18/11/2026
 
-**Decisione successiva del proprietario: la v5 deve includere TUTTI e quattro i requisiti, senza rinvii:** navigazione multipasso robusta tra app nei limiti consentiti (DRM non bypassabile), OTA funzionante dalla TV anche con PC spento e conferma owner, prestazioni RAM/CPU/stabilità misurate davvero sulla AKAI, APK v5 non-debug originale firmato con backup/recuperabilità Android9 effettivamente verificati. Vedere `docs/JARVIS_V5_MANDATORY_RELEASE_GATES.md` per matrice PASS/FAIL e condizioni `GO_FOR_V5_RELEASE`. Questa decisione **supera** ogni frase storica del documento che definisce OTA opzionale o rinviabile per la v5. v4 resta fase diagnostica, nessuna installazione implicita.
+**Il proprietario richiede che TUTTO sia già sviluppato nella v4 Diagnostic**: navigazione multipasso nelle app controllabili (senza bypass DRM), OTA realmente funzionante direttamente dalla TV anche a PC spento con conferma, prestazioni RAM/CPU/stabilità misurate sulla AKAI, APK con firma originale e recuperabilità APK/SQLite/WAL/TLS verificata. Fonte unica: `docs/JARVIS_V4_COMPLETE_ACCEPTANCE.md`.
+
+**v5 Release = stessa implementazione applicativa collaudata della v4**, ricompilata con debug disabilitato, profilo Release e soli metadati di versione obbligatori (versionCode più alto; firma originale invariata). Nessuna nuova funzione, nessun refactoring funzionale in v5. Se emerge un bug prima della v5, correggere la v4 e ripetere i test. Questa disposizione **sostituisce** ogni precedente menzione di OTA opzionale o requisiti riservati alla v5. La decisione non autorizza installazioni automatiche, ADB o rilasci alla TV; la v4 resta `V4_INCOMPLETE` finché non ha le evidenze di collaudo reale.
 
 ## Decisione del proprietario
 
 - **Televisore attuale:** AKAI AKTV5037N, Android 9/API 28, ARMv7, RAM circa 1,5 GB. App `it.akai.customremote` A2 Preview `versionCode=3`, installata il 17/11/2026 e collaudata **solo per bootstrap**: `/api/status=ok`, `uinput_ready=true`, HTTP 200 e TLS operativo con fiducia CA OOB ancora da verificare.
 - **Freeze hardware:** nessun altro aggiornamento/intervento sulla TV durante lo sviluppo, salvo necessità reale approvata esplicitamente. Niente auto-install, auto-deploy, merge automatico, uninstall, reset, root o mutazioni SQLite via CI/automazioni.
-- **Priorità aggiornata v5:** agente autonomo completo nei limiti Android/DRM **e OTA obbligatoria**; entrambi devono mantenere limiti RAM/CPU e consenso proprietario. In caso di incompatibilità o rischio non risolto: v5 rimane NO-GO, non si elimina OTA silenziosamente.
+- **Priorità aggiornata v4:** agente multipasso completo nei limiti Android/DRM **e OTA obbligatoria già nella v4**, con misure hardware e firma/recupero verificati. In caso di incompatibilità o rischio non risolto: v4 rimane INCOMPLETE, nessun rinvio delle funzioni alla v5.
 - **REGOLA PERMANENTE E NON NEGOZIABILE (OWNER 17/11/2026): L'INFERENZA AI DI JARVIS USA ESCLUSIVAMENTE MODELLI CLOUD DEEPSEEK O KIMI (MOONSHOT), TRAMITE LE RISPETTIVE API. NESSUN ALTRO PROVIDER; NESSUN MODELLO AI LOCALE, NEMMENO COME FALLBACK, SU TV O PC.** La TV non ha hardware per eseguire LLM locali. Nessun Ollama, LM Studio, ONNX LLM, Termux ML, mini-LLM o stack AI terzo. Le API cloud richiedono consenso, credenziali e budget configurati dall'owner.
 - **Eccezione voce del proprietario (17/11/2026):** il vincolo DeepSeek/Kimi rimane assoluto per ragionamento, pianificazione, percezione e comandi AI. Su richiesta esplicita di una **voce italiana più naturale ma gratuita**, è consentita soltanto la *sintesi di output vocale* tramite account **FreeTTS personale Free**, opt-in separato. Non è un terzo provider di agenti o un LLM locale. Vietato Azure con account dell'utente, upgrade, piano a consumo, chiamate TTS a pagamento o installazioni intermedie.
 - **Distinzione rigorosa:** tasti, navigazione, policy, accessibilità, lettura SQLite, intent semplici e parser deterministici possono girare *localmente* perché sono **codice tradizionale, non modelli AI**. La modalità `LOCAL_ONLY`/provider `local` eventualmente presente nello storico significa solamente **nessuna chiamata AI** e comandi deterministici, mai un LLM on-device. Se un compito richiede inferenza e DeepSeek/Kimi non sono disponibili/autorizzati, JARVIS deve dichiarare indisponibilità, non eseguire un altro modello.
@@ -81,7 +83,7 @@ Questa parte era P0 e ora ha **codice reale nel ramo di sviluppo**, distinto dal
 - **Auto-apprendimento**: le azioni concatenate vengono salvate tramite `AgentSkillGate.canLearn` e `AkaiMemoryEngine.saveVerifiedProcedure` esclusivamente dopo `STATE_VERIFIED`. Se una vecchia procedura SQLite fallisce, JARVIS registra errore, la ricalcola nella sessione visiva esplicitamente autorizzata e la sostituisce solo in caso di nuovo `STATE_VERIFIED`, conservando il formato SQLite preesistente.
 - **Test simulati**: suite Java + test indipendenti su policy, provider e consent, test E2E mock di due schermate/passaggi; Android APK compilation in CI per SHA. **Non è una prova fisica**: servono TV, DRM, consumo RAM/CPU, regressioni remote/Home/TLS, reboot e test reali di memoria. Non usare i CI APK firmati di test per aggiornare la TV.
 
-**Limiti noti**: MediaProjection può restituire nero o schermate protette DRM; in assenza di Accessibility l'agente può esplorare con comandi D-pad ma NON eseguire tocchi su coordinate dedotte da sola visione. È corretto fallire in modo verificabile piuttosto che fingere di completare un goal. L'OTA è requisito **obbligatorio per la v5** secondo la decisione owner 18/11; per la v4 diagnostica rimane disabilitata e nessun deploy automatico è autorizzato.
+**Limiti noti**: MediaProjection può restituire nero o schermate protette DRM; in assenza di Accessibility l'agente può esplorare con comandi D-pad ma NON eseguire tocchi su coordinate dedotte da sola visione. È corretto fallire in modo verificabile piuttosto che fingere di completare un goal. L'OTA è requisito **obbligatorio già nella v4** secondo la decisione owner più recente del 18/11; la funzione deve essere operativa e collaudata prima dell'accettazione v4, ma ogni installazione rimane soggetta a consenso esplicito, senza deploy automatico.
 
 ## Performance TV — VirtualDisplay realmente on-demand (17/11/2026)
 
@@ -133,12 +135,12 @@ La PR #18 è sempre draft, nessuna installazione sulla TV e nessuna API fatturab
 6. Recovery: installazione in-place senza cancellare dati, backup verificato prima; Android 9 **non garantisce rollback automatico dei dati SQLite**. Non promettere downgrade automatico affidabile; prevedere metodo di recupero assistito e rollback testato in staging.
 7. Trigger solo su richiesta da schermata impostazioni `Verifica aggiornamenti` in prima release; niente polling aggressivo, download o installazione in background. L'OTA resta disabilitato finché infrastruttura, autenticazione e test reali non sono pronti.
 
-**Criterio GO OTA:** manifest autenticato, archive checksum/signature/pkg/version verificati, UI di consenso, monitoraggio esito e piano di rollback testato; zero regressioni Web Remote/Home. Per la v5 **non posticipare OTA**: in assenza di implementazione e verifica reale sul dispositivo, il rilascio è NO-GO. Rimane possibile la sola distribuzione diagnostica v4 owner-approved per collaudo e recupero.
+**Criterio GO OTA:** manifest autenticato, archive checksum/signature/pkg/version verificati, UI di consenso, monitoraggio esito e piano di rollback testato; zero regressioni Web Remote/Home. Per la **v4** non posticipare OTA: in assenza di implementazione e verifica reale sul dispositivo, la v4 è INCOMPLETE. La distribuzione diagnostica v4 su dispositivo per test è possibile solo dopo preflight/backup e approvazione proprietario. v5 non aggiunge OTA né altre funzioni.
 
 ## Tracciamento
 
 - PR A2 stacked: #10 (inventario), #12 (etichette Accessibility), #13 (goal), #14 (click sicuri), #15 (open locale), #16 (MediaProjection one-shot locale).
-- Questa branch è **work-in-progress non distribuibile**, base PR #16. Nessun merge/release automatico.
+- Questa branch è **work-in-progress non distribuibile**, base PR #16. Nessun merge/release automatico. Gate più recente: `docs/JARVIS_V4_COMPLETE_ACCEPTANCE.md`; v5 non aggiunge funzioni.
 - Il proprietario sta collaudando A2 in una chat distinta; registrare i report reali come regressioni/bug con SHA e log pertinenti, senza cambiare APK in uso.
 
 ### Incremento 17/11/2026 — frame legato al package foreground (solo codice)
