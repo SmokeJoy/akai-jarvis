@@ -322,23 +322,16 @@ jobs:
           echo "=== Compiling Native JNI Driver (uinput_jni.c) for ARMv7 ==="
           mkdir -p build_ci/lib/armeabi-v7a
 
-          NDK_CLANG=$(find "$ANDROID_HOME/ndk" "$ANDROID_NDK_ROOT" /usr/local/lib/android/sdk/ndk -name "armv7a-linux-androideabi21-clang" 2>/dev/null | sort -V | tail -n 1)
-          if [ -n "$NDK_CLANG" ]; then
-            echo "Using Android NDK Clang ARMv7: $NDK_CLANG"
-            "$NDK_CLANG" -shared -fPIC -O2 -llog akai-remote-tv/app/src/main/jni/uinput_jni.c -o build_ci/lib/armeabi-v7a/libakai_uinput.so
-          else
-            echo "Android NDK Clang not found in standard paths; installing gcc-arm-linux-gnueabihf cross-compiler..."
-            sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-linux-gnueabihf
-            mkdir -p /tmp/jni_include/android
-            printf '#pragma once\n#define ANDROID_LOG_INFO 4\n#define ANDROID_LOG_ERROR 6\nstatic inline int __android_log_print(int prio, const char* tag, const char* fmt, ...) { (void)prio; (void)tag; (void)fmt; return 0; }\n' > /tmp/jni_include/android/log.h
-
-            arm-linux-gnueabihf-gcc -shared -fPIC -O2 \
-              -I"$JAVA_HOME/include" \
-              -I"$JAVA_HOME/include/linux" \
-              -I/tmp/jni_include \
-              akai-remote-tv/app/src/main/jni/uinput_jni.c \
-              -o build_ci/lib/armeabi-v7a/libakai_uinput.so
+          # Only Android NDK builds Android/Bionic-compatible JNI libraries.
+          # A generic ARM Linux GCC can emit a valid ELF machine=ARM SO linked
+          # against glibc which Android cannot load. Never accept that fallback.
+          NDK_CLANG=$(find "$ANDROID_HOME/ndk" "${ANDROID_NDK_ROOT:-/nonexistent}" /usr/local/lib/android/sdk/ndk -name "armv7a-linux-androideabi21-clang" 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$NDK_CLANG" ] || [ ! -x "$NDK_CLANG" ]; then
+            echo "NO-GO: Android NDK ARMv7 API21 clang required; Linux glibc cross-GCC is NOT equivalent."
+            exit 1
           fi
+          echo "Using Android NDK Clang ARMv7: $NDK_CLANG"
+          "$NDK_CLANG" -shared -fPIC -O2 akai-remote-tv/app/src/main/jni/uinput_jni.c -llog -o build_ci/lib/armeabi-v7a/libakai_uinput.so
 
           if [ ! -f build_ci/lib/armeabi-v7a/libakai_uinput.so ]; then
             echo "ERROR: Native JNI compilation failed."
@@ -350,7 +343,14 @@ jobs:
           echo "--- ABI Verification ---"
           file build_ci/lib/armeabi-v7a/libakai_uinput.so
           readelf -h build_ci/lib/armeabi-v7a/libakai_uinput.so | grep -E "Class|Machine|Flags"
-          echo "ARM ABI confirmed."
+          readelf -h build_ci/lib/armeabi-v7a/libakai_uinput.so | grep -Eq 'Machine:[[:space:]]*ARM' || (echo 'NO-GO: not an ARM ELF library' && exit 1)
+          readelf -h build_ci/lib/armeabi-v7a/libakai_uinput.so | grep -Eq 'Class:[[:space:]]*ELF32' || (echo 'NO-GO: not ELF32' && exit 1)
+          readelf -d build_ci/lib/armeabi-v7a/libakai_uinput.so > build_ci/jni_dynamic.txt
+          if grep -Eq 'libc\.so\.6|libgcc_s\.so|ld-linux|glibc' build_ci/jni_dynamic.txt; then
+            echo 'NO-GO: Linux/glibc dependency in Android JNI library'; exit 1
+          fi
+          grep -Eq 'Shared library: \[liblog\.so\]' build_ci/jni_dynamic.txt || (echo 'NO-GO: Android liblog dependency missing' && exit 1)
+          echo "Android NDK/Bionic-compatible ARMv7 JNI ABI verified (not an OEM runtime test)."
 
       - name: 6. Full Android Production APK Build & Packaging (D8, AAPT2, ZipAlign, Apksigner)
         run: |
@@ -370,8 +370,8 @@ jobs:
             ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | grep "android-28" | head -n 1)
           fi
           if [ -z "$ANDROID_JAR" ]; then
-            echo "Notice: android-28 not installable; using highest available platform jar."
-            ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+            echo "NO-GO: Android 9 platform API28 is required. Newer SDKs are NOT an equivalent compile proof."
+            exit 1
           fi
 
           AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
