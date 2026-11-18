@@ -19,8 +19,11 @@ import unittest
 
 PACKAGE = "it.akai.customremote"
 DEBUG_ATTR = re.compile(
-    r"(?m)^\s*A:\s+android:debuggable\(0x0101000f\)=\(type 0x12\)(0x[0-9a-fA-F]+)(?=\s|$)"
+    r"(?m)^\s*A:\s+(?:android:|http://schemas\.android\.com/apk/res/android:)"
+    r"debuggable\(0x0101000f\)="
+    r"(?:(?:\(type 0x12\)(0x[0-9a-fA-F]+))|(true|false))(?=\s|$)"
 )
+
 PACKAGE_LINE = re.compile(
     r"(?m)^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'\s+versionName='([^']+)'(?:\s|$)"
 )
@@ -37,7 +40,10 @@ def compiled_debug_value(xml_tree: str) -> bool:
         raise ValueError("duplicate debuggable attributes")
     if not values:
         return False  # Android's documented default
-    parsed = int(values[0], 16)
+    encoded_hex, literal_boolean = values[0]
+    if literal_boolean:
+        return literal_boolean == "true"
+    parsed = int(encoded_hex, 16)
     if parsed not in (0, 1, 0xFFFFFFFF):
         raise ValueError("non-boolean debuggable value")
     return parsed != 0
@@ -93,6 +99,21 @@ class ParserNegativeTests(unittest.TestCase):
                 self.assertTrue(compiled_debug_value(
                     f"E: application (line=1)\n    A: android:debuggable(0x0101000f)=(type 0x12){value}\n"
                 ))
+
+    def test_modern_aapt2_xmltree_boolean_encodings(self):
+        # Android build-tools 37 prints a full namespace and symbolic bool.
+        self.assertTrue(compiled_debug_value(
+            "E: application (line=33)\n"
+            " A: http://schemas.android.com/apk/res/android:debuggable(0x0101000f)=true\n"
+        ))
+        self.assertFalse(compiled_debug_value(
+            "E: application (line=33)\n"
+            " A: http://schemas.android.com/apk/res/android:debuggable(0x0101000f)=false\n"
+        ))
+        with self.assertRaises(ValueError):
+            compiled_debug_value(
+                "E: application\n A: http://schemas.android.com/apk/res/android:debuggable(0x0101000f)=garbage\n"
+            )
 
     def test_false_and_absent(self):
         self.assertFalse(compiled_debug_value(
