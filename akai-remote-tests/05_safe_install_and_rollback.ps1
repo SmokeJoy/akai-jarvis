@@ -1050,64 +1050,72 @@ function Test-PackageUpgradeGate {
         [string]$CandidateApkPath
     )
 
-    $installedVersionCode = $null
-    $candidatePkg = $null
-    $candidateVersionCode = $null
-    $prevEap = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        $dumpsysOut = (& $AdbExe -s $TargetAdb shell "dumpsys package $PackageName" 2>&1 | Out-String)
-        if ($LASTEXITCODE -eq 0 -and $dumpsysOut -match "versionCode=(\d+)") {
-            $installedVersionCode = [int]$matches[1]
-        }
-
-        if (Test-Path $CandidateApkPath) {
-            $item = Get-Item $CandidateApkPath
-            if ($item.Length -ge 256) {
-                $headerBytes = New-Object byte[] 4
-                $fs = [System.IO.File]::OpenRead($CandidateApkPath)
-                try { $null = $fs.Read($headerBytes, 0, 4) } finally { $fs.Close() }
-                if ($headerBytes[0] -eq 0x50 -and $headerBytes[1] -eq 0x4B) {
-                    $apksignerJar = Get-ApkSignerJar
-                    $aaptPath = $null
-                    if ($apksignerJar) {
-                        $buildToolsDir = Split-Path (Split-Path $apksignerJar -Parent) -Parent
-                        foreach ($cand in @("aapt.exe", "aapt", "aapt2.exe", "aapt2")) {
-                            $p = Join-Path $buildToolsDir $cand
-                            if (Test-Path $p) { $aaptPath = $p; break }
-                        }
-                    }
-                    if (-not $aaptPath) {
-                        foreach ($cmdName in @("aapt", "aapt2")) {
-                            $cmdAapt = Get-Command $cmdName -ErrorAction SilentlyContinue
-                            if ($cmdAapt) { $aaptPath = $cmdAapt.Source; break }
-                        }
-                    }
-                    if ($aaptPath) {
-                        $badgingOut = (& $aaptPath dump badging $CandidateApkPath 2>&1 | Out-String)
-                        if ($badgingOut -match "package:\s+name='([^']+)'\s+versionCode='(\d+)'") {
-                            $candidatePkg = $matches[1]
-                            $candidateVersionCode = [int]$matches[2]
-                        }
-                    }
+    # P0 pre-install audit: metadata MUST be independently parsed, never inferred from ZIP magic.
+    # A missing aapt, malformed APK, unknown installed version or ambiguous output blocks installation.
+    if (-not (Test-Path -LiteralPath $CandidateApkPath -PathType Leaf)) {
+        throw "ERRORE FAIL-CLOSED: APK candidato assente."
+    }
+    $aaptPath = $null
+    $sdkRoot = $env:ANDROID_HOME
+    if (-not $sdkRoot) { $sdkRoot = $env:ANDROID_SDK_ROOT }
+    if ($sdkRoot) {
+        $toolsRoot = Join-Path $sdkRoot "build-tools"
+        if (Test-Path $toolsRoot) {
+            foreach ($dir in @(Get-ChildItem $toolsRoot -Directory | Sort-Object Name -Descending)) {
+                foreach ($name in @("aapt.exe", "aapt")) {
+                    $candidate = Join-Path $dir.FullName $name
+                    if (Test-Path $candidate) { $aaptPath = $candidate; break }
                 }
+                if ($aaptPath) { break }
             }
         }
+    }
+    if (-not $aaptPath) {
+        $cmd = Get-Command aapt -ErrorAction SilentlyContinue
+        if ($cmd) { $aaptPath = $cmd.Source }
+    }
+    if (-not $aaptPath) {
+        throw "ERRORE FAIL-CLOSED: aapt dump badging obbligatorio per validare package/versionCode."
+    }
+
+    $previousEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $badgingOut = (& $aaptPath dump badging $CandidateApkPath 2>&1 | Out-String)
+        $badgingExit = $LASTEXITCODE
+        if ($badgingExit -ne 0) {
+            throw "ERRORE FAIL-CLOSED: aapt non riesce a leggere il manifest APK (exit=$badgingExit)."
+        }
+        $packageLines = @($badgingOut -split "\r?\n" | Where-Object { $_ -match "^package:\s" })
+        if ($packageLines.Count -ne 1 -or $packageLines[0] -notmatch "^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'(?:\s|$)") {
+            throw "ERRORE FAIL-CLOSED: metadata package/versionCode assenti o ambigui in aapt."
+        }
+        $candidatePkg = $Matches[1]
+        $candidateVersionCode = [long]::Parse($Matches[2], [System.Globalization.CultureInfo]::InvariantCulture)
+        if ($candidatePkg -ne $PackageName -or $candidateVersionCode -le 0) {
+            throw "ERRORE FAIL-CLOSED: package/versionCode APK candidato non valido."
+        }
+
+        $dumpsysOut = (& $AdbExe -s $TargetAdb shell "dumpsys package $PackageName" 2>&1 | Out-String)
+        $dumpsysExit = $LASTEXITCODE
+        if ($dumpsysExit -ne 0) {
+            throw "ERRORE FAIL-CLOSED: impossibile leggere versionCode installato (dumpsys exit=$dumpsysExit)."
+        }
+        $installedMatches = @([regex]::Matches($dumpsysOut, "(?m)^\s*versionCode=([0-9]+)\b"))
+        if ($installedMatches.Count -ne 1) {
+            throw "ERRORE FAIL-CLOSED: versionCode installato assente o ambiguo; nessuna installazione consentita."
+        }
+        $installedVersionCode = [long]::Parse($installedMatches[0].Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+        if ($candidateVersionCode -le $installedVersionCode) {
+            throw "ERRORE FAIL-CLOSED: versione candidata non superiore a quella installata (candidate=$candidateVersionCode, installed=$installedVersionCode)."
+        }
+        return @{
+            InstalledVersionCode = $installedVersionCode
+            CandidatePackageName = $candidatePkg
+            CandidateVersionCode = $candidateVersionCode
+        }
     } finally {
-        $ErrorActionPreference = $prevEap
-    }
-
-    if ($candidatePkg -and $candidatePkg -ne $PackageName) {
-        throw "ERRORE FAIL-CLOSED: applicationId APK candidato ('$candidatePkg') non corrisponde al target '$PackageName'."
-    }
-    if ($null -ne $installedVersionCode -and $null -ne $candidateVersionCode -and $candidateVersionCode -lt $installedVersionCode) {
-        throw "ERRORE FAIL-CLOSED: Downgrade non autorizzato in -Action install (candidate versionCode=$candidateVersionCode < installed versionCode=$installedVersionCode). Usare -Action rollback o un piano separato."
-    }
-
-    return @{
-        InstalledVersionCode = $installedVersionCode
-        CandidatePackageName = $candidatePkg
-        CandidateVersionCode = $candidateVersionCode
+        $ErrorActionPreference = $previousEap
     }
 }
 
