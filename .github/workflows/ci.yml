@@ -6,10 +6,22 @@ on:
   pull_request:
     branches: [ main, "fix/*", "feat/a2-*", "feat/jarvis-agent-a0-memory-learning", "feat/jarvis-a1-integration-candidate" ]
 
+
+# Cancel stale in-progress runs on the SAME PR when automation pushes a new
+# commit. This saves private-runner credits without skipping any final HEAD CI.
+# A completed PASS belongs only to its own exact commit SHA.
+concurrency:
+  group: akai-jarvis-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   audit-and-tests:
     name: Code Quality, Unit Tests, SQLite, Android APK & ARMv7 JNI Build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout Codebase
