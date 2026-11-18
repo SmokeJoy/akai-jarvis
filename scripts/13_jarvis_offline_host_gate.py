@@ -99,7 +99,7 @@ def assert_release_contract() -> None:
         "$BuildProfile -eq 'Release'", "$VersionCode -lt 5",
         "$VersionName -match '(?i)(diagnostic|debug)'",
         "$VersionName -notmatch '(?i)diagnostic'",
-        "$linkArgs += '--debug-mode'", "$compiledDebugTrue",
+        "$linkArgs += '--debug-mode'", "'--replace-version'", "$compiledDebugTrue",
         "$compiledDebugFalse", "DIAGNOSTIC FAIL-CLOSED",
         "RELEASE FAIL-CLOSED", "ExpectedCiHeadSha",
         "JARVIS_SIGNING_STOREPASS", "JARVIS_SIGNING_KEYPASS",
