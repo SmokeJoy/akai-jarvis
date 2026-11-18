@@ -15,7 +15,7 @@
 
 ## 2. Creazione APK finale sul PC dell'owner — compilazione SENZA installazione
 
-Il builder **non** modifica la TV e rifiuta una firma diversa da quella attesa dell'APK installato. Va usata **la stessa chiave di firma originaria**, conservata privatamente fuori dal repository, non un nuovo debug keystore.
+Il builder **non** modifica la TV e rifiuta una firma diversa da quella attesa dell'APK installato. Richiede inoltre `-ExpectedCiHeadSha`: il commit completo (40 caratteri) della **stessa HEAD** con CI GitHub Actions `completed/success`, controllata manualmente dall’owner. Se nel frattempo il branch avanza o il checkout non corrisponde, la compilazione viene bloccata. Il confronto locale dello SHA non certifica da solo lo stato della CI. Va usata **la stessa chiave di firma originaria**, conservata privatamente fuori dal repository, non un nuovo debug keystore.
 
 Prerequisiti: Git pulito sul branch finale, JDK 17, Android SDK 28, Build Tools 28.0.3, NDK per ARMv7 (oppure fallback JNI verificato come nello script), firma originale e alias. Le password devono essere disponibili solo in variabili d'ambiente private `JARVIS_SIGNING_STOREPASS` e `JARVIS_SIGNING_KEYPASS`, **mai** in chat, repo o log.
 
@@ -25,6 +25,7 @@ Esempio di avvio dopo che le credenziali private sono state predisposte in modo 
 git checkout feat/jarvis-final-agent-ota-foundation-20261117
 git pull --ff-only
 .\scripts\12_build_jarvis_final_candidate.ps1 `
+  -ExpectedCiHeadSha "<SHA_COMPLETO_40_CARATTERI_DELLA_CI_PASS>" `
   -VersionCode 4 `
   -VersionName "1.3.0-final-rc1" `
   -SigningKeystorePath "C:\PercorsoPrivato\firma-originale.jks" `
