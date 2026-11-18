@@ -5,6 +5,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Signature;
+
 
 public final class OtaCandidateGateTest {
     private static final String SIGNER = OtaCandidateGate.EXPECTED_SIGNER_SHA256;
@@ -32,7 +37,7 @@ public final class OtaCandidateGateTest {
         checks++;
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         OtaCandidateGate.Candidate c = good();
         expect("stable upgrade", true, c, 3, SIGNER, TRUSTED);
         expect("same version", false, c, 4, SIGNER, TRUSTED);
@@ -69,6 +74,62 @@ public final class OtaCandidateGateTest {
         checks++;
         if (OtaCandidateGate.digestMatches(null,h.toString())) throw new AssertionError("null digest accepted");
         checks++;
-        System.out.println("OtaCandidateGateTest PASS: "+checks+" checks (metadata only; no APK installation)");
+        // Detached manifest signature is a separate authenticity gate.
+        // Ephemeral test keys ONLY: the TV must pin a genuine offline release key.
+        KeyPairGenerator rsa = KeyPairGenerator.getInstance("RSA");
+        rsa.initialize(2048);
+        KeyPair trustedReleaseKey = rsa.generateKeyPair();
+        KeyPair unrelatedReleaseKey = rsa.generateKeyPair();
+        byte[] manifest = ("package=it.akai.customremote\\nversionCode=5\\nsha256=" + HASH + "\\n")
+                .getBytes(StandardCharsets.UTF_8);
+        Signature signer = Signature.getInstance("SHA256withRSA");
+        signer.initSign(trustedReleaseKey.getPrivate());
+        signer.update(manifest);
+        byte[] detached = signer.sign();
+        if (!OtaCandidateGate.verifyManifestSignature(manifest, detached, trustedReleaseKey.getPublic()))
+            throw new AssertionError("valid offline-signed manifest rejected");
+        checks++;
+        if (OtaCandidateGate.verifyManifestSignature(manifest, detached, unrelatedReleaseKey.getPublic()))
+            throw new AssertionError("untrusted release key accepted");
+        checks++;
+        byte[] tamperedManifest = manifest.clone();
+        tamperedManifest[0] ^= 1;
+        if (OtaCandidateGate.verifyManifestSignature(tamperedManifest, detached, trustedReleaseKey.getPublic()))
+            throw new AssertionError("tampered release manifest accepted");
+        checks++;
+        byte[] corruptSignature = detached.clone();
+        corruptSignature[0] ^= 1;
+        if (OtaCandidateGate.verifyManifestSignature(manifest, corruptSignature, trustedReleaseKey.getPublic()))
+            throw new AssertionError("corrupt detached signature accepted");
+        checks++;
+        if (OtaCandidateGate.verifyManifestSignature(new byte[OtaCandidateGate.MAX_MANIFEST_BYTES + 1],
+                detached, trustedReleaseKey.getPublic()))
+            throw new AssertionError("oversized release manifest accepted");
+        checks++;
+        if (OtaCandidateGate.verifyManifestSignature(new byte[0], detached, trustedReleaseKey.getPublic()))
+            throw new AssertionError("empty release manifest accepted");
+        checks++;
+        if (OtaCandidateGate.verifyManifestSignature(manifest, new byte[0], trustedReleaseKey.getPublic()))
+            throw new AssertionError("empty signature accepted");
+        checks++;
+        if (OtaCandidateGate.verifyManifestSignature(manifest, detached, null))
+            throw new AssertionError("no pinned key accepted");
+        checks++;
+        if (OtaCandidateGate.verifyManifestSignature(null, detached, trustedReleaseKey.getPublic()))
+            throw new AssertionError("null manifest accepted");
+        checks++;
+        if (OtaCandidateGate.verifyManifestSignature(manifest, null, trustedReleaseKey.getPublic()))
+            throw new AssertionError("null signature accepted");
+        checks++;
+        KeyPairGenerator weakRsa = KeyPairGenerator.getInstance("RSA");
+        weakRsa.initialize(1024);
+        if (OtaCandidateGate.verifyManifestSignature(manifest, detached, weakRsa.generateKeyPair().getPublic()))
+            throw new AssertionError("short RSA key accepted");
+        checks++;
+        if (OtaCandidateGate.verifyManifestSignature(manifest, new byte[128],
+                trustedReleaseKey.getPublic()))
+            throw new AssertionError("wrong signature length accepted");
+        checks++;
+        System.out.println("OtaCandidateGateTest PASS: "+checks+" checks (metadata + detached manifest authenticity only; no network or APK installation)");
     }
 }
