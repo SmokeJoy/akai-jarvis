@@ -2,6 +2,9 @@ package it.akai.customremote.ai;
 
 import java.net.URI;
 import java.security.MessageDigest;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.security.interfaces.RSAPublicKey;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Set;
@@ -21,6 +24,7 @@ public final class OtaCandidateGate {
             "21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed";
     public static final int TV_API_LEVEL = 28;
     public static final long MAX_APK_BYTES = 25L * 1024L * 1024L;
+    public static final int MAX_MANIFEST_BYTES = 8 * 1024;
 
     private OtaCandidateGate() {}
 
@@ -123,6 +127,38 @@ public final class OtaCandidateGate {
         }
         if (!trusted) return deny("UNTRUSTED_DOWNLOAD_HOST");
         return new Verdict(true, "METADATA_ACCEPTED_ARCHIVE_UNVERIFIED");
+    }
+
+    /**
+     * Verify detached SHA256withRSA signature over the exact, bounded manifest bytes.
+     * The key MUST be pinned locally by JARVIS; never supplied by the server or by
+     * the manifest. A test-generated key is not a production trust anchor.
+     *
+     * This is one required OTA check; it does not parse the manifest, fetch an
+     * APK, prove archive signer identity or authorize Android installation.
+     * Missing production trust provisioning must disable the OTA feature.
+     */
+    public static boolean verifyManifestSignature(byte[] rawManifest,
+                                                   byte[] detachedSignature,
+                                                   PublicKey pinnedPublicKey) {
+        if (rawManifest == null || rawManifest.length == 0 ||
+                rawManifest.length > MAX_MANIFEST_BYTES ||
+                detachedSignature == null ||
+                pinnedPublicKey == null ||
+                !(pinnedPublicKey instanceof RSAPublicKey)) {
+            return false;
+        }
+        int keyBits = ((RSAPublicKey) pinnedPublicKey).getModulus().bitLength();
+        if (keyBits < 2048 || keyBits > 4096) return false;
+        if (detachedSignature.length != (keyBits + 7) / 8) return false;
+        try {
+            Signature verifier = Signature.getInstance("SHA256withRSA");
+            verifier.initVerify(pinnedPublicKey);
+            verifier.update(rawManifest);
+            return verifier.verify(detachedSignature);
+        } catch (Exception error) {
+            return false;
+        }
     }
 
     /** Fixed expected digest; consumed by a future streaming downloader. */
