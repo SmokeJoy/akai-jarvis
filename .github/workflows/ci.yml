@@ -231,10 +231,13 @@ jobs:
           javac -encoding UTF-8 -source 8 -target 8 -d test_ota \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaCandidateGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaArchiveIdentityGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSignedReleaseManifest.java \
             akai-remote-tests/OtaCandidateGateTest.java \
-            akai-remote-tests/OtaArchiveIdentityGateTest.java
+            akai-remote-tests/OtaArchiveIdentityGateTest.java \
+            akai-remote-tests/OtaSignedReleaseManifestTest.java
           java -cp test_ota it.akai.customremote.OtaCandidateGateTest
           java -cp test_ota it.akai.customremote.OtaArchiveIdentityGateTest
+          java -cp test_ota it.akai.customremote.OtaSignedReleaseManifestTest
           echo "Archive policy and manifest crypto gates passed; OTA download, owner UI and Android real-device installer are NOT verified."
 
       - name: 4c. DeepSeek/Kimi-only provider guard (no local AI models)
