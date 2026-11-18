@@ -94,6 +94,12 @@ jobs:
           if ($src -notmatch 'if \(-not \(Test-Path -LiteralPath \$aaptCli -PathType Leaf\)\)') { throw 'Missing fail-closed aapt.exe availability gate' }
           if ($src -notmatch '\$LASTEXITCODE -ne 0 -or \[string\]::IsNullOrWhiteSpace\(\$xmlTree\)') { throw 'Missing fail-closed compiled manifest inspection gate' }
           if ($src -match 'if \(Test-Path \$aaptCli\)') { throw 'Optional debuggable verification forbidden' }
+          foreach ($entry in @('classes.dex', 'lib/armeabi-v7a/libakai_uinput.so', 'assets/www/index.html')) {
+            if (-not $src.Contains("'$entry'")) { throw "Mandatory APK component verification missing: $entry" }
+          }
+          if ($src -notmatch 'GetEntry\(\$required\)' -or $src -notmatch '\$requiredEntry\.Length -le 0') { throw 'Mandatory APK entry must exist and be nonempty' }
+          if ($src -notmatch '\$entryNames\.Add\(\$entry\.FullName\)') { throw 'Duplicate ZIP entry rejection missing' }
+          if ($src -notmatch 'finally\s*\{\s*\$zipTest\.Dispose\(\)') { throw 'ZIP handle must close even when a gate fails' }
           Write-Host 'Final v4 source-only build recipe parses and is gated; no APK/device built in this step.'
 
       - name: 2. Secrets Leak Detection
