@@ -5,7 +5,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.Signature;
@@ -130,6 +134,59 @@ public final class OtaCandidateGateTest {
                 trustedReleaseKey.getPublic()))
             throw new AssertionError("wrong signature length accepted");
         checks++;
-        System.out.println("OtaCandidateGateTest PASS: "+checks+" checks (metadata + detached manifest authenticity only; no network or APK installation)");
+        byte[] archive = new byte[2048];
+        for (int i = 0; i < archive.length; i++) archive[i] = (byte) (i & 0xff);
+        byte[] actualSha = MessageDigest.getInstance("SHA-256").digest(archive);
+        StringBuilder expectedArchiveHex = new StringBuilder();
+        for (byte byteValue : actualSha) expectedArchiveHex.append(String.format("%02x", byteValue & 0xff));
+        String expectedArchiveSha = expectedArchiveHex.toString();
+        if (!OtaCandidateGate.verifyApkStream(new ByteArrayInputStream(archive),
+                archive.length, expectedArchiveSha))
+            throw new AssertionError("valid archive byte stream rejected");
+        checks++;
+        byte[] damagedArchive = archive.clone();
+        damagedArchive[100] ^= 1;
+        if (OtaCandidateGate.verifyApkStream(new ByteArrayInputStream(damagedArchive),
+                archive.length, expectedArchiveSha))
+            throw new AssertionError("modified APK bytes accepted");
+        checks++;
+        if (OtaCandidateGate.verifyApkStream(new ByteArrayInputStream(archive),
+                archive.length + 1, expectedArchiveSha))
+            throw new AssertionError("truncated APK accepted");
+        checks++;
+        if (OtaCandidateGate.verifyApkStream(new ByteArrayInputStream(archive),
+                archive.length - 1, expectedArchiveSha))
+            throw new AssertionError("extra APK bytes accepted");
+        checks++;
+        if (OtaCandidateGate.verifyApkStream(new ByteArrayInputStream(archive),
+                archive.length, HASH))
+            throw new AssertionError("wrong declared APK hash accepted");
+        checks++;
+        if (OtaCandidateGate.verifyApkStream(null, archive.length, expectedArchiveSha))
+            throw new AssertionError("missing APK stream accepted");
+        checks++;
+        if (OtaCandidateGate.verifyApkStream(new ByteArrayInputStream(archive),
+                OtaCandidateGate.MAX_APK_BYTES + 1, expectedArchiveSha))
+            throw new AssertionError("oversized declared APK accepted");
+        checks++;
+        if (OtaCandidateGate.verifyApkStream(new ByteArrayInputStream(archive),
+                archive.length, "not-a-sha256"))
+            throw new AssertionError("malformed declared APK SHA accepted");
+        checks++;
+        InputStream broken = new InputStream() {
+            @Override public int read() throws IOException { throw new IOException("read failed"); }
+            @Override public int read(byte[] bytes) throws IOException { throw new IOException("read failed"); }
+        };
+        if (OtaCandidateGate.verifyApkStream(broken, archive.length, expectedArchiveSha))
+            throw new AssertionError("failing stream accepted");
+        checks++;
+        InputStream emptyForever = new InputStream() {
+            @Override public int read() { return 0; }
+            @Override public int read(byte[] bytes) { return 0; }
+        };
+        if (OtaCandidateGate.verifyApkStream(emptyForever, archive.length, expectedArchiveSha))
+            throw new AssertionError("repeated empty reads accepted");
+        checks++;
+        System.out.println("OtaCandidateGateTest PASS: "+checks+" checks (release metadata, signed manifest, archive digest only; no installation)");
     }
 }
