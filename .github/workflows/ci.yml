@@ -138,6 +138,9 @@ jobs:
       - name: 1d. Android JNI Bionic and secret-free packaging source regressions
         run: python3 akai-remote-tests/test_android_jni_ci_contract.py
 
+      - name: 1e. Backup Memory REST must require HTTPS and a verified CA
+        run: python3 akai-remote-tests/test_backup_memory_transport_policy.py
+
       - name: 2. Secrets Leak Detection
         run: |
           echo "=== Scanning for leaked private keys or hardcoded API credentials ==="
