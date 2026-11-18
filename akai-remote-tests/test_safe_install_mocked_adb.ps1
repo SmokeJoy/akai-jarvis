@@ -2404,6 +2404,24 @@ if ($isWin) {
     & chmod +x $mockSignerCmd24
 }
 
+# Test 24 requires a realistic aapt metadata fixture, not a production bypass.
+$mockAaptJs24 = Join-Path $testDir24 "aapt.js"
+@'
+const args = process.argv.slice(2);
+if (args[0] === 'dump' && args[1] === 'badging' && args[2] && args[2].endsWith('candidate_new.apk')) {
+    console.log("package: name='it.akai.customremote' versionCode='4' versionName='1.3.0-diagnostic'");
+    process.exit(0);
+}
+process.exit(1);
+'@ | Out-File -FilePath $mockAaptJs24 -Encoding ascii
+$mockAaptCmd24 = if ($isWin) { Join-Path $testDir24 "aapt.cmd" } else { Join-Path $testDir24 "aapt" }
+if ($isWin) {
+    "@echo off`n`"%NODE_EXE%`" `"$mockAaptJs24`" %*" | Out-File -FilePath $mockAaptCmd24 -Encoding ascii
+} else {
+    "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAaptJs24`" `"`$@`"" | Out-File -FilePath $mockAaptCmd24 -Encoding ascii
+    & chmod +x $mockAaptCmd24
+}
+
 $mockAdbEscaped24 = $mockAdbCmd24.Replace('\', '/')
 $mockSignerEscaped24 = $mockSignerCmd24.Replace('\', '/')
 $mockDirEscaped24 = $testDir24.Replace('\', '/')
