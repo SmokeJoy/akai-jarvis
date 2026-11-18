@@ -13,6 +13,17 @@
 - [ ] Confermare che l'APK originale A2 vCode3 e il suo certificato di firma siano preservati in un backup privato esterno al repository, insieme a procedura di recupero/test dei dati SQLite. Nessun reset e nessun `pm clear`.
 - [ ] Conservare anche LTvLauncher come HOME predefinita. La nuova app JARVIS non deve rimuoverlo né sostituirlo implicitamente.
 
+## Nuova decisione owner (18/11/2026): doppio passaggio v4 diagnostic -> v5 finale
+
+Il proprietario desidera **provare JARVIS sulla TV con un APK debuggable** prima di una sola release conclusiva con debug disabilitato.
+
+- **Prima fase, v4 Diagnostic (solo collaudo):** builder `scripts/12_build_jarvis_final_candidate.ps1 -BuildProfile Diagnostic -VersionCode 4 -VersionName '1.3.0-diagnostic-rc1'`. La sorgente `AndroidManifest.xml` rimane `debuggable=false`, ma **AAPT2 `--debug-mode` imposta `android:debuggable=true` nel manifest effettivamente incorporato nell'APK**; il builder controlla il flag tramite `aapt dump xmltree` e rifiuta esiti ambigui. Non firmare con debug.keystore: usare il certificato A2 originale e verificare SHA-256. Output con nome esplicito `jarvis-v4-owner-signed-diagnostic.apk`.
+- **Seconda fase, v5 Release dopo test utente:** build `-BuildProfile Release -VersionCode 5 -VersionName '1.3.0-final'`, con `android:debuggable=false` verificato nel manifest compilato; stessa firma. Se la versione installata supera v4 per altri collaudi, assegnare a v5 un versionCode *superiore a quello realmente installato*; non ridurre versionCode.
+- Un APK debuggable può consentire `run-as` e il debugger Android, ma **non prova la possibilità di effettuare downgrade alla vecchia A2 v3 non debuggable**, né bypassa le restrizioni su dati e firma Android. La strategia di backup/recupero va verificata a parte. La fase v4 deve rimanere su rete domestica fidata con ADB autorizzato solo dal proprietario e non deve essere distribuita.
+- Entrambi i profili compilano senza eseguire ADB, installazioni o accesso a chiavi remote. Il debug è consentito *solo* al profilo Diagnostic; il profilo Release rifiuta vCode inferiore a 5 e qualsiasi output debuggable.
+- **Non autorizzare ancora l'installazione v4** fino a chiusura del gate `Test-PackageUpgradeGate` e dei test con metadati APK reali, controllo della disponibilità della firma originale e backup APK/SQLite/TLS verificato. Vedi `docs/JARVIS_FINAL_PREINSTALL_AUDIT_20261118.md`.
+- La PR #18 rimane Draft e il team non modifica la TV: il proprietario farà installazione e test dopo esplicita autorizzazione per la singola operazione.
+
 ## 2. Creazione APK finale sul PC dell'owner — compilazione SENZA installazione
 
 Il builder **non** modifica la TV e rifiuta una firma diversa da quella attesa dell'APK installato. Richiede inoltre `-ExpectedCiHeadSha`: il commit completo (40 caratteri) della **stessa HEAD** con CI GitHub Actions `completed/success`, controllata manualmente dall’owner. Se nel frattempo il branch avanza o il checkout non corrisponde, la compilazione viene bloccata. Il confronto locale dello SHA non certifica da solo lo stato della CI. Va usata **la stessa chiave di firma originaria**, conservata privatamente fuori dal repository, non un nuovo debug keystore.
@@ -26,13 +37,14 @@ git checkout feat/jarvis-final-agent-ota-foundation-20261117
 git pull --ff-only
 .\scripts\12_build_jarvis_final_candidate.ps1 `
   -ExpectedCiHeadSha "<SHA_COMPLETO_40_CARATTERI_DELLA_CI_PASS>" `
+  -BuildProfile Diagnostic `
   -VersionCode 4 `
-  -VersionName "1.3.0-final-rc1" `
+  -VersionName "1.3.0-diagnostic-rc1" `
   -SigningKeystorePath "C:\PercorsoPrivato\firma-originale.jks" `
   -SigningAlias "alias-originale"
 ```
 
-L'output è nella cartella privata `%LOCALAPPDATA%\AkaiJarvisBuilds\FINAL-v4-*\outputs\apk\release\app-release.apk`, con `JARVIS_FINAL_BUILD_MANIFEST.json` (Git SHA, SHA-256, certificato SHA-256, versione e `installed=false`); **non** nel repository. La compilazione verifica in modo fail-closed impronta firmatario attesa, SHA-256, nome pacchetto `it.akai.customremote`, vCode >3, minSdk 21, targetSdk 28, risorse, `android:debuggable=false`, componenti ARMv7 e assenza di certificati TLS privati nell'APK. Non generare o distribuire alcun APK che fallisce uno dei gate.
+L'output Diagnostic v4 è nella cartella privata `%LOCALAPPDATA%\AkaiJarvisBuilds\FINAL-v4-*\outputs\apk\release\jarvis-v4-owner-signed-diagnostic.apk` (la successiva Release v5 genera `app-release.apk`), con `JARVIS_FINAL_BUILD_MANIFEST.json` (Git SHA, SHA-256, certificato SHA-256, versione e `installed=false`); **non** nel repository. La compilazione verifica in modo fail-closed impronta firmatario attesa, SHA-256, nome pacchetto `it.akai.customremote`, vCode >3, minSdk 21, targetSdk 28, risorse, `android:debuggable=false`, componenti ARMv7 e assenza di certificati TLS privati nell'APK. Non generare o distribuire alcun APK che fallisce uno dei gate.
 
 **Limite:** né GitHub né questa procedura possiedono la chiave di firma dell'owner. Se manca la chiave originale, il rilascio come aggiornamento in-place è BLOCCATO; non creare una nuova firma e non disinstallare A2 per aggirare l'errore.
 
