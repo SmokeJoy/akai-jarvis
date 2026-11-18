@@ -453,6 +453,25 @@ jobs:
           APK_SIZE=$(stat -c%s build_ci/app-ci-test-nondistributable.apk)
           echo "CI TEST APK BUILT AND VERIFIED: $APK_SIZE bytes."
 
+      - name: 6b. Actual AAPT2 compiled Debug v4 and non-Debug v5 manifest gates
+        run: |
+          set -euo pipefail
+          # Source-grep checks alone cannot validate AAPT2 --debug-mode.
+          # Reuse the resource ZIP from the Android9 compile, but create two
+          # NEW unsigned resource-only APKs in an isolated temporary folder.
+          # Never use an owner keystore or deploy either artifact.
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
+          ANDROID_28_JAR="$ANDROID_HOME/platforms/android-28/android.jar"
+          if [ ! -x "$AAPT2" ] || [ ! -f "$ANDROID_28_JAR" ] || [ ! -s build_ci/compiled_res.zip ]; then
+            echo "NO-GO: AAPT2 / android-28 platform / compiled resources missing"
+            exit 1
+          fi
+          python3 akai-remote-tests/test_compiled_build_profiles.py \
+            --aapt2 "$AAPT2" \
+            --android-jar "$ANDROID_28_JAR" \
+            --compiled-res build_ci/compiled_res.zip \
+            --manifest akai-remote-tv/app/src/main/AndroidManifest.xml
+
       - name: 7. Explicit APK Contents Inspection and Verification (unzip -l)
         run: |
           echo "=== Verifying internal contents of candidate CI APK ==="
