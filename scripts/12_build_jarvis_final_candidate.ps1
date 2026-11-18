@@ -318,7 +318,7 @@ if (Test-Path $releaseApk) {
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($xmlTree)) {
         throw 'Release gate blocked: aapt dump xmltree failed; cannot verify debuggable flag.'
     }
-    $compiledDebugTrue = $xmlTree -match 'android:debuggable\(0x0101000f\)=\(type 0x12\)0x1(?:\s|$)'
+    $compiledDebugTrue = $xmlTree -match 'android:debuggable\(0x0101000f\)=\(type 0x12\)(?:0x1|0xffffffff)(?:\s|$)'
     $compiledDebugFalse = $xmlTree -match 'android:debuggable\(0x0101000f\)=\(type 0x12\)0x0(?:\s|$)'
     $compiledDebugAbsent = $xmlTree -notmatch 'android:debuggable'
     if ($BuildProfile -eq 'Diagnostic') {
