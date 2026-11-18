@@ -119,6 +119,8 @@ def build_and_check(aapt2: Path, android_jar: Path, compiled: Path,
         str(compiled), "--auto-add-overlay",
         "--min-sdk-version", "21", "--target-sdk-version", "28",
         "--version-code", str(version), "--version-name", version_name,
+        # Manifest source explicitly contains A2 v3; without this AAPT2 keeps it.
+        "--replace-version",
     ]
     if profile == "Diagnostic":
         argv.append("--debug-mode")
