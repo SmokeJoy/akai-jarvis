@@ -3,18 +3,15 @@
 **Stato:** procedura di HANDOFF, non autorizzazione all'installazione.  
 **Hardware:** AKAI AKTV5037N, Android 9/API28, ARMv7; installato A2 Preview `it.akai.customremote` vCode 3.  
 **Sorgente finale:** PR #18, branch `feat/jarvis-final-agent-ota-foundation-20261117`, stacked su PR #16.  
-**Obiettivo aggiornato 18/11:** due APK con lo stesso firmatario originale: v4 Diagnostic debuggable per collaudo owner-led; soltanto dopo test e nuova autorizzazione v5+ Release non-debuggable. Dati e possibilità di recupero da preservare; niente OTA automatico.
+**Obiettivo owner più recente 18/11:** v4 Diagnostic completa di navigazione, OTA operativa a PC spento, misure reali sulla AKAI e recupero verificato; v5 stesso codice applicativo, solo debug OFF e metadati/versionCode di Release. Due APK stessa firma originale, nessun OTA/ADB install automatico.
 
-## Vincolo release v5 aggiornato dal proprietario (18/11/2026)
+## Decisione successiva e vincolante: tutte le funzioni nella v4, v5 solo debug OFF
 
-**La v5 non può essere rilasciata limitandosi a ricompilare la v4 con debug disattivato.** Sono obbligatori e documentati in `docs/JARVIS_V5_MANDATORY_RELEASE_GATES.md`:
+**Quattro gate obbligatori già per la v4 Diagnostic:** navigazione multipasso fra app nei limiti Android/DRM; OTA on-TV autenticato con PC spento e consenso proprietario; benchmark RAM/CPU/stabilità reali sulla AKAI; APK originale firmato e recuperabilità effettiva di APK+SQLite/WAL+TLS. Vedere `docs/JARVIS_V4_COMPLETE_ACCEPTANCE.md`.
 
-- navigazione multipasso fra app con esiti verificati, STOP, apprendimento solo dopo successo; limiti Android/DRM esplicitati senza aggirarli;
-- OTA operativa dalla TV a PC spento con HTTPS, manifest autenticato, certificato e hash APK controllati e consenso PackageInstaller;
-- test prestazioni reali sulla AKAI per RAM, CPU, tempo di risposta, stabilità, consumo idle e regressioni Home/remote/tuner;
-- APK v5 originale firmato con lo stesso certificato, non-debuggable, package/version esatti, backup e **recuperabilità reale** di APK+SQLite/WAL+TLS verificate.
+La v4 è attualmente **INCOMPLETE** finché i quattro gate non hanno prove, incluse quelle su dispositivo. L'APK diagnostico v4 per eseguire i test hardware richiede prima CI PASS, firma originale, preflight in sola lettura, backup recuperabile e consenso espresso dell'owner per la prova; non implica un deploy automatico.
 
-Ogni gate privo di evidenza: **NO_GO_V5_RELEASE**. L'OTA precedentemente definita "opzionale" è diventata obbligatoria **solo per il rilascio v5**. La v4 Diagnostic rimane una prova distinta, da autorizzare separatamente; nulla autorizza un aggiornamento TV automatico.
+**La v5 deve preservare identiche tutte le funzionalità v4 accettate**: cambia solo `android:debuggable=false`, profilo Release e i metadati/versionCode richiesti dall'aggiornamento Android, mantenendo la firma originale. Nessuna nuova funzione o refactoring nella v5; se serve una correzione, applicarla prima alla v4 e ripetere i collaudi. Questa decisione sostituisce il vecchio piano di spostare gli obblighi sulla v5.
 
 ## 1. Verifiche da completare in GitHub PRIMA di costruire l'APK destinato alla TV
 
