@@ -28,6 +28,37 @@ if ($validNode) {
     $env:PATH = $nodeDir + [System.IO.Path]::PathSeparator + $env:PATH
 }
 
+# Offline test fixture only: production installer requires aapt metadata and never bypasses it.
+# A mock binary is isolated under a temporary test-only SDK; NO physical TV/ADB.
+$mockAaptRoot = Join-Path $tempDir ("jarvis_mock_aapt_" + [Guid]::NewGuid().ToString("N"))
+$mockSdkRoot = Join-Path $mockAaptRoot "sdk"
+$mockBuildTools = Join-Path $mockSdkRoot "build-tools/99.0.0"
+New-Item -ItemType Directory -Force -Path $mockBuildTools | Out-Null
+$mockAaptJs = Join-Path $mockAaptRoot "mock_aapt.js"
+@'
+const fs = require('fs');
+const args = process.argv.slice(2);
+if (args.length !== 3 || args[0] !== 'dump' || args[1] !== 'badging' || !fs.existsSync(args[2])) {
+    console.error('MOCK_AAPT_INVALID_REQUEST');
+    process.exit(2);
+}
+console.log("package: name='it.akai.customremote' versionCode='4' versionName='1.3.0-diagnostic-rc1'");
+'@ | Set-Content -LiteralPath $mockAaptJs -Encoding UTF8
+if (-not $validNode) { throw 'Mock aapt requires Node.js.' }
+if ($isWin) {
+    $mockAaptCommand = Join-Path $mockBuildTools 'aapt.cmd'
+    $cmdText = '@echo off' + [Environment]::NewLine + ('"{0}" "{1}" %*' -f $validNode, $mockAaptJs)
+    Set-Content -LiteralPath $mockAaptCommand -Value $cmdText -Encoding ASCII
+} else {
+    $mockAaptCommand = Join-Path $mockBuildTools 'aapt'
+    $shText = '#!/bin/sh' + [Environment]::NewLine + ('exec "{0}" "{1}" "$@"' -f $validNode, $mockAaptJs)
+    Set-Content -LiteralPath $mockAaptCommand -Value $shText -Encoding UTF8
+    & chmod +x $mockAaptCommand
+}
+$env:ANDROID_HOME = $mockSdkRoot
+$env:ANDROID_SDK_ROOT = $mockSdkRoot
+$env:PATH = $mockBuildTools + [System.IO.Path]::PathSeparator + $env:PATH
+
 function Get-FreeLoopbackPort {
     $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
     $listener.Start()
@@ -405,7 +436,7 @@ if (args.includes('exec-out')) {
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('PIDOF_CHECK') || args.includes('pids=')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
 if (args.includes('pidof')) { console.log('1234'); process.exit(0); }
-if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    versionCode=3 minSdk=21 targetSdk=28\n    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('shell')) { process.exit(0); }
@@ -586,7 +617,7 @@ if (args.includes('exec-out')) {
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('pidof')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
 if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
-if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    versionCode=3 minSdk=21 targetSdk=28\n    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('shell')) {
     if (args.includes('cat databases/akai_memory.db')) {
@@ -777,7 +808,7 @@ if (args.includes('exec-out') || args.includes('cat databases/akai_memory.db')) 
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('pidof')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
 if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
-if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    versionCode=3 minSdk=21 targetSdk=28\n    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 process.exit(0);
 "@ | Out-File -FilePath $mockAdbJs9 -Encoding ascii
@@ -1153,7 +1184,7 @@ if (args.includes('exec-out')) {
     process.stdout.write(buf, () => process.exit(0));
     return;
 }
-if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    versionCode=3 minSdk=21 targetSdk=28\n    userId=10123'); process.exit(0); }
 if (args.includes('shell')) { process.exit(0); }
 process.exit(0);
 "@ | Out-File -FilePath $mockAdbJs13 -Encoding ascii
@@ -3563,7 +3594,7 @@ if (args.includes('exec-out')) {
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('PIDOF_CHECK') || args.includes('pids=')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
 if (args.includes('pidof')) { console.log('1234'); process.exit(0); }
-if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    versionCode=3 minSdk=21 targetSdk=28\n    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('shell')) { process.exit(0); }
@@ -3722,7 +3753,7 @@ if (args.includes('exec-out')) {
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('PIDOF_CHECK') || args.includes('pids=')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
 if (args.includes('pidof')) { console.log('1234'); process.exit(0); }
-if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    versionCode=3 minSdk=21 targetSdk=28\n    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('shell')) { process.exit(0); }
@@ -3881,7 +3912,7 @@ if (args.includes('exec-out')) {
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('PIDOF_CHECK') || args.includes('pids=')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
 if (args.includes('pidof')) { console.log('1234'); process.exit(0); }
-if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    versionCode=3 minSdk=21 targetSdk=28\n    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('shell')) { process.exit(0); }
@@ -4035,7 +4066,7 @@ if (args.includes('exec-out')) {
 if (args.includes('install')) { console.log('Success'); process.exit(0); }
 if (args.includes('PIDOF_CHECK') || args.includes('pids=')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
 if (args.includes('pidof')) { console.log('1234'); process.exit(0); }
-if (args.includes('dumpsys package')) { console.log('    userId=10123'); process.exit(0); }
+if (args.includes('dumpsys package')) { console.log('    versionCode=3 minSdk=21 targetSdk=28\n    userId=10123'); process.exit(0); }
 if (args.includes('stat -c')) { console.log('10123'); process.exit(0); }
 if (args.includes('test -f') || args.includes('FILE_PROBE_RESULT')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
 if (args.includes('shell')) { process.exit(0); }
