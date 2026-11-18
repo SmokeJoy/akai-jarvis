@@ -2102,6 +2102,8 @@ if (argStr.includes('pm path it.akai.customremote')) {
     console.log('package:/data/app/it.akai.customremote-1/base.apk');
     process.exit(0);
 }
+if (argStr.includes('getprop ro.build.type')) { console.log('user'); process.exit(0); }
+if (argStr.includes('getprop ro.debuggable')) { console.log('0'); process.exit(0); }
 if (argStr.includes('dumpsys')) {
     console.log('    versionCode=12 minSdk=28 targetSdk=28');
     console.log('    versionName=1.0.5');
@@ -2176,6 +2178,11 @@ if ($out21 -match "INVENTARIO E PREFLIGHT READ-ONLY TV" -and
     $out21 -match "Home v8 \(it\.akai\.customhome\.v8\)\s+:\s+PRESENTE E PROTETTA" -and
     $out21 -match "Home v7 \(it\.akai\.customhome\)\s+:\s+PRESENTE E PROTETTA" -and
     $out21 -match "UNKNOWN / INACCESSIBLE" -and
+    $out21 -match "\[NO-GO DATI\]" -and
+    $out21 -match "Android build type\s+:\s+user" -and
+    $out21 -match "ro\.debuggable\s+:\s+0" -and
+    $out21 -match "Recupero downgrade\s+:\s+NON DIMOSTRATO" -and
+    $out21 -match "NON autorizza installazione" -and
     $out21 -match "Tabella Trasparenza Dati Greenfield" -and
     $out21 -notmatch "VIOLATION_FORCE_STOP_CALLED") {
     Write-Host "[PASS] [TEST AFFERMATIVO / PREFLIGHT READ-ONLY] Test 21: Inventario preflight completato: dumpsys versionCode/Name, apksigner SHA-256, Home v8/v7 protette, DB inaccessibile non-zero, zero force-stop" -ForegroundColor Green
