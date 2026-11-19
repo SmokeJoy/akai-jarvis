@@ -29,18 +29,24 @@ public final class OtaUpdatePreparation {
         public final File privateApk;
         public final int candidateVersionCode;
         public final String expectedSha256;
+        // This candidate originates only from OtaSignedReleaseManifest.verify().
+        // The immutable metadata must be rechecked against the *actual* APK
+        // during on-device preflight immediately before any installer session.
+        public final OtaCandidateGate.Candidate verifiedCandidate;
 
-        private Result(boolean staged, String code, File privateApk, int version, String digest) {
+        private Result(boolean staged, String code, File privateApk, int version,
+                       String digest, OtaCandidateGate.Candidate verifiedCandidate) {
             this.staged = staged;
             this.code = code;
             this.privateApk = privateApk;
             this.candidateVersionCode = version;
             this.expectedSha256 = digest;
+            this.verifiedCandidate = verifiedCandidate;
         }
     }
 
     private static Result deny(String code) {
-        return new Result(false, code, null, 0, null);
+        return new Result(false, code, null, 0, null, null);
     }
 
     public static Result prepare(Context context, String locallyConfiguredManifestUrl,
@@ -101,7 +107,8 @@ public final class OtaUpdatePreparation {
                     return deny("PREPARE_ARCHIVE_CHANGED");
             }
             return new Result(true, "VERIFIED_PRIVATE_APK_NOT_INSTALLED",
-                    staged, signed.candidate.versionCode, signed.candidate.apkSha256);
+                    staged, signed.candidate.versionCode, signed.candidate.apkSha256,
+                    signed.candidate);
         } catch (Exception unavailable) {
             return deny("PREPARE_DOWNLOAD_OR_INSPECTION_FAILED");
         }
