@@ -21,6 +21,9 @@ export function auditActualApkOutputs({ signerReport, badging, manifestXml, hand
   const signers = [...signerReport.matchAll(/Signer #([0-9]+) certificate SHA-256 digest:\s*([0-9a-f]{64})\s*$/gim)];
   must(signers.length === 1 && signers[0][1] === '1' &&
        signers[0][2].toLowerCase() === EXPECTED_CERT, 'REAL_SIGNER');
+  // A truncated/contradictory apksigner report must never hide an extra signer.
+  const signerCounts = [...signerReport.matchAll(/^Number of signers:\s*([0-9]+)\s*$/gim)];
+  must(signerCounts.length === 1 && signerCounts[0][1] === '1', 'SIGNER_COUNT');
   must(/Verified using v2 scheme \(APK Signature Scheme v2\): true/i.test(signerReport),
        'APK_V2_SIGNATURE');
   const pkgs = [...badging.matchAll(/^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'\s+versionName='([^']+)'(?:\s+[^\n]*)?$/gm)];
