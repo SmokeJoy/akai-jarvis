@@ -234,17 +234,20 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSignedReleaseManifest.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaPinnedReleaseKey.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaHttpsTransport.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaStagingCommit.java \
             akai-remote-tests/OtaCandidateGateTest.java \
             akai-remote-tests/OtaArchiveIdentityGateTest.java \
             akai-remote-tests/OtaSignedReleaseManifestTest.java \
             akai-remote-tests/OtaPinnedReleaseKeyTest.java \
-            akai-remote-tests/OtaHttpsTransportTest.java
+            akai-remote-tests/OtaHttpsTransportTest.java \
+            akai-remote-tests/OtaStagingCommitTest.java
           java -cp test_ota it.akai.customremote.OtaCandidateGateTest
           java -cp test_ota it.akai.customremote.OtaArchiveIdentityGateTest
           java -cp test_ota it.akai.customremote.OtaSignedReleaseManifestTest
           java -cp test_ota it.akai.customremote.OtaPinnedReleaseKeyTest
           java -cp test_ota it.akai.customremote.OtaHttpsTransportTest
-          echo "Archive policy and manifest crypto gates passed; OTA download, owner UI and Android real-device installer are NOT verified."
+          java -cp test_ota it.akai.customremote.OtaStagingCommitTest
+          echo "Archive/staging policy gates passed; OTA real-device download, owner UI and installation remain unverified."
 
       - name: 4c. DeepSeek/Kimi-only provider guard (no local AI models)
         run: |
