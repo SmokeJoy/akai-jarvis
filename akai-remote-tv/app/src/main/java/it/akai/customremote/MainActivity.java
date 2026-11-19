@@ -16,6 +16,8 @@ import android.widget.Toast;
 import it.akai.customremote.qr.QrBitmapUtil;
 import it.akai.customremote.ai.OtaReleaseTrust;
 import it.akai.customremote.ai.OtaAndroidArchiveInspector;
+import it.akai.customremote.ai.OtaReleaseChannel;
+import it.akai.customremote.ai.OtaUpdatePreparation;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -266,8 +268,10 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Deliberately local and read-only: the TV D-pad initiates the
-        // diagnostics. No Web API, no APK fetch, no Android installation.
+        // Owner-only D-pad action: if an offline-pinned release key+channel
+        // are provisioned, verify and stage a real HTTPS APK on a worker.
+        // Never install or start PackageInstaller from this button.
+        // No Web API, at-boot polling, silent updates or paid AI calls.
         btnOtaCheck.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -285,7 +289,23 @@ public class MainActivity extends Activity {
                                 MainActivity.this) == null) {
                             message = "OTA bloccata: firma/versione installata non verificabili.";
                         } else {
-                            message = "Identità locale verificata. Server release, backup e recupero ancora da convalidare.";
+                            OtaReleaseChannel.Channel channel =
+                                    OtaReleaseChannel.loadBundled(MainActivity.this);
+                            if (channel == null) {
+                                message = "OTA non configurata: manca il canale HTTPS ufficiale.";
+                            } else {
+                                OtaUpdatePreparation.Result candidate =
+                                        OtaUpdatePreparation.prepare(MainActivity.this,
+                                                channel.manifestUrl, channel.trustedHosts);
+                                if (candidate.staged) {
+                                    message = "Versione " + candidate.candidateVersionCode +
+                                            " verificata e scaricata. NON installata: " +
+                                            "servono backup e recupero approvati.";
+                                } else {
+                                    message = "OTA: " + candidate.code +
+                                            " (nessuna installazione)";
+                                }
+                            }
                         }
                         final String finalMessage = message;
                         runOnUiThread(new Runnable() {
