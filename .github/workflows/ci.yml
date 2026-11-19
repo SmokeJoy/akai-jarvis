@@ -64,15 +64,18 @@ jobs:
       - name: 1a2. Optional local Italian Web Remote voice (no cloud TTS)
         run: node akai-remote-tests/test_web_local_italian_voice.js
 
-      - name: 1a3. Owner-offline OTA release key and manifest tools syntax
+      - name: 1a3. Owner-offline OTA release key and manifest tools syntax and actual APK evidence audit
         run: |
           node --check scripts/13_create_ota_release_trust.mjs
           node --check scripts/14_sign_ota_release_manifest.mjs
+          node --check scripts/lib/ota_release_apk_proof.mjs
+          node akai-remote-tests/test_ota_release_apk_proof.mjs
           # Never execute owner-offline cryptographic key generation in Actions.
           grep -q 'process.env.CI' scripts/13_create_ota_release_trust.mjs
           grep -q 'process.env.CI' scripts/14_sign_ota_release_manifest.mjs
           grep -q 'aes-256-cbc' scripts/13_create_ota_release_trust.mjs
-          echo 'Offline key tooling parses; no production key generated in CI.'
+          grep -q 'proveActualOwnerSignedApk' scripts/14_sign_ota_release_manifest.mjs
+          echo 'Offline key tooling parses; actual APK signature and manifest evidence parsers tested, no production key generated in CI.'
 
       - name: 1b. Parse and safety-audit Windows A1 candidate build script
         shell: pwsh
