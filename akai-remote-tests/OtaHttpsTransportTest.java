@@ -65,6 +65,31 @@ public final class OtaHttpsTransportTest {
             @Override public int read(byte[] b, int offset, int length) { return 0; }
         }, 4, "repeated zero reads");
 
+        // Cancellation must fail closed even when a stream produces bytes.
+        Thread.currentThread().interrupt();
+        try {
+            rejectedRead(new ByteArrayInputStream(a), 4, "interrupted before read");
+            if (!Thread.currentThread().isInterrupted())
+                throw new AssertionError("interrupt flag was cleared");
+        } finally {
+            Thread.interrupted(); // reset test thread only
+        }
+        rejectedRead(new InputStream() {
+            private boolean first = true;
+            @Override public int read() { return 1; }
+            @Override public int read(byte[] b, int off, int len) {
+                if (first) {
+                    first = false;
+                    Thread.currentThread().interrupt();
+                }
+                b[off] = 1;
+                return 1;
+            }
+        }, 4, "interrupted during read");
+        if (!Thread.currentThread().isInterrupted())
+            throw new AssertionError("stream cancellation cleared interrupt");
+        Thread.interrupted(); // reset test thread only
+
         // Neither unsigned Candidate metadata nor an untrusted signature can
         // authorize staging; do not perform network operations in host tests.
         KeyPairGenerator keygen = KeyPairGenerator.getInstance("RSA");
