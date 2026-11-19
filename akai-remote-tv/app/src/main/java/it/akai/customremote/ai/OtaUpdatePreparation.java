@@ -83,7 +83,6 @@ public final class OtaUpdatePreparation {
         if (Thread.currentThread().isInterrupted()) return deny("PREPARE_CANCELLED");
 
         File staged = null;
-        boolean accepted = false;
         try {
             staged = OtaHttpsTransport.stageVerifiedApk(
                     signed, locallyTrustedHosts, context.getFilesDir());
@@ -101,13 +100,15 @@ public final class OtaUpdatePreparation {
                         file, signed.candidate.sizeBytes, signed.candidate.apkSha256))
                     return deny("PREPARE_ARCHIVE_CHANGED");
             }
-            accepted = true;
             return new Result(true, "VERIFIED_PRIVATE_APK_NOT_INSTALLED",
                     staged, signed.candidate.versionCode, signed.candidate.apkSha256);
         } catch (Exception unavailable) {
             return deny("PREPARE_DOWNLOAD_OR_INSPECTION_FAILED");
-        } finally {
-            if (!accepted && staged != null) staged.delete();
         }
+        // Do not delete 'staged' on later Android PackageManager inspection
+        // failures. Immutable candidate files may have existed BEFORE this
+        // attempt, and deleting one here can destroy the prior verified
+        // fallback. OtaHttpsTransport deletes only an uncommitted .part;
+        // separate owner-approved bounded cleanup must handle obsolete APKs.
     }
 }
