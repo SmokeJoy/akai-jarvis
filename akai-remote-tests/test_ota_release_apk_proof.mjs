@@ -31,6 +31,15 @@ reject({ ...fixture, signerReport: fixture.signerReport.replace(
   'Verified using v2 scheme (APK Signature Scheme v2): true',
   'Verified using v2 scheme (APK Signature Scheme v2): false') },
        'apk v2 scheme unverified');
+reject({ ...fixture, signerReport: fixture.signerReport + 'Verified using v2 scheme (APK Signature Scheme v2): false\n' },
+       'contradictory duplicate v2 status');
+reject({ ...fixture, signerReport: fixture.signerReport.replace(
+  'Verified using v2 scheme (APK Signature Scheme v2): true',
+  'Not Verified using v2 scheme (APK Signature Scheme v2): true') },
+       'v2 status must be anchored to actual apksigner output');
+reject({ ...fixture, manifestXml: fixture.manifestXml +
+  '    A: android:debuggable(0x0101000f)=(type 0x12)0x0\n' },
+       'duplicate compiled debuggable attributes');
 reject({ ...fixture, signerReport: fixture.signerReport.replace('Number of signers: 1', 'Number of signers: 2') },
        'contradictory signer count even when only first certificate is printed');
 reject({ ...fixture, signerReport: fixture.signerReport.replace('Number of signers: 1\n', '') },
