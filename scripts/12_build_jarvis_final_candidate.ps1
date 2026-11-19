@@ -20,6 +20,9 @@ param(
     [Parameter(Mandatory=$true)]
     [ValidatePattern('^[A-Za-z0-9._-]{1,100}$')]
     [string]$SigningAlias,
+    # Distinct owner-authorized OTA staging test build: still v4 Diagnostic,
+    # may increment versionCode to test updater before final v5 release.
+    [switch]$OtaStagingTest,
     # Optional owner-offline PUBLIC trust materials (never a private key).
     # Both values are required together; build stays OTA-disabled otherwise.
     [string]$OtaReleasePublicKeyPath,
@@ -27,8 +30,15 @@ param(
 )
 $ErrorActionPreference = "Stop"
 # This branch builds a debug-capable owner-signed v4 first. Release is v5+ only.
-if ($BuildProfile -eq 'Diagnostic' -and $VersionCode -ne 4) {
-    throw 'Profilo Diagnostic richiede versionCode=4.'
+if ($BuildProfile -eq 'Diagnostic' -and -not $OtaStagingTest -and $VersionCode -ne 4) {
+    throw 'Profilo Diagnostic ordinario richiede versionCode=4.'
+}
+if ($OtaStagingTest -and
+    ($BuildProfile -ne 'Diagnostic' -or $VersionCode -lt 5 -or $VersionCode -gt 99)) {
+    throw 'OTA staging riservato a v4 Diagnostic versionCode 5..99 con approvazione proprietario.'
+}
+if ($OtaStagingTest -and $VersionName -notmatch '(?i)diagnostic.*ota-stage') {
+    throw 'OTA staging richiede versionName diagnostico riconoscibile come ota-stage.'
 }
 if ($BuildProfile -eq 'Release' -and $VersionCode -lt 5) {
     throw 'Profilo Release richiede versionCode>=5 dopo il collaudo v4.'
@@ -149,7 +159,7 @@ $alignedApk = Join-Path $buildDir "aligned.apk"
 $outputDir = Join-Path $buildDir "outputs\apk\debug"
 $finalApk = Join-Path $outputDir "app-ci-not-for-install.apk"
 $releaseOutputDir = Join-Path $buildDir "outputs\apk\release"
-$apkFileName = if ($BuildProfile -eq 'Diagnostic') { 'jarvis-v4-owner-signed-diagnostic.apk' } else { 'app-release.apk' }
+$apkFileName = if ($OtaStagingTest) { ('jarvis-v4-ota-stage-v{0}-owner-signed-diagnostic.apk' -f $VersionCode) } elseif ($BuildProfile -eq 'Diagnostic') { 'jarvis-v4-owner-signed-diagnostic.apk' } else { 'app-release.apk' }
 $releaseApk = Join-Path $releaseOutputDir $apkFileName
 $releaseKeystore = $SigningKeystorePath
 
@@ -500,6 +510,7 @@ if (Test-Path $releaseApk) {
         minSdk = 21
         targetSdk = 28
         androidTvTested = $false
+        otaStagingTestOnly = [bool]$OtaStagingTest
         otaPublicTrustProvisioned = $otaConfigured
         otaChannelHost = $(if ($otaConfigured) { $otaUri.DnsSafeHost } else { $null })
         signedWithOwnerOriginalCert = $true
