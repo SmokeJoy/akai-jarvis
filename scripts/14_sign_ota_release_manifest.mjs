@@ -9,6 +9,7 @@
  *    --handoff <JARVIS_FINAL_BUILD_MANIFEST.json>
  *    --manifest-url <https://.../jarvis.manifest>
  *    --apk-url <https://.../jarvis.apk>
+ *    --approved-v4-source-sha <40hex-approved-v4-HEAD>
  *    --out <private-output-dir> --owner-approved-after-tests
  *
  * Requires the distinct owner-offline OTA RSA private key created by script 13,
@@ -35,7 +36,7 @@ for (let i = 0; i < args.length; i++) {
   if (fields.has(args[i])) throw new Error('Duplicate CLI argument ' + args[i]);
   fields.set(args[i], args[++i]);
 }
-const needed = ['--apk','--handoff','--manifest-url','--apk-url','--out'];
+const needed = ['--apk','--handoff','--manifest-url','--apk-url','--out','--approved-v4-source-sha'];
 if (!needed.every(x => fields.has(x)) ||
     fields.size !== needed.length + 1 ||
     !fields.has('--owner-approved-after-tests'))
@@ -66,6 +67,10 @@ if (outsideRepo === '' || (!outsideRepo.startsWith('..') && !isAbsolute(outsideR
 if (existsSync(outDir)) throw new Error('Output folder already exists; never overwrite an existing release.');
 const apkPath = resolve(fields.get('--apk'));
 const handoff = JSON.parse(readFileSync(resolve(fields.get('--handoff')), 'utf8'));
+const ownerApprovedV4Sha = String(fields.get('--approved-v4-source-sha') || '').toLowerCase();
+if (!/^[a-f0-9]{40}$/.test(ownerApprovedV4Sha) ||
+    String(handoff.sourceCommit || '').toLowerCase() !== ownerApprovedV4Sha)
+  throw new Error('V5 release source MUST equal independently TV-approved v4 source HEAD. No functional code changes allowed.');
 const signer = '21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed';
 if (handoff.packageName !== 'it.akai.customremote' ||
     handoff.buildProfile !== 'Release' || handoff.debuggable !== false ||
