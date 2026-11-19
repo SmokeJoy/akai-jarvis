@@ -261,6 +261,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaStagingCommit.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaInstallReadinessGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSessionByteTransfer.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VerifiedAtomicFileCopy.java \
             akai-remote-tests/OtaCandidateGateTest.java \
             akai-remote-tests/OtaArchiveIdentityGateTest.java \
             akai-remote-tests/OtaSignedReleaseManifestTest.java \
@@ -268,7 +269,8 @@ jobs:
             akai-remote-tests/OtaHttpsTransportTest.java \
             akai-remote-tests/OtaStagingCommitTest.java \
             akai-remote-tests/OtaInstallReadinessGateTest.java \
-            akai-remote-tests/OtaSessionByteTransferTest.java
+            akai-remote-tests/OtaSessionByteTransferTest.java \
+            akai-remote-tests/VerifiedAtomicFileCopyTest.java
           java -cp test_ota it.akai.customremote.OtaCandidateGateTest
           java -cp test_ota it.akai.customremote.OtaArchiveIdentityGateTest
           java -cp test_ota it.akai.customremote.OtaSignedReleaseManifestTest
@@ -277,6 +279,7 @@ jobs:
           java -cp test_ota it.akai.customremote.OtaStagingCommitTest
           java -cp test_ota it.akai.customremote.OtaInstallReadinessGateTest
           java -cp test_ota it.akai.customremote.OtaSessionByteTransferTest
+          java -cp test_ota it.akai.customremote.VerifiedAtomicFileCopyTest
           echo "Archive/staging policy gates passed; OTA real-device download, owner UI and installation remain unverified."
 
       - name: 4c. DeepSeek/Kimi-only provider guard (no local AI models)
