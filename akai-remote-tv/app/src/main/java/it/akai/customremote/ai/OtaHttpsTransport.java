@@ -75,7 +75,11 @@ public final class OtaHttpsTransport {
         byte[] buffer = new byte[1024];
         int emptyReads = 0;
         int read;
-        while ((read = source.read(buffer)) != -1) {
+        while (true) {
+            if (Thread.currentThread().isInterrupted()) throw new IOException("OTA_CANCELLED");
+            read = source.read(buffer);
+            if (Thread.currentThread().isInterrupted()) throw new IOException("OTA_CANCELLED");
+            if (read == -1) break;
             if (read == 0) {
                 if (++emptyReads >= 3) throw new IOException("REPEATED_EMPTY_READ");
                 continue;
@@ -154,7 +158,11 @@ public final class OtaHttpsTransport {
                  FileOutputStream output = new FileOutputStream(partial)) {
                 byte[] buf = new byte[16 * 1024];
                 int count;
-                while ((count = input.read(buf)) != -1) {
+                while (true) {
+                    if (Thread.currentThread().isInterrupted()) throw new IOException("OTA_CANCELLED");
+                    count = input.read(buf);
+                    if (Thread.currentThread().isInterrupted()) throw new IOException("OTA_CANCELLED");
+                    if (count == -1) break;
                     if (count == 0) {
                         if (++emptyReads >= 3) throw new IOException("APK_REPEATED_EMPTY_READ");
                         continue;
