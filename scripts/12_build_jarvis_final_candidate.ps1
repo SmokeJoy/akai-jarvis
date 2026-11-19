@@ -19,7 +19,11 @@ param(
     [string]$SigningKeystorePath,
     [Parameter(Mandatory=$true)]
     [ValidatePattern('^[A-Za-z0-9._-]{1,100}$')]
-    [string]$SigningAlias
+    [string]$SigningAlias,
+    # Optional owner-offline PUBLIC trust materials (never a private key).
+    # Both values are required together; build stays OTA-disabled otherwise.
+    [string]$OtaReleasePublicKeyPath,
+    [string]$OtaReleaseManifestUrl
 )
 $ErrorActionPreference = "Stop"
 # This branch builds a debug-capable owner-signed v4 first. Release is v5+ only.
@@ -65,6 +69,38 @@ if ($SigningKeystorePath.StartsWith($repoRoot + [System.IO.Path]::DirectorySepar
 }
 if (-not $env:LOCALAPPDATA) {
     throw 'LOCALAPPDATA non disponibile: impossibile isolare gli artefatti fuori da OneDrive/Git.'
+}
+# Do not ever place the OTA private signing key in the app, APK, or public
+# repository. The client includes only a locally provisioned PUBLIC RSA key.
+$otaConfigured = -not [string]::IsNullOrWhiteSpace($OtaReleasePublicKeyPath) -and
+                 -not [string]::IsNullOrWhiteSpace($OtaReleaseManifestUrl)
+if ((-not [string]::IsNullOrWhiteSpace($OtaReleasePublicKeyPath)) -xor
+    (-not [string]::IsNullOrWhiteSpace($OtaReleaseManifestUrl))) {
+    throw 'OTA: specificare INSIEME -OtaReleasePublicKeyPath e -OtaReleaseManifestUrl.'
+}
+if ($otaConfigured) {
+    $OtaReleasePublicKeyPath = [IO.Path]::GetFullPath($OtaReleasePublicKeyPath)
+    if (-not (Test-Path -LiteralPath $OtaReleasePublicKeyPath -PathType Leaf)) {
+        throw 'OTA: chiave PUBBLICA RSA DER assente (niente download/installazione).'
+    }
+    if ($OtaReleasePublicKeyPath.StartsWith($repoRoot + [IO.Path]::DirectorySeparatorChar,
+                                           [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'OTA: file owner fuori repo obbligatorio, anche se e una chiave pubblica.'
+    }
+    $publicLength = (Get-Item -LiteralPath $OtaReleasePublicKeyPath).Length
+    if ($publicLength -lt 200 -or $publicLength -gt 1024) {
+        throw 'OTA: dimensione chiave pubblica SPKI DER non valida.'
+    }
+    try {
+        $otaUri = [Uri]::new($OtaReleaseManifestUrl)
+    } catch { throw 'OTA: URL manifesto non valida.' }
+    if (-not $otaUri.IsAbsoluteUri -or $otaUri.Scheme -ne 'https' -or
+        $otaUri.Port -ne 443 -or $otaUri.UserInfo -or $otaUri.Fragment -or
+        $otaUri.Query -or -not $otaUri.AbsolutePath.EndsWith('.manifest',
+            [StringComparison]::Ordinal) -or -not $otaUri.DnsSafeHost) {
+        throw 'OTA: usare URL HTTPS fissa, senza query, credenziali o fragment, terminante .manifest.'
+    }
+    $OtaReleaseManifestUrl = $otaUri.AbsoluteUri
 }
 
 Write-Host "=== BUILD FINALE: APK ARMv7 CODICE VERIFICATO, SENZA INSTALLAZIONE ===" -ForegroundColor Cyan
@@ -261,6 +297,14 @@ if (Test-Path $assetsDir) {
         }
     }
 }
+if ($otaConfigured) {
+    $publicDest = Join-Path $stagingAssets 'ota-release-public.der'
+    $channelDest = Join-Path $stagingAssets 'ota-release-channel.txt'
+    # PUBLIC-ONLY: never copy private PEM, keystore or credentials to APK.
+    Copy-Item -LiteralPath $OtaReleasePublicKeyPath -Destination $publicDest -ErrorAction Stop
+    [IO.File]::WriteAllBytes($channelDest,
+        [Text.Encoding]::ASCII.GetBytes($OtaReleaseManifestUrl + "`n"))
+}
 if (Test-Path $webSrcDir) {
     $webDstDir = Join-Path $stagingAssets "www"
     New-Item -ItemType Directory -Force -Path $webDstDir | Out-Null
@@ -398,7 +442,10 @@ if (Test-Path $releaseApk) {
             if (-not $entryNames.Add($entry.FullName)) {
                 throw "APK candidato rifiutato: entry ZIP duplicata $($entry.FullName)"
             }
-            if ($entry.FullName -match '\.(p12|jks|key|der|crt|pass)\z' -or $entry.FullName -match 'server_keystore') {
+            if ($entry.FullName -match '\.(p12|jks|key|crt|pass)\z' -or
+                ($entry.FullName -match '\.der\z' -and
+                 $entry.FullName -ne 'assets/ota-release-public.der') -or
+                $entry.FullName -match 'server_keystore') {
                 $foundForbidden += $entry.FullName
             }
         }
@@ -407,6 +454,16 @@ if (Test-Path $releaseApk) {
             if ($null -eq $requiredEntry -or $requiredEntry.Length -le 0) {
                 throw "APK candidato rifiutato: componente obbligatorio assente/vuoto: $required"
             }
+        }
+        $otaPubEntry = $zipTest.GetEntry('assets/ota-release-public.der')
+        $otaChannelEntry = $zipTest.GetEntry('assets/ota-release-channel.txt')
+        if ($otaConfigured) {
+            if ($null -eq $otaPubEntry -or $otaPubEntry.Length -lt 200 -or
+                $null -eq $otaChannelEntry -or $otaChannelEntry.Length -lt 20) {
+                throw 'OTA configurata ma public key/manifest URL non presenti nel pacchetto firmato.'
+            }
+        } elseif ($null -ne $otaPubEntry -or $null -ne $otaChannelEntry) {
+            throw 'OTA disabilitata: asset pubblico parziale o non autorizzato nel pacchetto.'
         }
     } finally {
         $zipTest.Dispose()
@@ -443,6 +500,8 @@ if (Test-Path $releaseApk) {
         minSdk = 21
         targetSdk = 28
         androidTvTested = $false
+        otaPublicTrustProvisioned = $otaConfigured
+        otaChannelHost = $(if ($otaConfigured) { $otaUri.DnsSafeHost } else { $null })
         signedWithOwnerOriginalCert = $true
         installed = $false
         buildUtc = (Get-Date).ToUniversalTime().ToString('o')
