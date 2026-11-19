@@ -311,5 +311,35 @@
             android:textSize="11sp"
             android:layout_marginTop="6dp" />
 
+        <!-- JARVIS v4 OTA: read-only owner-initiated readiness check.
+             No release URL, download, installer or background polling here. -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="JARVIS v4 - Aggiornamenti"
+            android:textColor="#38BDF8"
+            android:textStyle="bold"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/btn_ota_check"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:text="Controlla requisiti aggiornamenti"
+            android:textColor="#FFFFFF"
+            android:background="#334155"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/tv_ota_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Diagnostica locale: non scarica e non installa APK."
+            android:textColor="#CBD5E1"
+            android:textSize="12sp" />
+
     </LinearLayout>
 </ScrollView>
