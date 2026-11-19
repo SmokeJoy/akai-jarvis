@@ -135,6 +135,8 @@ public final class OtaOwnerPackageInstaller {
             callback.setAction(OtaInstallResultReceiver.ACTION_OTA_INSTALL_RESULT);
             callback.setPackage(context.getPackageName());
             callback.putExtra(OtaInstallResultReceiver.EXTRA_EXPECTED_SESSION_ID, sessionId);
+            callback.putExtra(OtaInstallResultReceiver.EXTRA_EXPECTED_VERSION_CODE,
+                    prepared.candidateVersionCode);
             PendingIntent pending = PendingIntent.getBroadcast(context, sessionId,
                     callback, PendingIntent.FLAG_UPDATE_CURRENT);
             session.commit(pending.getIntentSender());
