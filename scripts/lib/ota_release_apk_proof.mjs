@@ -66,12 +66,19 @@ export function findAndroidTool(repoRoot, executable) {
 }
 
 export function proveActualOwnerSignedApk({ repoRoot, apkPath, handoff, runner = execFileSync }) {
-  const signerTool = findAndroidTool(repoRoot, 'apksigner.bat');
+  // Node execFileSync cannot directly launch .bat/.cmd on Windows.
+  // Use the trusted SDK apksigner JAR with an argv vector, no shell.
+  const signerJar = findAndroidTool(repoRoot, 'lib/apksigner.jar');
+  const javaExecutable = [
+    process.env.JAVA_HOME ? join(process.env.JAVA_HOME, 'bin', 'java.exe') : null,
+    join(repoRoot, 'tools', 'jdk-17', 'bin', 'java.exe'),
+  ].filter(Boolean).find(existsSync);
+  must(javaExecutable, 'JAVA_NOT_AVAILABLE');
   const aaptTool = findAndroidTool(repoRoot, 'aapt.exe');
   const opts = { encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024, windowsHide: true };
   // Every command is executed on EXACTLY the file later used for OTA signing.
   // Never build a shell command; process argument vectors prevent injection.
-  const signerReport = runner(signerTool, ['verify', '--verbose', '--print-certs', apkPath], opts);
+  const signerReport = runner(javaExecutable, ['-jar', signerJar, 'verify', '--verbose', '--print-certs', apkPath], opts);
   const badging = runner(aaptTool, ['dump', 'badging', apkPath], opts);
   const manifestXml = runner(aaptTool, ['dump', 'xmltree', apkPath, 'AndroidManifest.xml'], opts);
   return auditActualApkOutputs({ signerReport, badging, manifestXml, handoff });
