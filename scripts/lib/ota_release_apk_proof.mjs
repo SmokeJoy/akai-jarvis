@@ -24,7 +24,8 @@ export function auditActualApkOutputs({ signerReport, badging, manifestXml, hand
   // A truncated/contradictory apksigner report must never hide an extra signer.
   const signerCounts = [...signerReport.matchAll(/^Number of signers:\s*([0-9]+)\s*$/gim)];
   must(signerCounts.length === 1 && signerCounts[0][1] === '1', 'SIGNER_COUNT');
-  must(/Verified using v2 scheme \(APK Signature Scheme v2\): true/i.test(signerReport),
+  const v2Reports = [...signerReport.matchAll(/^Verified using v2 scheme \(APK Signature Scheme v2\):\s*(true|false)\s*$/gim)];
+  must(v2Reports.length === 1 && v2Reports[0][1].toLowerCase() === 'true',
        'APK_V2_SIGNATURE');
   const pkgs = [...badging.matchAll(/^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'\s+versionName='([^']+)'(?:\s+[^\n]*)?$/gm)];
   must(pkgs.length === 1 &&
@@ -38,6 +39,8 @@ export function auditActualApkOutputs({ signerReport, badging, manifestXml, hand
   // A release must have the flag explicitly false OR omit it.
   must(!/A:\s+android:debuggable(?:\(0x[0-9a-f]+\))?\s*=\s*\(type 0x12\)0xffffffff/im.test(manifestXml) &&
        !/A:\s+android:debuggable(?:\(0x[0-9a-f]+\))?\s*=\s*.*\btrue\b/im.test(manifestXml), 'DEBUGGABLE_TRUE');
+  const debugAttributes = [...manifestXml.matchAll(/^\s*A:\s+android:debuggable(?:\(0x[0-9a-f]+\))?\s*=/gim)];
+  must(debugAttributes.length === 1, 'DEBUGGABLE_ATTRIBUTE_COUNT');
   // The owner build recipe requires the AAPT2-produced boolean false, not
   // merely omitting the attribute and guessing the manifest default.
   must(/A:\s+android:debuggable(?:\(0x[0-9a-f]+\))?\s*=\s*\(type 0x12\)0x0(?:\s|$)/im.test(manifestXml),
