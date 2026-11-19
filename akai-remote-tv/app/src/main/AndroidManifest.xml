@@ -52,6 +52,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Android PackageInstaller status callback, strictly app-private.
+             This does NOT enable silent OTA; OS confirmation is mandatory. -->
+        <receiver
+            android:name=".OtaInstallResultReceiver"
+            android:exported="false" />
+
         <!-- Optional on-device one-shot screen capture; never remotely exported. -->
         <activity
             android:name=".LocalVisualCaptureActivity"
