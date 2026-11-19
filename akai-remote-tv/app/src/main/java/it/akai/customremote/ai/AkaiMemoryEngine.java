@@ -892,11 +892,9 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     }
 
     private static void copyFile(File src, File dst) throws IOException {
-        try (FileInputStream in = new FileInputStream(src);
-             FileOutputStream out = new FileOutputStream(dst);
-             FileChannel inChannel = in.getChannel();
-             FileChannel outChannel = out.getChannel()) {
-            inChannel.transferTo(0, inChannel.size(), outChannel);
-        }
+        // One-shot FileChannel.transferTo may copy only SOME bytes, leading to a
+        // truncated backup that would only be detected after damage. The
+        // replacement is staged/fsynced/sha-verified before an atomic move.
+        VerifiedAtomicFileCopy.copy(src, dst);
     }
 }
