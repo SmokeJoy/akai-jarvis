@@ -311,8 +311,8 @@
             android:textSize="11sp"
             android:layout_marginTop="6dp" />
 
-        <!-- JARVIS v4 OTA: read-only owner-initiated readiness check.
-             No release URL, download, installer or background polling here. -->
+        <!-- JARVIS v4 OTA: D-pad button can check and stage from owner-bundled
+             signed HTTPS channel only. Never launches an installer or polls. -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -327,7 +327,7 @@
             android:layout_width="match_parent"
             android:layout_height="48dp"
             android:layout_marginTop="8dp"
-            android:text="Controlla requisiti aggiornamenti"
+            android:text="Verifica aggiornamenti (senza installare)"
             android:textColor="#FFFFFF"
             android:background="#334155"
             android:focusable="true" />
@@ -337,7 +337,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="Diagnostica locale: non scarica e non installa APK."
+            android:text="Senza canale e chiave ufficiali: funzione bloccata. Se configurata, scarica solo dopo la pressione del tasto; non installa."
             android:textColor="#CBD5E1"
             android:textSize="12sp" />
 
