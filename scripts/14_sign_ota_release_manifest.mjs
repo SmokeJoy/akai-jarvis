@@ -126,9 +126,19 @@ if (manifestBytes.length > 8192 || signature.length < 256 || signature.length > 
   throw new Error('Unexpected signed release manifest/signature format.');
 
 mkdirSync(outDir, { recursive: false, mode: 0o700 });
+// Validate the actual output APK, not only the mutable input path. If the
+// input changes between audit and copy, fail closed before writing metadata.
+const publishedApkPath = join(outDir, apkFile);
+copyFileSync(apkPath, publishedApkPath, fsConstants.COPYFILE_EXCL);
+const publishedApkBytes = readFileSync(publishedApkPath);
+const publishedApkSha = createHash('sha256').update(publishedApkBytes).digest('hex');
+if (publishedApkBytes.length !== apkBytes.length || publishedApkSha !== apkSha)
+  throw new Error('Published APK differs from verified candidate; abort release preparation.');
+proveActualOwnerSignedApk({ repoRoot, apkPath: publishedApkPath, handoff });
+// Emit the signed metadata only after the destination APK is independently
+// checked for both byte integrity and Android package/signature properties.
 writeFileSync(join(outDir, manifestFile), manifestBytes, { flag: 'wx' });
 writeFileSync(join(outDir, manifestFile + '.sig'), signature, { flag: 'wx' });
-copyFileSync(apkPath, join(outDir, apkFile), fsConstants.COPYFILE_EXCL);
 process.stdout.write(
   'OWNER-REVIEW RELEASE FOLDER ONLY. NOT UPLOADED OR INSTALLED.\n' +
   'Output: ' + outDir + '\nVersion: ' + handoff.versionCode +
