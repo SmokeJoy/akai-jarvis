@@ -49,11 +49,14 @@ public final class OtaAndroidInstallPreflight {
 
         try {
             File root = context.getFilesDir().getCanonicalFile();
-            File stage = new File(root, "ota-staging").getCanonicalFile();
+            File expectedStage = new File(root, "ota-staging");
+            File stage = expectedStage.getCanonicalFile();
             File input = prepared.privateApk.getCanonicalFile();
             String name = "jarvis-" + prepared.candidateVersionCode + "-" +
                     prepared.expectedSha256.toLowerCase(java.util.Locale.ROOT) + ".apk";
-            if (!new File(root, "ota-staging").getCanonicalFile().equals(stage) ||
+            if (!expectedStage.getAbsoluteFile().equals(stage) ||
+                    Files.isSymbolicLink(expectedStage.toPath()) ||
+                    !Files.isDirectory(stage.toPath(), LinkOption.NOFOLLOW_LINKS) ||
                     !stage.equals(input.getParentFile()) ||
                     !name.equals(input.getName()) ||
                     Files.isSymbolicLink(prepared.privateApk.toPath()) ||
