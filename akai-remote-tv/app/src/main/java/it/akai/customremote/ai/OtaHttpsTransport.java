@@ -142,7 +142,6 @@ public final class OtaHttpsTransport {
             throw new IOException("STAGING_PATH_UNTRUSTED");
 
         File partial = File.createTempFile("jarvis-", ".part", staging);
-        File target = new File(staging, "jarvis-" + signedCandidate.versionCode + ".apk");
         boolean approvedBytes = false;
         HttpsURLConnection connection = null;
         try {
@@ -182,12 +181,13 @@ public final class OtaHttpsTransport {
                         verify, signedCandidate.sizeBytes, signedCandidate.apkSha256))
                     throw new IOException("APK_SHA256_MISMATCH");
             }
-            if (target.exists() && !target.delete())
-                throw new IOException("OLD_STAGING_FILE_LOCKED");
-            if (!partial.renameTo(target))
-                throw new IOException("STAGING_MOVE_FAILED");
+            // Immutable version+SHA naming: never delete or replace a prior
+            // candidate. A failed move must leave the older archive intact.
+            File verifiedTarget = OtaStagingCommit.finish(
+                    partial, staging, signedCandidate.versionCode,
+                    signedCandidate.sizeBytes, signedCandidate.apkSha256);
             approvedBytes = true;
-            return target;
+            return verifiedTarget;
         } finally {
             if (connection != null) connection.disconnect();
             if (!approvedBytes) partial.delete();
