@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, const
 import { createPrivateKey, createPublicKey, createHash, sign, constants as cryptoConstants } from 'node:crypto';
 import { resolve, join, basename, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { proveActualOwnerSignedApk } from './lib/ota_release_apk_proof.mjs';
 
 if (process.platform !== 'win32' || !process.env.LOCALAPPDATA ||
     process.env.CI || process.env.GITHUB_ACTIONS)
@@ -68,6 +69,8 @@ const handoff = JSON.parse(readFileSync(resolve(fields.get('--handoff')), 'utf8'
 const signer = '21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed';
 if (handoff.packageName !== 'it.akai.customremote' ||
     handoff.buildProfile !== 'Release' || handoff.debuggable !== false ||
+    !/^[a-z0-9][a-z0-9._-]{0,60}$/i.test(handoff.versionName || '') ||
+    /diagnostic|debug/i.test(handoff.versionName || '') ||
     handoff.productionProfile !== true || handoff.signedWithOwnerOriginalCert !== true ||
     String(handoff.signerSha256 || '').toLowerCase() !== signer ||
     handoff.installed !== false || !Number.isInteger(handoff.versionCode) ||
@@ -80,6 +83,16 @@ const apkSha = createHash('sha256').update(apkBytes).digest('hex');
 if (apkBytes.length < 1024 || apkBytes.length > 25 * 1024 * 1024 ||
     String(handoff.apkSha256 || '').toLowerCase() !== apkSha)
   throw new Error('APK bytes mismatch handoff hash, length or OTA size limit.');
+
+// CRITICAL: JSON handoff claims CAN be forged or stale. Verify the ACTUAL
+// binary via official Android apksigner + aapt, not only handoff booleans.
+// Any missing Android SDK tool, mismatched certificate/version, debug=true,
+// non-ARMv7 or failed APK signature aborts before a manifest is signed.
+proveActualOwnerSignedApk({ repoRoot, apkPath, handoff });
+if (handoff.otaPublicTrustProvisioned !== true ||
+    String(handoff.otaChannelHost || '').toLowerCase() !== manifestUrl.hostname.toLowerCase())
+  throw new Error('APK lacks pinned OTA public key/channel for this exact HTTPS host.');
+
 
 const privateDir = resolve(process.env.LOCALAPPDATA, 'AkaiJarvisOtaReleaseTrust');
 const secretPem = readFileSync(join(privateDir, 'ota-release-private.encrypted.pem'), 'utf8');
