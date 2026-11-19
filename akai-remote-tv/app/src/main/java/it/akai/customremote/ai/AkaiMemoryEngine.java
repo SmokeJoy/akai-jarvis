@@ -864,9 +864,31 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             return false;
         }
 
+        // RESTORE SAFETY: retain an independently integrity-checked snapshot
+        // of the ORIGINAL database before any file replacement. This is only
+        // one part of recovery; the real on-TV restore still needs a live test.
+        File preRestore = new File(mContext.getFilesDir(),
+                "jarvis-pre-restore-safety.db");
+        try {
+            if (source.getCanonicalFile().equals(preRestore.getCanonicalFile()) ||
+                    source.getCanonicalFile().equals(mContext.getDatabasePath(DB_NAME).getCanonicalFile())) {
+                Log.e(TAG, "Refusing restore from current DB or its safety snapshot");
+                return false;
+            }
+            if (!performConsistentSnapshot(preRestore)) {
+                Log.e(TAG, "Unable to prove consistent pre-restore backup. No DB replacement performed.");
+                return false;
+            }
+        } catch (IOException unsafePath) {
+            Log.e(TAG, "Restore safety preflight failed");
+            return false;
+        }
+
         try {
             close();
             File currentDb = mContext.getDatabasePath(DB_NAME);
+            // VerifiedAtomicFileCopy requires a same-filesystem atomic swap;
+            // if unsupported, the original DB is not truncated or overwritten.
             copyFile(source, currentDb);
 
             // Elimina file di transazione WAL/SHM obsoleti per prevenire conflitti di replay
