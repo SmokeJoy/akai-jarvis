@@ -133,11 +133,22 @@ jobs:
           $forbiddenExtension = [regex]::Match($src, [regex]::Escape('$entry.FullName') + "\s+-match\s+'([^']*p12[^']*)'")
           if (-not $forbiddenExtension.Success) { throw 'APK forbidden-extension regex missing' }
           $extensionPattern = $forbiddenExtension.Groups[1].Value
-          foreach ($filename in @('assets/private.key', 'assets/secret.jks', 'assets/cert.p12', 'assets/ca.crt', 'assets/tls.der', 'assets/password.pass')) {
-            if ($filename -notmatch $extensionPattern) { throw "Private APK material was not rejected: $filename" }
+          # The owner-only PUBLIC OTA SPKI .der is a deliberate allowlisted
+          # exception; ALL other .der names (e.g. private TLS/CA material)
+          # remain prohibited and are tested, not silently exempted.
+          if ($src -notmatch [regex]::Escape("FullName -match '\.der\z'") -or
+              $src -notmatch [regex]::Escape("FullName -ne 'assets/ota-release-public.der'")) {
+            throw 'APK must explicitly block other .der files while allowing only the pinned public OTA key'
           }
-          foreach ($filename in @('assets/www/index.html', 'assets/www/app.js', 'assets/public.svg', 'assets/certificate.crt.txt')) {
-            if ($filename -match $extensionPattern) { throw "Benign APK asset falsely rejected: $filename" }
+          foreach ($filename in @('assets/private.key', 'assets/secret.jks', 'assets/cert.p12', 'assets/ca.crt', 'assets/tls.der', 'assets/password.pass')) {
+            $forbidden = ($filename -match $extensionPattern) -or
+                         ($filename -match '\.der\z' -and $filename -ne 'assets/ota-release-public.der')
+            if (-not $forbidden) { throw "Private APK material was not rejected: $filename" }
+          }
+          foreach ($filename in @('assets/www/index.html', 'assets/www/app.js', 'assets/public.svg', 'assets/certificate.crt.txt', 'assets/ota-release-public.der')) {
+            $forbidden = ($filename -match $extensionPattern) -or
+                         ($filename -match '\.der\z' -and $filename -ne 'assets/ota-release-public.der')
+            if ($forbidden) { throw "Benign/public APK asset falsely rejected: $filename" }
           }
           Write-Host 'Final v4 source-only build recipe parses and is gated; no APK/device built in this step.'
 
