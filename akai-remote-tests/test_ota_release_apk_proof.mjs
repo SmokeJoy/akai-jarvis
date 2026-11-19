@@ -31,6 +31,12 @@ reject({ ...fixture, signerReport: fixture.signerReport.replace(
   'Verified using v2 scheme (APK Signature Scheme v2): true',
   'Verified using v2 scheme (APK Signature Scheme v2): false') },
        'apk v2 scheme unverified');
+reject({ ...fixture, signerReport: fixture.signerReport.replace('Number of signers: 1', 'Number of signers: 2') },
+       'contradictory signer count even when only first certificate is printed');
+reject({ ...fixture, signerReport: fixture.signerReport.replace('Number of signers: 1\n', '') },
+       'missing actual signer count');
+reject({ ...fixture, signerReport: fixture.signerReport + 'Number of signers: 1\n' },
+       'duplicate signer count');
 reject({ ...fixture, signerReport: fixture.signerReport.replace(
   'Number of signers: 1', 'Number of signers: 2') +
   'Signer #2 certificate SHA-256 digest: ' + alternate + '\n' },
