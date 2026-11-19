@@ -23,7 +23,7 @@ export function auditActualApkOutputs({ signerReport, badging, manifestXml, hand
        signers[0][2].toLowerCase() === EXPECTED_CERT, 'REAL_SIGNER');
   must(/Verified using v2 scheme \(APK Signature Scheme v2\): true/i.test(signerReport),
        'APK_V2_SIGNATURE');
-  const pkgs = [...badging.matchAll(/^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'\s+versionName='([^']+)'\s*$/gm)];
+  const pkgs = [...badging.matchAll(/^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'\s+versionName='([^']+)'(?:\s+[^\n]*)?$/gm)];
   must(pkgs.length === 1 &&
        pkgs[0][1] === EXPECTED_PACKAGE &&
        Number(pkgs[0][2]) === handoff.versionCode &&
