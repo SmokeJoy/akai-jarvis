@@ -14,8 +14,8 @@
  * Requires the distinct owner-offline OTA RSA private key created by script 13,
  * and JARVIS_OTA_RELEASE_PASSPHRASE environment secret. NO uploading or TV.
  */
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, constants } from 'node:fs';
-import { createPrivateKey, createPublicKey, createHash, sign } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, constants as fsConstants } from 'node:fs';
+import { createPrivateKey, createPublicKey, createHash, sign, constants as cryptoConstants } from 'node:crypto';
 import { resolve, join, basename, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -103,14 +103,14 @@ const manifest =
   'channel=stable\n';
 const manifestBytes = Buffer.from(manifest, 'ascii');
 const signature = sign('RSA-SHA256', manifestBytes,
-  { key: privateKey, padding: 1 /* RSA_PKCS1_PADDING */ });
+  { key: privateKey, padding: cryptoConstants.RSA_PKCS1_PADDING });
 if (manifestBytes.length > 8192 || signature.length < 256 || signature.length > 512)
   throw new Error('Unexpected signed release manifest/signature format.');
 
 mkdirSync(outDir, { recursive: false, mode: 0o700 });
 writeFileSync(join(outDir, manifestFile), manifestBytes, { flag: 'wx' });
 writeFileSync(join(outDir, manifestFile + '.sig'), signature, { flag: 'wx' });
-copyFileSync(apkPath, join(outDir, apkFile), constants.COPYFILE_EXCL);
+copyFileSync(apkPath, join(outDir, apkFile), fsConstants.COPYFILE_EXCL);
 process.stdout.write(
   'OWNER-REVIEW RELEASE FOLDER ONLY. NOT UPLOADED OR INSTALLED.\n' +
   'Output: ' + outDir + '\nVersion: ' + handoff.versionCode +
