@@ -47,11 +47,11 @@ reject({ ...fixture, badging: fixture.badging.replace("targetSdkVersion:'28'", "
        'wrong target sdk');
 reject({ ...fixture, badging: fixture.badging.replace("native-code: 'armeabi-v7a'", "native-code: 'arm64-v8a'") },
        'wrong architecture');
-reject({ ...fixture, manifestXml: fixture.manifestXml.replace('0x0', '0xffffffff') },
+reject({ ...fixture, manifestXml: fixture.manifestXml.replace('(type 0x12)0x0', '(type 0x12)0xffffffff') },
        'debuggable true');
 reject({ ...fixture, manifestXml: 'E: manifest\n E: application\n' },
        'no actual debuggable=false evidence');
-reject({ ...fixture, manifestXml: fixture.manifestXml.replace('0x0', '0x1') },
+reject({ ...fixture, manifestXml: fixture.manifestXml.replace('(type 0x12)0x0', '(type 0x12)0x1') },
        'non-false boolean (unknown value)');
 reject({ ...fixture, signerReport: '' }, 'missing signer report');
 reject({ ...fixture, badging: '' }, 'missing badging report');
