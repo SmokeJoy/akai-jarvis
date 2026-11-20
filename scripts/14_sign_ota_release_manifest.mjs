@@ -15,7 +15,7 @@
  * Requires the distinct owner-offline OTA RSA private key created by script 13,
  * and JARVIS_OTA_RELEASE_PASSPHRASE environment secret. NO uploading or TV.
  */
-import { readFileSync, writeFileSync, mkdtempSync, renameSync, rmSync, copyFileSync, existsSync, constants as fsConstants } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, renameSync, rmSync, copyFileSync, existsSync, realpathSync, constants as fsConstants } from 'node:fs';
 import { createPrivateKey, createPublicKey, createHash, sign, constants as cryptoConstants } from 'node:crypto';
 import { resolve, join, basename, relative, isAbsolute, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,9 +61,15 @@ if (!manifestFile || !apkFile) throw new Error('Release URLs lack filenames');
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const outDir = resolve(fields.get('--out'));
-const outsideRepo = relative(repoRoot, outDir);
-if (outsideRepo === '' || (!outsideRepo.startsWith('..') && !isAbsolute(outsideRepo)))
-  throw new Error('Do not prepare public-release artifacts inside the source repository.');
+// Resolve the existing output parent physically: Windows junctions and directory
+// symlinks can make a lexically external path write inside this repository.
+// A missing parent fails closed; this offline tool never creates parent folders.
+const physicalRepo = realpathSync(repoRoot);
+const physicalParent = realpathSync(dirname(outDir));
+const physicalTarget = resolve(physicalParent, basename(outDir));
+const outsideRepo = relative(physicalRepo, physicalTarget);
+if (outsideRepo === '' || (!outsideRepo.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) && outsideRepo !== '..' && !isAbsolute(outsideRepo)))
+  throw new Error('Do not prepare public-release artifacts inside the source repository (including junctions).');
 if (existsSync(outDir)) throw new Error('Output folder already exists; never overwrite an existing release.');
 const apkPath = resolve(fields.get('--apk'));
 const handoff = JSON.parse(readFileSync(resolve(fields.get('--handoff')), 'utf8'));
