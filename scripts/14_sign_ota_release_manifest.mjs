@@ -15,9 +15,9 @@
  * Requires the distinct owner-offline OTA RSA private key created by script 13,
  * and JARVIS_OTA_RELEASE_PASSPHRASE environment secret. NO uploading or TV.
  */
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, constants as fsConstants } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, renameSync, rmSync, copyFileSync, existsSync, constants as fsConstants } from 'node:fs';
 import { createPrivateKey, createPublicKey, createHash, sign, constants as cryptoConstants } from 'node:crypto';
-import { resolve, join, basename, relative, isAbsolute } from 'node:path';
+import { resolve, join, basename, relative, isAbsolute, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { proveActualOwnerSignedApk } from './lib/ota_release_apk_proof.mjs';
 
@@ -125,20 +125,29 @@ const signature = sign('RSA-SHA256', manifestBytes,
 if (manifestBytes.length > 8192 || signature.length < 256 || signature.length > 512)
   throw new Error('Unexpected signed release manifest/signature format.');
 
-mkdirSync(outDir, { recursive: false, mode: 0o700 });
-// Validate the actual output APK, not only the mutable input path. If the
-// input changes between audit and copy, fail closed before writing metadata.
-const publishedApkPath = join(outDir, apkFile);
-copyFileSync(apkPath, publishedApkPath, fsConstants.COPYFILE_EXCL);
-const publishedApkBytes = readFileSync(publishedApkPath);
-const publishedApkSha = createHash('sha256').update(publishedApkBytes).digest('hex');
-if (publishedApkBytes.length !== apkBytes.length || publishedApkSha !== apkSha)
-  throw new Error('Published APK differs from verified candidate; abort release preparation.');
-proveActualOwnerSignedApk({ repoRoot, apkPath: publishedApkPath, handoff });
-// Emit the signed metadata only after the destination APK is independently
-// checked for both byte integrity and Android package/signature properties.
-writeFileSync(join(outDir, manifestFile), manifestBytes, { flag: 'wx' });
-writeFileSync(join(outDir, manifestFile + '.sig'), signature, { flag: 'wx' });
+// Prepare the complete private bundle beside its final directory, then expose
+// it with a single same-parent rename. Failed preparation never leaves a
+// partially populated final release folder. Never remove an existing release.
+const stagingDir = mkdtempSync(join(dirname(outDir), '.jarvis-ota-staging-'));
+let committed = false;
+try {
+  const stagedApkPath = join(stagingDir, apkFile);
+  copyFileSync(apkPath, stagedApkPath, fsConstants.COPYFILE_EXCL);
+  const stagedApkBytes = readFileSync(stagedApkPath);
+  const stagedApkSha = createHash('sha256').update(stagedApkBytes).digest('hex');
+  if (stagedApkBytes.length !== apkBytes.length || stagedApkSha !== apkSha)
+    throw new Error('Staged APK differs from verified candidate; abort release preparation.');
+  proveActualOwnerSignedApk({ repoRoot, apkPath: stagedApkPath, handoff });
+  writeFileSync(join(stagingDir, manifestFile), manifestBytes, { flag: 'wx' });
+  writeFileSync(join(stagingDir, manifestFile + '.sig'), signature, { flag: 'wx' });
+  // On the owner Windows filesystem, rename to an existing directory fails.
+  // Recheck immediately before rename to reject a concurrently created target.
+  if (existsSync(outDir)) throw new Error('Output folder appeared during staging; never overwrite.');
+  renameSync(stagingDir, outDir);
+  committed = true;
+} finally {
+  if (!committed) rmSync(stagingDir, { recursive: true, force: true });
+}
 process.stdout.write(
   'OWNER-REVIEW RELEASE FOLDER ONLY. NOT UPLOADED OR INSTALLED.\n' +
   'Output: ' + outDir + '\nVersion: ' + handoff.versionCode +
