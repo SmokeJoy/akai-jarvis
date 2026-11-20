@@ -146,7 +146,16 @@ try {
   renameSync(stagingDir, outDir);
   committed = true;
 } finally {
-  if (!committed) rmSync(stagingDir, { recursive: true, force: true });
+  if (!committed) {
+    try {
+      rmSync(stagingDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      // Never replace the primary release-preparation failure with a cleanup
+      // failure. A leftover private staging folder is NOT a valid release.
+      process.stderr.write('WARNING: private OTA staging cleanup failed; inspect manually: ' +
+        stagingDir + ' (' + String(cleanupError?.code || 'unknown error') + ')\n');
+    }
+  }
 }
 process.stdout.write(
   'OWNER-REVIEW RELEASE FOLDER ONLY. NOT UPLOADED OR INSTALLED.\n' +
