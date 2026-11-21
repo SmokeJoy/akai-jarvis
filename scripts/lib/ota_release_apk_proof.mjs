@@ -32,9 +32,14 @@ export function auditActualApkOutputs({ signerReport, badging, manifestXml, hand
        pkgs[0][1] === EXPECTED_PACKAGE &&
        Number(pkgs[0][2]) === handoff.versionCode &&
        pkgs[0][3] === handoff.versionName, 'PACKAGE_VERSION');
-  must(/^sdkVersion:'21'\s*$/m.test(badging) &&
-       /^targetSdkVersion:'28'\s*$/m.test(badging), 'ANDROID9_SDK');
-  must(/^native-code:\s*'armeabi-v7a'\s*$/m.test(badging), 'ANDROID_ARMV7');
+  // Require exactly one declaration for each property. A second, conflicting
+  // line must not be hidden by an otherwise valid first match.
+  const sdkLines = [...badging.matchAll(/^sdkVersion:\s*'([^']*)'\s*$/gm)];
+  const targetLines = [...badging.matchAll(/^targetSdkVersion:\s*'([^']*)'\s*$/gm)];
+  const nativeLines = [...badging.matchAll(/^native-code:\s*(.*)$/gm)];
+  must(sdkLines.length === 1 && sdkLines[0][1] === '21' &&
+       targetLines.length === 1 && targetLines[0][1] === '28', 'ANDROID9_SDK');
+  must(nativeLines.length === 1 && nativeLines[0][1].trim() === "'armeabi-v7a'", 'ANDROID_ARMV7');
   // aapt dump xmltree prints A: android:debuggable(...)=... (type 0x12)
   // A release must have the flag explicitly false OR omit it.
   must(!/A:\s+android:debuggable(?:\(0x[0-9a-f]+\))?\s*=\s*\(type 0x12\)0xffffffff/im.test(manifestXml) &&
