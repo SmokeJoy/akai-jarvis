@@ -29,6 +29,7 @@ param(
     [ValidateSet("status", "backup", "install", "rollback", "plan", "preflight", "verify-tls")]
     [string]$Action = "status",
     [string]$ApkPath = $null,
+    [string]$ExpectedCandidateSha256 = $null,
     [string]$RescueApkPath = $null,
     [string]$ExpectedRescueSha256 = $null,
     [string]$BackupDir = ".\backup_tv",
@@ -315,7 +316,9 @@ function Test-HttpsTlsEndpoint {
         [string]$TargetHost,
         [int]$Port = 8443,
         [string]$ExpectedCaSha256 = $null,
-        [int]$TimeoutMs = 4000
+        [int]$TimeoutMs = 4000,
+        [string]$HttpGetPath = $null,
+        [string]$BearerToken = $null
     )
     $tcpClient = New-Object System.Net.Sockets.TcpClient
     try {
@@ -684,6 +687,95 @@ function Test-HttpsTlsEndpoint {
             }
         }
 
+        $httpStatusCode = $null
+        $responseBody = $null
+        if ($sanMatched -and $caMatched -and ($caStatus -eq "APPROVED") -and -not [string]::IsNullOrWhiteSpace($HttpGetPath)) {
+            $sslStream.ReadTimeout = $TimeoutMs
+            $sslStream.WriteTimeout = $TimeoutMs
+            $reqLines = New-Object System.Collections.Generic.List[string]
+            [void]$reqLines.Add("GET $HttpGetPath HTTP/1.1")
+            [void]$reqLines.Add("Host: $($TargetHost):$Port")
+            if (-not [string]::IsNullOrWhiteSpace($BearerToken)) {
+                [void]$reqLines.Add("Authorization: Bearer $BearerToken")
+            }
+            [void]$reqLines.Add("Connection: close")
+            [void]$reqLines.Add("")
+            [void]$reqLines.Add("")
+            $reqBytes = [System.Text.Encoding]::UTF8.GetBytes(($reqLines -join "`r`n"))
+            $sslStream.Write($reqBytes, 0, $reqBytes.Length)
+            $sslStream.Flush()
+
+            $msResp = New-Object System.IO.MemoryStream
+            try {
+                $buf = New-Object byte[] 4096
+                while ($true) {
+                    $readCount = 0
+                    try {
+                        $readCount = $sslStream.Read($buf, 0, $buf.Length)
+                    } catch [System.IO.IOException] {
+                        if ($msResp.Length -gt 0) { break }
+                        throw
+                    }
+                    if ($readCount -le 0) { break }
+                    $msResp.Write($buf, 0, $readCount)
+                    if ($msResp.Length -gt 1048576) {
+                        throw "Risposta HTTPS da $HttpGetPath oltre il limite di 1 MB."
+                    }
+                }
+                $allBytes = $msResp.ToArray()
+                $sepIdx = -1
+                $sepLen = 4
+                for ($si = 0; $si -le ($allBytes.Length - 4); $si++) {
+                    if ($allBytes[$si] -eq 13 -and $allBytes[$si + 1] -eq 10 -and $allBytes[$si + 2] -eq 13 -and $allBytes[$si + 3] -eq 10) {
+                        $sepIdx = $si; $sepLen = 4; break
+                    }
+                }
+                if ($sepIdx -lt 0) {
+                    for ($si = 0; $si -le ($allBytes.Length - 2); $si++) {
+                        if ($allBytes[$si] -eq 10 -and $allBytes[$si + 1] -eq 10) {
+                            $sepIdx = $si; $sepLen = 2; break
+                        }
+                    }
+                }
+                if ($sepIdx -ge 0) {
+                    $hdrPart = [System.Text.Encoding]::ASCII.GetString($allBytes, 0, $sepIdx)
+                    $bodyOffset = $sepIdx + $sepLen
+                    if ($hdrPart -match "^HTTP/\d+\.\d+\s+(\d{3})\b") {
+                        $httpStatusCode = [int]$matches[1]
+                    }
+                    if ($hdrPart -match "(?im)^Transfer-Encoding:\s*chunked\b") {
+                        $chunkMs = New-Object System.IO.MemoryStream
+                        try {
+                            $pos = $bodyOffset
+                            while ($pos -lt $allBytes.Length) {
+                                $lineEnd = -1
+                                for ($li = $pos; $li -lt ($allBytes.Length - 1); $li++) {
+                                    if ($allBytes[$li] -eq 13 -and $allBytes[$li + 1] -eq 10) { $lineEnd = $li; break }
+                                }
+                                if ($lineEnd -lt 0) { break }
+                                $hexLen = ([System.Text.Encoding]::ASCII.GetString($allBytes, $pos, $lineEnd - $pos).Split(';')[0]).Trim()
+                                $chunkSize = 0
+                                if (-not [int]::TryParse($hexLen, [System.Globalization.NumberStyles]::HexNumber, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$chunkSize)) { break }
+                                $pos = $lineEnd + 2
+                                if ($chunkSize -eq 0) { break }
+                                if (($pos + $chunkSize) -le $allBytes.Length) {
+                                    $chunkMs.Write($allBytes, $pos, $chunkSize)
+                                }
+                                $pos += $chunkSize + 2
+                            }
+                            $responseBody = [System.Text.Encoding]::UTF8.GetString($chunkMs.ToArray())
+                        } finally {
+                            $chunkMs.Dispose()
+                        }
+                    } else {
+                        $responseBody = [System.Text.Encoding]::UTF8.GetString($allBytes, $bodyOffset, $allBytes.Length - $bodyOffset)
+                    }
+                }
+            } finally {
+                $msResp.Dispose()
+            }
+        }
+
         $sslStream.Close()
         $tcpClient.Close()
 
@@ -698,6 +790,8 @@ function Test-HttpsTlsEndpoint {
             Subject = $cert2.Subject
             Issuer = $cert2.Issuer
             FormattedSan = $formattedSan
+            HttpStatusCode = $httpStatusCode
+            ResponseBody = $responseBody
         }
     } catch {
         return @{
@@ -1323,6 +1417,7 @@ function Test-DeviceKeystoreCredentialHealth {
         [string]$TargetTv,
         [int]$HttpsPort = 8443,
         [string]$AuthToken = $null,
+        [string]$ExpectedCaFingerprint = $null,
         [switch]$FailOnUnreachable = $false,
         [switch]$RequireVerifiedHealthy = $false,
         [switch]$AllowLegacyRescueProbe = $false,
@@ -1340,11 +1435,25 @@ function Test-DeviceKeystoreCredentialHealth {
             Schema = "none"
         }
     }
-    $cfgUrl = "https://$($TargetTv):$HttpsPort/api/ai/config"
-    $headers = @{ "Authorization" = "Bearer $AuthToken" }
     $cfg = $null
     try {
-        $cfg = Invoke-RestMethod -Uri $cfgUrl -Method Get -Headers $headers -TimeoutSec 4 -ErrorAction Stop
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedCaFingerprint)) {
+            $pinRes = Test-HttpsTlsEndpoint -TargetHost $TargetTv -Port $HttpsPort -ExpectedCaSha256 $ExpectedCaFingerprint -TimeoutMs 4000 -HttpGetPath "/api/ai/config" -BearerToken $AuthToken
+            if (-not $pinRes -or -not $pinRes.Success -or $pinRes.Status -ne "APPROVED") {
+                $tlsErr = if ($pinRes -and $pinRes.Error) { "$($pinRes.Status): $($pinRes.Error)" } else { "TLS_PIN_FAILED" }
+                throw "Probe HTTPS pinned /api/ai/config fallito ($tlsErr)."
+            }
+            if ($pinRes.HttpStatusCode -ne 200) {
+                throw "HTTPS /api/ai/config restituito HTTP $($pinRes.HttpStatusCode)."
+            }
+            if (-not [string]::IsNullOrWhiteSpace($pinRes.ResponseBody)) {
+                $cfg = $pinRes.ResponseBody | ConvertFrom-Json
+            }
+        } else {
+            $cfgUrl = "https://$($TargetTv):$HttpsPort/api/ai/config"
+            $headers = @{ "Authorization" = "Bearer $AuthToken" }
+            $cfg = Invoke-RestMethod -Uri $cfgUrl -Method Get -Headers $headers -TimeoutSec 4 -ErrorAction Stop
+        }
     } catch {
         if ($FailOnUnreachable -or $RequireVerifiedHealthy) {
             throw
@@ -1456,13 +1565,14 @@ function Invoke-PostRollbackKeystoreVerification {
         [string]$TargetTv,
         [int]$HttpsPort = 8443,
         [string]$AuthToken = $null,
+        [string]$ExpectedCaFingerprint = $null,
         [switch]$RequireVerifiedKeystoreHealth = $false
     )
     if ([string]::IsNullOrWhiteSpace($AuthToken) -and -not $RequireVerifiedKeystoreHealth) {
         return $null
     }
     $backupCredExp = Get-BackupStoredCredentialExpectations -SessionDir $SessionDir
-    $ksHealth = Test-DeviceKeystoreCredentialHealth -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -AllowLegacyRescueProbe:($RollbackMode -eq 'IN_PLACE_RESCUE') -RequireVerifiedHealthy:$RequireVerifiedKeystoreHealth -ExpectDeepSeekStored:([bool]$backupCredExp.ExpectDeepSeek) -ExpectKimiStored:([bool]$backupCredExp.ExpectKimi)
+    $ksHealth = Test-DeviceKeystoreCredentialHealth -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -ExpectedCaFingerprint $ExpectedCaFingerprint -AllowLegacyRescueProbe:($RollbackMode -eq 'IN_PLACE_RESCUE') -RequireVerifiedHealthy:$RequireVerifiedKeystoreHealth -ExpectDeepSeekStored:([bool]$backupCredExp.ExpectDeepSeek) -ExpectKimiStored:([bool]$backupCredExp.ExpectKimi)
     Write-Host "      Stato verifica AndroidKeyStore/AI post-rollback: $($ksHealth.Status) (Schema=$($ksHealth.Schema), Verified=$($ksHealth.Verified), HasBackupPrefs=$($backupCredExp.HasBackupPrefs))" -ForegroundColor Cyan
     return $ksHealth
 }
@@ -3575,20 +3685,36 @@ switch ($Action) {
         # 2b. Gate Negativo TLS: Verifica assoluta assenza segreti/chiavi/certificati TLS preconfezionati nell'APK
         Assert-CandidateApkNoForbiddenTlsAssets $ApkPath | Out-Null
 
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedCandidateSha256) -and ($ExpectedCandidateSha256 -notmatch "^[a-fA-F0-9]{64}$")) {
+            throw "ERRORE FAIL-CLOSED [CANDIDATO HASH NON VALIDO]: ExpectedCandidateSha256 deve essere un digest SHA-256 a 64 hex."
+        }
+        $candShaPre = Get-Sha256Hex $ApkPath
+        $lockedCandidateSha256 = if (-not [string]::IsNullOrWhiteSpace($ExpectedCandidateSha256)) { $ExpectedCandidateSha256.ToLowerInvariant() } else { $candShaPre }
+        if ($candShaPre -ne $lockedCandidateSha256) {
+            throw "ERRORE FAIL-CLOSED [CANDIDATO APK HASH MISMATCH]: SHA-256 file candidato ($candShaPre) diverso da ExpectedCandidateSha256 ($lockedCandidateSha256)."
+        }
+
         # 3. Gate pre-install (applicationId + versionCode) e installazione conservativa (no -d su install)
         $upgradeGate = Test-PackageUpgradeGate -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -CandidateApkPath $ApkPath -PreviousAbsentConfirmed:((-not $hasPrevious) -and $GreenfieldStart)
         if ($upgradeGate.CandidateVersionCode) {
-            Write-Host "      Gate pacchetto verificato (target=$PackageName, installedVC=$($upgradeGate.InstalledVersionCode), candidateVC=$($upgradeGate.CandidateVersionCode))." -ForegroundColor Green
+            Write-Host "      Gate pacchetto verificato (target=$PackageName, installedVC=$($upgradeGate.InstalledVersionCode), candidateVC=$($upgradeGate.CandidateVersionCode), candSHA256=$lockedCandidateSha256)." -ForegroundColor Green
         }
         $isOwnerHardwareTarget = $RequireOwnerRescue -or ($TargetTv -notin @("127.0.0.1", "localhost", "::1"))
         if ($hasPrevious -and $isOwnerHardwareTarget -and [string]::IsNullOrWhiteSpace($RescueApkPath)) {
             throw "ERRORE FAIL-CLOSED [RESCUE APK OBBLIGATORIO]: Su hardware reale (o -RequireOwnerRescue) e' obbligatorio fornire -RescueApkPath verificato prima di installare un aggiornamento in-place."
+        }
+        if ($hasPrevious -and $RequireOwnerRescue -and [string]::IsNullOrWhiteSpace($ExpectedRescueSha256)) {
+            throw "ERRORE FAIL-CLOSED [RESCUE HASH OBBLIGATORIO]: Con -RequireOwnerRescue attivo e' obbligatorio specificare -ExpectedRescueSha256."
         }
         $lockedRescueSha256 = $null
         if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) {
             $rescueCompat = Test-RescueApkCompatibility -RescueApkPath $RescueApkPath -PackageName $PackageName -MustExceedVersionCode $upgradeGate.CandidateVersionCode -ExpectedSignerSha256 $(if ($hasPrevious) { $backupFp } else { $null }) -ExpectedRescueSha256 $ExpectedRescueSha256 -RequireExpectedSigner:$hasPrevious
             $lockedRescueSha256 = $rescueCompat.FileSha256
             Write-Host "      Gate A2 Rescue verificato (rescueVC=$($rescueCompat.VersionCode) > candidateVC=$($upgradeGate.CandidateVersionCode), SHA256=$($lockedRescueSha256), zero-uninstall pronto)." -ForegroundColor Green
+        }
+        $candShaNow = Get-Sha256Hex $ApkPath
+        if ($candShaNow -ne $lockedCandidateSha256) {
+            throw "ERRORE FAIL-CLOSED [CANDIDATO APK TOCTOU MISMATCH]: Hash candidato mutato prima dell'installazione ($candShaNow vs $lockedCandidateSha256)."
         }
         Write-Host "[4/6] Installazione nuovo APK (adb install -r)..."
         $installRes = & $adb -s $TargetAdb install -r $ApkPath
@@ -3619,6 +3745,7 @@ switch ($Action) {
         # 5. Multi-Point Health Check Watchdog (30s)
         Write-Host "[6/6] Multi-Point Health Check Watchdog attivo (timeout 30s)..."
         $healthy = $false
+        $watchdogFailureReason = "Watchdog timeout (HTTP/HTTPS/PID/Status non operativi)"
         $attempts = $(if ($env:WATCHDOG_ATTEMPTS) { [int]$env:WATCHDOG_ATTEMPTS } else { 6 })
         $sleepSec = $(if ($env:WATCHDOG_SLEEP_SEC) { [int]$env:WATCHDOG_SLEEP_SEC } else { 5 })
         for ($i = 1; $i -le $attempts; $i++) {
@@ -3678,13 +3805,32 @@ switch ($Action) {
                 }
 
                 if ($statusResp.status -eq "ok" -and $statusResp.uinput_ready -eq $true -and $webOk -and $httpsOk -and $pidVal) {
-                    $healthy = $true
                     Write-Host "      Tentativo $i/$($attempts) SUPERATO:" -ForegroundColor Green
                     Write-Host "      - API Status       : OK (uinput_ready=true, active_sessions=$($statusResp.active_sessions))" -ForegroundColor Green
                     Write-Host "      - Telecomando HTTP : OK ($webStatusMsg)" -ForegroundColor Green
                     Write-Host "      - HTTPS 8443 TLS   : OK ($httpsStatusMsg)" -ForegroundColor Green
                     Write-Host "      - Processo TV      : ATTIVO (PID $pidVal)" -ForegroundColor Green
-                    break
+                    if ($RequireVerifiedKeystoreHealth) {
+                        $installModeTag = if ($hasPrevious) { 'UPGRADE_V4' } else { 'CLEAN_INSTALL_V4' }
+                        $installSessionDir = if ($hasPrevious) { $sessionDir } else { $null }
+                        try {
+                            $ksInstall = Invoke-PostRollbackKeystoreVerification -SessionDir $installSessionDir -RollbackMode $installModeTag -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -ExpectedCaFingerprint $ExpectedCaFingerprint -RequireVerifiedKeystoreHealth
+                            Write-Host "      - AndroidKeyStore  : VERIFICATO ($($ksInstall.Status), Schema=$($ksInstall.Schema))" -ForegroundColor Green
+                            $healthy = $true
+                            break
+                        } catch {
+                            $ksErr = $_.Exception.Message
+                            $watchdogFailureReason = "KEYSTORE_CREDENTIAL_HEALTH_FAILED: $ksErr"
+                            $healthy = $false
+                            Write-Host "      [ALLARME] Verifica AndroidKeyStore/AI fallita al tentativo $i/$($attempts): $ksErr" -ForegroundColor Red
+                            if ($ksErr -match "SCHEMA|CREDENZIALI|NON DECIFRABILI|LEGACY|TOKEN|NON VERIFICATO") {
+                                break
+                            }
+                        }
+                    } else {
+                        $healthy = $true
+                        break
+                    }
                 } else {
                     Write-Host "      Tentativo $i/$($attempts) - In attesa: HTTP=($($webOk) - $webStatusMsg), HTTPS=($($httpsOk) - $httpsStatusMsg), Status=($($statusResp.status)), PID=($pidVal)" -ForegroundColor Yellow
                 }
@@ -3694,11 +3840,6 @@ switch ($Action) {
         }
 
         if ($healthy) {
-            if ($RequireVerifiedKeystoreHealth) {
-                $installModeTag = if ($hasPrevious) { 'UPGRADE_V4' } else { 'CLEAN_INSTALL_V4' }
-                $installSessionDir = if ($hasPrevious) { $sessionDir } else { $null }
-                $null = Invoke-PostRollbackKeystoreVerification -SessionDir $installSessionDir -RollbackMode $installModeTag -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -RequireVerifiedKeystoreHealth
-            }
             if ($tlsRes -and $tlsRes.Status -eq "APPROVED") {
                 Write-Host "`nDEPLOYMENT VERIFICATO CON SUCCESSO AL 100%! Tutti i componenti operativi e Root CA approvata." -ForegroundColor Green
             } else {
@@ -3712,6 +3853,7 @@ switch ($Action) {
             }
         } else {
             Write-Host "`nALLARME: Health check fallito entro 30s! Avvio ROLLBACK..." -ForegroundColor Red
+            Write-Host "      Motivo fallimento watchdog/gate: $watchdogFailureReason" -ForegroundColor Red
             if ($hasPrevious) {
                 # VALIDAZIONE PREREQUISITI RIGOROSA PRE-ROLLBACK (P0-2 FAIL-CLOSED)
                 if (-not (Test-Path $backupApk) -or (Get-Item $backupApk).Length -eq 0) {
@@ -3820,8 +3962,15 @@ $chownTarget = "${appUid}:${appUid}"
                 Restore-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir -ChownTarget $chownTarget | Out-Null
                 Restore-DevicePairingSessions -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir -ChownTarget $chownTarget | Out-Null
 
-                Write-Host "[ROLLBACK 3/4] Riavvio servizio RemoteServerService..."
-                & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
+                Write-Host "[ROLLBACK 3/4] Riavvio servizio RemoteServerService (MainActivity + startservice)..."
+                $prevEapRb = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" 2>&1 | Out-Null
+                    & $adb -s $TargetAdb shell "am start -n $PackageName/.MainActivity" 2>&1 | Out-Null
+                } finally {
+                    $ErrorActionPreference = $prevEapRb
+                }
 
                 Write-Host "[ROLLBACK 4/4] Verifica post-rollback dello stato di salute..."
                 $rbHealthy = $false
@@ -3839,7 +3988,7 @@ $chownTarget = "${appUid}:${appUid}"
                 }
 
                 if ($rbHealthy) {
-                    $null = Invoke-PostRollbackKeystoreVerification -SessionDir $sessionDir -RollbackMode $rbApkResult.Mode -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -RequireVerifiedKeystoreHealth:$RequireVerifiedKeystoreHealth
+                    $null = Invoke-PostRollbackKeystoreVerification -SessionDir $sessionDir -RollbackMode $rbApkResult.Mode -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -ExpectedCaFingerprint $ExpectedCaFingerprint -RequireVerifiedKeystoreHealth:$RequireVerifiedKeystoreHealth
                     Write-Host "ROLLBACK RIUSCITO E VERIFICATO: Sistema TV tornato operativo al 100% sulla versione precedente." -ForegroundColor Green
                 } else {
                     Write-Host "ALLARME POST-ROLLBACK: Health check post-rollback fallito - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red
@@ -3979,8 +4128,15 @@ $chownTarget = "${appUid}:${appUid}"
         Restore-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $latestSession.FullName -ChownTarget $chownTarget | Out-Null
         Restore-DevicePairingSessions -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $latestSession.FullName -ChownTarget $chownTarget | Out-Null
 
-        Write-Host "[3/4] Riavvio servizio RemoteServerService..."
-        & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
+        Write-Host "[3/4] Riavvio servizio RemoteServerService (MainActivity + startservice)..."
+        $prevEapManual = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" 2>&1 | Out-Null
+            & $adb -s $TargetAdb shell "am start -n $PackageName/.MainActivity" 2>&1 | Out-Null
+        } finally {
+            $ErrorActionPreference = $prevEapManual
+        }
 
         Write-Host "[4/4] Watchdog post-rollback..."
         $rbHealthy = $false
@@ -3997,7 +4153,7 @@ $chownTarget = "${appUid}:${appUid}"
             }
         }
         if ($rbHealthy) {
-            $null = Invoke-PostRollbackKeystoreVerification -SessionDir $latestSession.FullName -RollbackMode $rbManualApkResult.Mode -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -RequireVerifiedKeystoreHealth:$RequireVerifiedKeystoreHealth
+            $null = Invoke-PostRollbackKeystoreVerification -SessionDir $latestSession.FullName -RollbackMode $rbManualApkResult.Mode -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -ExpectedCaFingerprint $ExpectedCaFingerprint -RequireVerifiedKeystoreHealth:$RequireVerifiedKeystoreHealth
             Write-Host "Rollback manuale completato e verificato con successo: TV operativa!" -ForegroundColor Green
         } else {
             Write-Host "ALLARME POST-ROLLBACK: Endpoint status non raggiungibile o non operativo - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red

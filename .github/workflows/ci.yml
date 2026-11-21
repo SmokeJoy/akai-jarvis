@@ -595,7 +595,7 @@ jobs:
           fi
           echo "MANDATORY APK COMPONENTS VERIFIED: DEX, Android ARMv7 SO, Web, no embedded TLS secrets."
 
-      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (43 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, .p12.bak, In-Place Rescue Zero-Uninstall, Strict Keystore Health & Dumpsys/Hash Rollback Gates)"
+      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (44 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, .p12.bak, In-Place Rescue Zero-Uninstall, Strict Keystore Health, Watchdog Keystore Rescue Rollback & Candidate Hash Lock)"
         shell: pwsh
         run: |
           ./akai-remote-tests/test_safe_install_mocked_adb.ps1
