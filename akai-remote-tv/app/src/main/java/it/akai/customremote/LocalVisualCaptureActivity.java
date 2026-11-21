@@ -1,6 +1,7 @@
 package it.akai.customremote;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
@@ -28,8 +29,13 @@ import android.widget.TextView;
 import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.VisionCapturePolicy;
 import it.akai.customremote.ai.RgbaFramePacker;
+import it.akai.customremote.ai.AiProviderAdapter;
+import it.akai.customremote.ai.CloudProviderPolicy;
+import it.akai.customremote.ai.VisualObservationBridge;
 
 import java.nio.ByteBuffer;
+import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 
 /**
  * Android 9 / API 28 local-only MediaProjection diagnostic.
@@ -40,10 +46,18 @@ import java.nio.ByteBuffer;
  */
 public final class LocalVisualCaptureActivity extends Activity {
     private static final int REQUEST_SCREEN = 718;
+    private static final int REQUEST_MULTI_FRAME_SESSION = 719;
     private static final long TIMEOUT_MS = 4000L;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private Button captureButton;
+    private Button cloudVisionButton;
+    private TextView cloudVisionResult;
+    private volatile boolean cloudVisionInFlight = false;
+    private boolean capturedNonSensitiveFrame = false;
+    private String capturedForegroundPackage;
+    private String capturedRedactedUiContext;
+    private long capturedFrameTimeMs;
     private TextView status;
     private ImageView preview;
     private Bitmap previewBitmap;
@@ -82,7 +96,7 @@ public final class LocalVisualCaptureActivity extends Activity {
         content.addView(heading);
 
         TextView privacy = new TextView(this);
-        privacy.setText("Test volontario: Android chiede il consenso. La TV cattura UN SOLO fotogramma dopo aver nascosto questa schermata. L'immagine resta soltanto nella memoria della TV: nessun salvataggio, invio a DeepSeek/Kimi o condivisione LAN. Per annullare, rifiuta il consenso.");
+        privacy.setText("La cattura non invia immagini automaticamente. Puoi fare una prova locale oppure autorizzare una sessione temporanea multi-schermata con DeepSeek/Kimi. Ogni analisi cloud richiede l'opt-in specifico della sessione. Non mostrare PIN, account, pagamenti o altre informazioni private.");
         privacy.setTextColor(Color.LTGRAY);
         privacy.setTextSize(14);
         privacy.setPadding(0, pad / 2, 0, pad / 2);
@@ -94,6 +108,23 @@ public final class LocalVisualCaptureActivity extends Activity {
         captureButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 requestProjection();
+            }
+        });
+
+        Button multiFrameButton = new Button(this);
+        multiFrameButton.setText("Avvia sessione visiva temporanea (consenso separato)");
+        content.addView(multiFrameButton);
+        multiFrameButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { confirmMultiFrameSession(); }
+        });
+
+        Button stopFrameButton = new Button(this);
+        stopFrameButton.setText("Interrompi sessione visiva");
+        content.addView(stopFrameButton);
+        stopFrameButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                VisualProjectionService.stopOwnerSession(getApplicationContext());
+                status.setText("Richiesto arresto della sessione visiva.");
             }
         });
 
@@ -110,6 +141,31 @@ public final class LocalVisualCaptureActivity extends Activity {
         preview.setMaxHeight(540);
         content.addView(preview);
 
+        // Deliberate second consent, separate from the Android screen capture
+        // grant. Never automatically uploads a screenshot or runs a local LLM.
+        cloudVisionButton = new Button(this);
+        cloudVisionButton.setText("Analizza con DeepSeek/Kimi (consenso cloud separato)");
+        cloudVisionButton.setEnabled(false);
+        content.addView(cloudVisionButton);
+        cloudVisionButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { confirmCloudVision(); }
+        });
+
+        cloudVisionResult = new TextView(this);
+        cloudVisionResult.setTextColor(Color.LTGRAY);
+        cloudVisionResult.setTextSize(13);
+        cloudVisionResult.setPadding(0, pad / 2, 0, pad / 2);
+        content.addView(cloudVisionResult);
+
+        Button returnButton = new Button(this);
+        returnButton.setText("Torna alla TV (usa JARVIS entro 45 secondi)");
+        content.addView(returnButton);
+        returnButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                moveTaskToBack(true); // backend service and pending hint remain, no new install
+            }
+        });
+
         Button clearButton = new Button(this);
         clearButton.setText("Cancella anteprima e chiudi");
         content.addView(clearButton);
@@ -119,6 +175,49 @@ public final class LocalVisualCaptureActivity extends Activity {
                 finish();
             }
         });
+    }
+
+    private void confirmMultiFrameSession() {
+        if (destroyed || !completed || VisualProjectionService.isSessionActive()) {
+            status.setText("Chiudi prima la sessione precedente o la cattura locale in corso.");
+            return;
+        }
+        final AiProviderAdapter adapter = new AiProviderAdapter(getApplicationContext());
+        final String targetProvider = adapter.getActiveProvider();
+        if (!CloudProviderPolicy.isSupportedCloudProvider(targetProvider)) {
+            status.setText("Configurare soltanto DeepSeek o Kimi. Nessun LLM locale.");
+            return;
+        }
+        if (!adapter.hasCloudContextConsent()) {
+            status.setText("Consenso AI cloud non attivo nelle impostazioni JARVIS.");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Autorizza sessione visiva DeepSeek/Kimi")
+                .setMessage("Android richiedera' il consenso alla cattura schermo. "
+                        + "Per MASSIMO 3 minuti o 20 fotogrammi JARVIS potra' "
+                        + "acquisire immagini SOLO in risposta alle azioni della sessione "
+                        + "e inviarle a " + targetProvider + " via API per ragionare. "
+                        + "Ogni immagine puo' consumare credito API. "
+                        + "Evita PIN, account, pagamenti e dati personali. "
+                        + "Interrompi in qualsiasi momento dalla notifica. "
+                        + "Confermi il consenso cloud per questa sessione?")
+                .setNegativeButton("Annulla", null)
+                .setPositiveButton("Confermo e apro il consenso Android",
+                        new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                        try {
+                            projectionManager = (MediaProjectionManager)
+                                    getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+                            if (projectionManager == null) throw new IllegalStateException();
+                            startActivityForResult(
+                                    projectionManager.createScreenCaptureIntent(),
+                                    REQUEST_MULTI_FRAME_SESSION);
+                        } catch (RuntimeException ex) {
+                            status.setText("Permesso MediaProjection non disponibile.");
+                        }
+                    }
+                }).show();
     }
 
     private void requestProjection() {
@@ -145,6 +244,35 @@ public final class LocalVisualCaptureActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_MULTI_FRAME_SESSION) {
+            if (resultCode != RESULT_OK || data == null) {
+                status.setText("Sessione multi-schermata annullata.");
+                return;
+            }
+            String provider = new AiProviderAdapter(getApplicationContext()).getActiveProvider();
+            if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+                status.setText("Provider non autorizzato: scegli DeepSeek o Kimi.");
+                return;
+            }
+            try {
+                Intent start = new Intent(this, VisualProjectionService.class)
+                        .setAction(VisualProjectionService.ACTION_START)
+                        .putExtra(VisualProjectionService.EXTRA_RESULT_CODE, resultCode)
+                        .putExtra(VisualProjectionService.EXTRA_GRANT, data)
+                        .putExtra(VisualProjectionService.EXTRA_PROVIDER, provider);
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    startForegroundService(start);
+                } else {
+                    startService(start);
+                }
+                status.setText("Sessione visiva autorizzata. Ritorno alla TV; "
+                        + "puoi interromperla dalla notifica JARVIS.");
+                moveTaskToBack(true);
+            } catch (RuntimeException ex) {
+                status.setText("Il firmware Android non consente la sessione visiva.");
+            }
+            return;
+        }
         if (requestCode != REQUEST_SCREEN) return;
         if (resultCode != RESULT_OK || data == null) {
             finishCapture(null, "Cattura annullata: nessun consenso.");
@@ -232,7 +360,9 @@ public final class LocalVisualCaptureActivity extends Activity {
             if (frame == null || completed) return;
             long elapsed = SystemClock.elapsedRealtime() - startedAt;
             if (!VisionCapturePolicy.withinBudget(frameWidth, frameHeight, elapsed)) return;
-            if (!VisionCapturePolicy.mayCapture(true, ScreenPerceptionEngine.capture(this))) {
+            final ScreenPerceptionEngine.PerceptionSnapshot sourceSnapshot =
+                    ScreenPerceptionEngine.capture(this);
+            if (!VisionCapturePolicy.mayCapture(true, sourceSnapshot)) {
                 ui.post(new Runnable() {
                     @Override public void run() {
                         finishCapture(null, "Schermata sensibile rilevata; fotogramma scartato.");
@@ -251,11 +381,19 @@ public final class LocalVisualCaptureActivity extends Activity {
             final Bitmap result = full;
             full = null;
             final boolean dark = isMostlyBlack(result);
+            final String imagePackage = sourceSnapshot.foregroundPackage;
+            final String imageContext = sourceSnapshot.toRedactedMinimalContextPrompt();
+            final long imageTimeMs = System.currentTimeMillis();
             ui.post(new Runnable() {
                 @Override public void run() {
                     finishCapture(result, dark
                             ? "Fotogramma acquisito, ma quasi nero: possibile DRM o schermata protetta."
                             : "Fotogramma acquisito SOLO in RAM. Nessuna API chiamata.");
+                    if (!dark && previewBitmap == result) {
+                        capturedForegroundPackage = imagePackage;
+                        capturedRedactedUiContext = imageContext;
+                        capturedFrameTimeMs = imageTimeMs;
+                    }
                 }
             });
         } catch (RuntimeException e) {
@@ -296,6 +434,8 @@ public final class LocalVisualCaptureActivity extends Activity {
             clearPreview();
             previewBitmap = image;
             preview.setImageBitmap(image);
+            capturedNonSensitiveFrame = !isMostlyBlack(image);
+            cloudVisionButton.setEnabled(capturedNonSensitiveFrame && !cloudVisionInFlight);
         }
         status.setText(message);
         captureButton.setEnabled(true);
@@ -308,7 +448,100 @@ public final class LocalVisualCaptureActivity extends Activity {
         } catch (RuntimeException ignored) {}
     }
 
+    /**
+     * UI-only diagnostic: explicit separate permission BEFORE any image is
+     * transferred to the selected DeepSeek or Kimi API. The AI response is
+     * displayed as untrusted text and NEVER executed as a TV command.
+     */
+    private void confirmCloudVision() {
+        if (destroyed || !completed || !capturedNonSensitiveFrame || previewBitmap == null
+                || cloudVisionInFlight) return;
+        final AiProviderAdapter adapter = new AiProviderAdapter(getApplicationContext());
+        final String provider = adapter.getActiveProvider();
+        if (!CloudProviderPolicy.isSupportedCloudProvider(provider)) {
+            status.setText("Seleziona DeepSeek o Kimi. Nessun modello AI locale.");
+            return;
+        }
+        if (!adapter.hasCloudContextConsent()) {
+            status.setText("Consenso dati AI cloud disabilitato. Attivalo nelle impostazioni JARVIS.");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Invio volontario immagine a " + provider)
+                .setMessage("Stai per inviare UN fotogramma della TV a " + provider
+                        + " tramite API esterna. Non inviare account, messaggi privati,"
+                        + " password, PIN, QR, pagamenti o dati personali."
+                        + " La richiesta puo' consumare credito API."
+                        + " Il risultato non eseguira' comandi automaticamente. Confermi?")
+                .setNegativeButton("Annulla", null)
+                .setPositiveButton("Confermo l'invio", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                        sendCloudVisionOnce(adapter);
+                    }
+                })
+                .show();
+    }
+
+    private void sendCloudVisionOnce(final AiProviderAdapter adapter) {
+        if (destroyed || previewBitmap == null || !capturedNonSensitiveFrame
+                || cloudVisionInFlight) return;
+        // JPEG encoding operates locally and never persists to filesystem.
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        if (!previewBitmap.compress(Bitmap.CompressFormat.JPEG, 58, out)) {
+            status.setText("Errore di compressione JPEG.");
+            return;
+        }
+        final byte[] jpeg = out.toByteArray();
+        final int width = previewBitmap.getWidth();
+        final int height = previewBitmap.getHeight();
+        cloudVisionInFlight = true;
+        cloudVisionButton.setEnabled(false);
+        captureButton.setEnabled(false);
+        status.setText("Invio volontario a DeepSeek/Kimi, attesa risposta...");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                AiProviderAdapter.VisionCloudResult result;
+                try {
+                    result = adapter.describeScreenJpegOnce(jpeg, width, height,
+                            true, true, false);
+                } catch (Exception ignored) {
+                    result = AiProviderAdapter.VisionCloudResult.blocked("REQUEST_FAILED");
+                } finally {
+                    Arrays.fill(jpeg, (byte) 0);
+                }
+                final AiProviderAdapter.VisionCloudResult answer = result;
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        cloudVisionInFlight = false;
+                        if (destroyed) return;
+                        captureButton.setEnabled(true);
+                        cloudVisionButton.setEnabled(previewBitmap != null && capturedNonSensitiveFrame);
+                        if (answer.success) {
+                            boolean prepared = VisualObservationBridge.publish(
+                                    adapter.getActiveProvider(), capturedForegroundPackage,
+                                    capturedRedactedUiContext, answer.description,
+                                    capturedFrameTimeMs, System.currentTimeMillis());
+                            cloudVisionResult.setText(answer.description);
+                            if (!prepared) status.setText("Descrizione visiva disponibile, ma troppo vecchia o senza origine verificabile: non utilizzabile nel planner.");
+                            if (prepared) status.setText("Descrizione cloud pronta per un SOLO piano JARVIS sulla stessa schermata (45s). "
+                                    + "Non autorizza clic non visibili. Token: " + answer.tokens);
+                        } else {
+                            status.setText("Analisi non eseguita: " + answer.error);
+                        }
+                    }
+                });
+            }
+        }, "jarvis-approved-cloud-vision").start();
+    }
+
     private void clearPreview() {
+        capturedNonSensitiveFrame = false;
+        capturedForegroundPackage = null;
+        capturedRedactedUiContext = null;
+        capturedFrameTimeMs = 0L;
+        VisualObservationBridge.clear();
+        if (cloudVisionButton != null) cloudVisionButton.setEnabled(false);
+        if (cloudVisionResult != null) cloudVisionResult.setText("");
         if (preview != null) preview.setImageBitmap(null);
         if (previewBitmap != null) {
             previewBitmap.recycle();
@@ -348,7 +581,13 @@ public final class LocalVisualCaptureActivity extends Activity {
         destroyed = true;
         completed = true;
         stopResources();
-        clearPreview();
+        // Android may destroy this Activity after user returns to the TV app;
+        // discard pixels but keep the explicit 45s one-shot observation.
+        if (preview != null) preview.setImageBitmap(null);
+        if (previewBitmap != null) {
+            previewBitmap.recycle();
+            previewBitmap = null;
+        }
         super.onDestroy();
     }
 }

@@ -593,55 +593,62 @@
                         </div>
                     </div>
 
-                    <!-- SUBTAB: VOCE & TTS NEURALE -->
+                    <!-- SUBTAB: VOCE - FREE-TIER, NO AUTOMATIC BILLING -->
                     <div id="tab-voice" class="ai-tab-content" role="tabpanel">
                         <p class="section-intro">
-                            Sintesi vocale naturale italiana (Azure Speech F0: 500.000 car/mese gratuiti) con ducking automatico del volume TV.
+                            Scegli una voce per gli altoparlanti della TV. eSpeak non costa nulla e funziona offline.
+                            FreeTTS può offrire una voce italiana più naturale usando un account personale gratuito,
+                            ma richiede Internet e consenso separato. Il piano gratuito aggiunge un breve marchio vocale.
                         </p>
-
                         <div class="form-group">
-                            <label for="ai-voice-select">Voce Assistente:</label>
+                            <label for="ai-voice-select">Voce della TV:</label>
                             <select id="ai-voice-select" class="form-select">
-                                <option value="it-IT-DiegoNeural" selected>Diego (Azure Neurale Maschile - Naturale e Calmo)</option>
-                                <option value="it-IT-IsabellaNeural">Isabella (Azure Neurale Femminile - Naturale)</option>
-                                <option value="offline_espeak">Offline Standard (eSpeak NG Locale sulla TV)</option>
+                                <option value="offline_espeak" selected>eSpeak (gratuita, offline)</option>
+                                <option value="it-IT-DiegoNeural">Diego — italiana maschile (FreeTTS gratuito)</option>
+                                <option value="it-IT-IsabellaNeural">Isabella — italiana femminile (FreeTTS gratuito)</option>
                             </select>
                         </div>
-
                         <div class="form-group">
-                            <label for="azure-speech-key-input">Chiave Azure Speech F0 (opzionale, cifrata in TrustZone):</label>
-                            <div class="password-input-group">
-                                <input type="password" id="azure-speech-key-input" placeholder="Chiave Azure Speech..." class="form-input">
-                                <button type="button" class="btn-toggle-pwd" id="btn-toggle-azure-key" aria-label="Mostra chiave Azure">👁</button>
-                            </div>
+                            <label for="free-tts-api-key">Chiave API FreeTTS (solo account Free senza carta):</label>
+                            <input type="password" id="free-tts-api-key" autocomplete="off"
+                                placeholder="Inserisci la tua chiave gratuita solo qui, non in chat" class="form-input">
+                            <p id="free-tts-quota-status" class="section-intro" role="status" aria-live="polite">
+                                Modalità gratuita inattiva. Limite prudenziale di JARVIS: 5.000 caratteri/mese.
+                            </p>
+                            <p class="section-intro">Account gratuito personale: <a href="https://freetts.org/developers" target="_blank" rel="noopener noreferrer">FreeTTS Developer API</a>.
+                                Nessun abbonamento viene acquistato da JARVIS. Alla quota esaurita torna automaticamente a eSpeak.
+                                Solo per uso personale: la licenza gratuita non è commerciale.</p>
                         </div>
-
                         <div class="form-group">
-                            <label for="azure-region-select">Regione Azure:</label>
-                            <select id="azure-region-select" class="form-select">
-                                <option value="westeurope" selected>West Europe (westeurope)</option>
-                                <option value="italynorth">Italy North (italynorth)</option>
-                                <option value="eastus">East US (eastus)</option>
-                            </select>
+                            <label class="toggle-card">
+                                <input type="checkbox" id="free-tts-consent">
+                                <span class="toggle-info">
+                                    <span class="toggle-title">Autorizzo l'invio del testo parlato a FreeTTS</span>
+                                    <span class="toggle-desc">Invia soltanto risposte di massimo 600 caratteri, senza credenziali o dati riconosciuti come sensibili.</span>
+                                </span>
+                            </label>
+                            <label class="toggle-card">
+                                <input type="checkbox" id="free-tts-free-plan">
+                                <span class="toggle-info">
+                                    <span class="toggle-title">Confermo di usare esclusivamente l'account personale Free</span>
+                                    <span class="toggle-desc">Nessuna carta di credito o piano a pagamento: non usare chiavi di un abbonamento.</span>
+                                </span>
+                            </label>
                         </div>
-
-                        <div class="form-group">
-                            <div class="budget-card">
-                                <div class="budget-row">
-                                    <span class="budget-label">Cache Audio Disco:</span>
-                                    <span id="tts-cache-size" class="budget-val">0 KB / 8 MB</span>
-                                </div>
-                                <div class="budget-row">
-                                    <span class="budget-label">Audio Focus TV:</span>
-                                    <span class="budget-val">Ducking Automatico (API 26+)</span>
-                                </div>
-                            </div>
-                        </div>
-
                         <div class="settings-actions">
-                            <button id="btn-save-voice" class="btn-primary-action">Salva Impostazioni Voce</button>
-                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta Anteprima</button>
-                            <button id="btn-clear-cache" class="btn-danger-outline">Svuota Cache</button>
+                            <button id="btn-save-voice" class="btn-primary-action">Salva Voce TV</button>
+                            <button id="btn-preview-voice" class="btn-secondary-action">🔊 Ascolta Anteprima sulla TV</button>
+                        </div>
+                        <div class="form-group">
+                            <label class="toggle-card">
+                                <input type="checkbox" id="phone-voice-toggle">
+                                <span class="toggle-info">
+                                    <span class="toggle-title">Voce italiana del telefono (facoltativa)</span>
+                                    <span class="toggle-desc">Usa soltanto una voce italiana che il browser dichiara locale. Le risposte si sentono sul telefono, NON sugli altoparlanti della TV. Resta disattivata fino alla tua scelta e non usa API TTS esterne.</span>
+                                </span>
+                            </label>
+                            <p id="phone-voice-status" class="section-intro" role="status" aria-live="polite">Controllo delle voci italiane disponibili nel browser...</p>
+                            <button type="button" id="btn-preview-phone-voice" class="btn-secondary-action">🔊 Prova la voce del telefono</button>
                         </div>
                     </div>
 

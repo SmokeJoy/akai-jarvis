@@ -14,6 +14,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import it.akai.customremote.qr.QrBitmapUtil;
+import it.akai.customremote.ai.OtaReleaseTrust;
+import it.akai.customremote.ai.OtaAndroidArchiveInspector;
+import it.akai.customremote.ai.OtaReleaseChannel;
+import it.akai.customremote.ai.OtaUpdatePreparation;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -74,6 +78,8 @@ public class MainActivity extends Activity {
     private Button btnRevokeAll;
     private Button btnMinimize;
     private Button btnVisionLocalTest;
+    private Button btnOtaCheck;
+    private TextView tvOtaStatus;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -96,6 +102,8 @@ public class MainActivity extends Activity {
         btnRevokeAll = findViewById(R.id.btn_revoke_all);
         btnMinimize = findViewById(R.id.btn_minimize);
         btnVisionLocalTest = findViewById(R.id.btn_vision_local_test);
+        btnOtaCheck = findViewById(R.id.btn_ota_check);
+        tvOtaStatus = findViewById(R.id.tv_ota_status);
 
         // Avvio del servizio autonomo in foreground
         Intent serviceIntent = new Intent(this, RemoteServerService.class);
@@ -256,6 +264,63 @@ public class MainActivity extends Activity {
                     s.getSecurityManager().revokeAll();
                     updateUI();
                     Toast.makeText(MainActivity.this, "Tutte le sessioni smartphone sono state revocate", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+
+        // Owner-only D-pad action: if an offline-pinned release key+channel
+        // are provisioned, verify and stage a real HTTPS APK on a worker.
+        // Never install or start PackageInstaller from this button.
+        // No Web API, at-boot polling, silent updates or paid AI calls.
+        btnOtaCheck.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                btnOtaCheck.setEnabled(false);
+                tvOtaStatus.setText("Verifica locale OTA in corso...");
+                if (!submitBackgroundTask(new Runnable() {
+                    @Override
+                    public void run() {
+                        String message;
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                            message = "OTA non supportata: richiede Android 9.";
+                        } else if (OtaReleaseTrust.readBundledPublicKey(MainActivity.this) == null) {
+                            message = "OTA non configurata: chiave pubblica di rilascio mancante.";
+                        } else if (OtaAndroidArchiveInspector.readInstalledIdentity(
+                                MainActivity.this) == null) {
+                            message = "OTA bloccata: firma/versione installata non verificabili.";
+                        } else {
+                            OtaReleaseChannel.Channel channel =
+                                    OtaReleaseChannel.loadBundled(MainActivity.this);
+                            if (channel == null) {
+                                message = "OTA non configurata: manca il canale HTTPS ufficiale.";
+                            } else {
+                                OtaUpdatePreparation.Result candidate =
+                                        OtaUpdatePreparation.prepare(MainActivity.this,
+                                                channel.manifestUrl, channel.trustedHosts);
+                                if (candidate.staged) {
+                                    message = "Versione " + candidate.candidateVersionCode +
+                                            " verificata e scaricata. NON installata: " +
+                                            "servono backup e recupero approvati.";
+                                } else {
+                                    message = "OTA: " + candidate.code +
+                                            " (nessuna installazione)";
+                                }
+                            }
+                        }
+                        final String finalMessage = message;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                if (activityDestroyed || isFinishing() || isDestroyed()) return;
+                                tvOtaStatus.setText(finalMessage);
+                                btnOtaCheck.setEnabled(true);
+                            }
+                        });
+                    }
+                })) {
+                    if (!activityDestroyed) {
+                        tvOtaStatus.setText("Verifica OTA non disponibile.");
+                        btnOtaCheck.setEnabled(true);
+                    }
                 }
             }
         });

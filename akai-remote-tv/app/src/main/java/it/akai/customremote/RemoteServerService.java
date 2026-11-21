@@ -181,6 +181,14 @@ public class RemoteServerService extends Service {
                 @Override public boolean previewVoice(String voice, String text) {
                     return it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this).previewVoice(voice, text);
                 }
+                @Override public JSONObject getTtsConfig() {
+                    return it.akai.customremote.ai.AkaiSpeechEngine
+                            .getInstance(RemoteServerService.this).getVoiceConfiguration();
+                }
+                @Override public boolean saveTtsConfig(JSONObject settings) {
+                    return it.akai.customremote.ai.AkaiSpeechEngine
+                            .getInstance(RemoteServerService.this).configureVoice(settings);
+                }
                 @Override public JSONObject getSpeechStatus() {
                     it.akai.customremote.ai.AkaiSpeechEngine speech = it.akai.customremote.ai.AkaiSpeechEngine.getInstance(RemoteServerService.this);
                     JSONObject out = new JSONObject();
@@ -920,15 +928,26 @@ public class RemoteServerService extends Service {
             cfg.put("kimi_region", adapter.getKimiRegion());
             cfg.put("cloud_context_consent", adapter.hasCloudContextConsent());
             cfg.put("budget_is_client_estimate", true);
-            boolean hasDeepSeek = !adapter.getApiKey(AiProviderAdapter.PROVIDER_DEEPSEEK).isEmpty();
-            boolean hasKimi = !adapter.getApiKey(AiProviderAdapter.PROVIDER_KIMI).isEmpty();
+            JSONObject ksHealth = adapter.getCredentialKeystoreHealth();
+            boolean aliasPresent = ksHealth.optBoolean("keystore_alias_present", false);
+            boolean hasDeepSeek = ksHealth.optBoolean("deepseek_decryptable", false);
+            boolean hasKimi = ksHealth.optBoolean("kimi_decryptable", false);
             cfg.put("has_deepseek_key", hasDeepSeek);
             cfg.put("masked_deepseek_key", hasDeepSeek ? "••••••••••••••••" : "");
             cfg.put("has_kimi_key", hasKimi);
             cfg.put("masked_kimi_key", hasKimi ? "••••••••••••••••" : "");
-            cfg.put("keystore_available", KeystoreSecurityHelper.isKeystoreAvailable());
-            cfg.put("keystore_hardware_backed", KeystoreSecurityHelper.isHardwareBacked());
-            cfg.put("keystore_security_details", KeystoreSecurityHelper.getKeySecurityDetails());
+            cfg.put("keystore_alias_present", aliasPresent);
+            cfg.put("keystore_available", aliasPresent);
+            cfg.put("keystore_hardware_backed", ksHealth.optBoolean("keystore_hardware_backed", false));
+            cfg.put("keystore_security_details", aliasPresent
+                    ? KeystoreSecurityHelper.getKeySecurityDetails()
+                    : "Alias AndroidKeyStore assente (nessuna chiave preesistente per questo UID)");
+            cfg.put("deepseek_ciphertext_present", ksHealth.optBoolean("deepseek_ciphertext_present", false));
+            cfg.put("deepseek_decryptable", ksHealth.optBoolean("deepseek_decryptable", false));
+            cfg.put("kimi_ciphertext_present", ksHealth.optBoolean("kimi_ciphertext_present", false));
+            cfg.put("kimi_decryptable", ksHealth.optBoolean("kimi_decryptable", false));
+            cfg.put("undecryptable_stored_credentials", ksHealth.optBoolean("undecryptable_stored_credentials", false));
+            cfg.put("all_stored_credentials_decryptable", ksHealth.optBoolean("all_stored_credentials_decryptable", true));
             cfg.put("budget", adapter.getBudgetSummary());
             cfg.put("preferences", mem.getAllPreferences());
             cfg.put("stats", mem.getAllStats());

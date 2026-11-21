@@ -35,6 +35,22 @@ public final class GoalEvidenceVerifier {
         return (" " + text + " ").contains(" " + term + " ");
     }
 
+    /**
+     * Whole-word/whole-phrase channel identity, not substring matching:
+     * "Italia 20" must never certify "Italia 2"; likewise Rai 10 vs Rai 1.
+     * Compact OEM labels such as "Italia2" and "Rai1" are also accepted,
+     * but an ambiguous or missing label fails closed.
+     */
+    private static boolean hasVisibleChannelLabel(ScreenPerceptionEngine.PerceptionSnapshot snapshot,
+            String spaced, String compact) {
+        if (snapshot == null || snapshot.visibleTexts == null) return false;
+        for (String raw : snapshot.visibleTexts) {
+            String visible = normalize(raw);
+            if (has(visible, spaced) || has(visible, compact)) return true;
+        }
+        return false;
+    }
+
     private static boolean mentionsPlayback(String q) {
         if (has(q, "diretta") || has(q, "live") || has(q, "riproduci")
                 || has(q, "guarda") || has(q, "guardare") || has(q, "fai partire")
@@ -43,7 +59,8 @@ public final class GoalEvidenceVerifier {
         }
         // Avoid confusing "metti il volume" / "avvia l'app" with playback.
         boolean mediaSubject = has(q, "video") || has(q, "film") || has(q, "episodio")
-                || has(q, "puntata") || has(q, "italia 2") || has(q, "rai 1")
+                || has(q, "puntata") || has(q, "italia 2") || has(q, "italia2")
+                || has(q, "rai 1") || has(q, "rai1")
                 || has(q, "canale") || has(q, "streaming");
         return mediaSubject && (has(q, "metti") || has(q, "avvia") || has(q, "vedere"));
     }
@@ -135,10 +152,12 @@ public final class GoalEvidenceVerifier {
                 return denied("playback", "La sola schermata dell'app non prova riproduzione audio/video");
             }
             // Channel-specific goals require visible identification as well.
-            if (has(q, "italia 2") && !snapshot.containsText("Italia 2", false)) {
+            if ((has(q, "italia 2") || has(q, "italia2"))
+                    && !hasVisibleChannelLabel(snapshot, "italia 2", "italia2")) {
                 return denied("playback", "Il canale Italia 2 non e' identificabile");
             }
-            if (has(q, "rai 1") && !snapshot.containsText("Rai 1", false)) {
+            if ((has(q, "rai 1") || has(q, "rai1"))
+                    && !hasVisibleChannelLabel(snapshot, "rai 1", "rai1")) {
                 return denied("playback", "Il canale Rai 1 non e' identificabile");
             }
             return allowed("playback", "Player, audio e identita' del contenuto richiesto osservati quando applicabile");

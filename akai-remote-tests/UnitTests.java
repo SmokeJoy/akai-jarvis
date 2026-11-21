@@ -10,6 +10,7 @@ import it.akai.customremote.ai.ScreenPerceptionEngine;
 import it.akai.customremote.ai.GoalEvidenceVerifier;
 import it.akai.customremote.ai.UiClickTargetGate;
 import it.akai.customremote.ai.VisionCapturePolicy;
+import it.akai.customremote.ai.VisualObservationBridge;
 import it.akai.customremote.ai.RgbaFramePacker;
 import it.akai.customremote.qr.QrCode;
 import java.io.ByteArrayOutputStream;
@@ -1083,7 +1084,7 @@ public class UnitTests {
         boolean okPreviewBlocked = (rPreviewBlocked.statusCode == 403) && (rPreviewBlocked.json != null);
         boolean previewDenied = okPreviewBlocked && !rPreviewBlocked.json.optBoolean("success") &&
                                 rPreviewBlocked.json.optBoolean("strict_local_only") &&
-                                rPreviewBlocked.json.optString("error").contains("STRICT_LOCAL_ONLY");
+                                rPreviewBlocked.json.optString("error").contains("Voce non autorizzata");
 
         if (previewDenied) {
             System.out.println("[PASS] Test 24 (PR-01 M1): Endpoint /api/ai/tts_preview bloccato con HTTP 403 Forbidden su voci cloud neurali (zero socket verso Microsoft Azure)");
@@ -1099,7 +1100,99 @@ public class UnitTests {
         boolean okCfgBlocked = (rCfgBlocked.statusCode == 403) && (rCfgBlocked.json != null);
         boolean cfgDenied = okCfgBlocked && !rCfgBlocked.json.optBoolean("success") &&
                             rCfgBlocked.json.optBoolean("strict_local_only") &&
-                            rCfgBlocked.json.optString("error").contains("STRICT_LOCAL_ONLY");
+                            rCfgBlocked.json.optString("error").contains("Provider non ammesso");
+
+        // An offline-only TTS API must be truthful and usable in every AI mode.
+        MockHttpResponse cfgGet = dispatch(router, "GET", "/api/ai/tts_config",
+                authHeaders, "", "192.168.1.10");
+        MockHttpResponse cfgSetOffline = dispatch(router, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"voice\":\"offline_espeak\"}", "192.168.1.10");
+        MockHttpResponse cfgRejectAzureVoice = dispatch(router, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"voice\":\"it-IT-DiegoNeural\"}", "192.168.1.10");
+        MockHttpResponse cfgRejectAzureRegion = dispatch(router, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"voice\":\"offline_espeak\",\"azure_region\":\"westeurope\"}", "192.168.1.10");
+        MockHttpResponse offlinePreview = dispatch(router, "POST", "/api/ai/tts_preview",
+                authHeaders, "{\"voice\":\"offline_espeak\",\"text\":\"Test\"}", "192.168.1.10");
+        MockHttpResponse cfgNoToken = dispatch(router, "GET", "/api/ai/tts_config",
+                new java.util.HashMap<String,String>(), "", "192.168.1.10");
+
+        RestApiRouter.AiHandler cloudModeHandler = new RestApiRouter.AiHandler() {
+            @Override public JSONObject processQuery(String query, boolean speak) { return new JSONObject(); }
+            @Override public boolean isStrictLocalOnly() { return false; }
+            @Override public JSONArray getSupportedCatalog() { return new JSONArray(); }
+            @Override public boolean previewVoice(String voice, String text) { return true; }
+        };
+        RestApiRouter cloudModeRouter = new RestApiRouter(routerSec, cmdHandler, memHandler,
+                pinHandler, cloudModeHandler, "192.168.1.8", 8088);
+        MockHttpResponse cfgCloudModeReject = dispatch(cloudModeRouter, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"azure_key\":\"not_a_real_key\"}", "192.168.1.10");
+        MockHttpResponse previewCloudModeReject = dispatch(cloudModeRouter, "POST", "/api/ai/tts_preview",
+                authHeaders, reqPreviewCloud.toString(), "192.168.1.10");
+        cfgDenied = cfgDenied
+                && cfgGet.statusCode == 200
+                && "offline_espeak".equals(cfgGet.json.optString("active_voice"))
+                && cfgGet.json.has("cloud_tts_enabled")
+                && !cfgGet.json.optBoolean("cloud_tts_enabled")
+                && cfgSetOffline.statusCode == 200 && cfgSetOffline.json.optBoolean("success")
+                && cfgRejectAzureVoice.statusCode == 403
+                && cfgRejectAzureRegion.statusCode == 403
+                && offlinePreview.statusCode == 200
+                && "offline_espeak".equals(aiHandler.lastPreviewVoice)
+                && cfgNoToken.statusCode == 401
+                && cfgCloudModeReject.statusCode == 403
+                && previewCloudModeReject.statusCode == 403;
+
+        // Free plan output must be explicitly opt-in and must not expose its key
+        // in any readback. Only the currently approved Italian voice is playable.
+        RestApiRouter.AiHandler approvedFreeHandler = new RestApiRouter.AiHandler() {
+            @Override public JSONObject processQuery(String query, boolean speak) { return new JSONObject(); }
+            @Override public boolean isStrictLocalOnly() { return false; }
+            @Override public JSONArray getSupportedCatalog() { return new JSONArray(); }
+            @Override public boolean previewVoice(String voice, String text) {
+                return "it-IT-DiegoNeural".equals(voice);
+            }
+            @Override public JSONObject getTtsConfig() {
+                JSONObject out = new JSONObject();
+                try {
+                    out.put("active_voice", "it-IT-DiegoNeural");
+                    out.put("mode", "freetts_free");
+                    out.put("free_tts_enabled", true);
+                    out.put("freetts_api_key", "MUST_NOT_EXPOSE"); // negative redaction fixture
+                } catch (Exception ignored) {}
+                return out;
+            }
+            @Override public boolean saveTtsConfig(JSONObject req) {
+                return req != null
+                        && "freetts_free".equals(req.optString("mode"))
+                        && req.optBoolean("free_tts_consent", false)
+                        && req.optBoolean("free_tier_confirmed", false)
+                        && it.akai.customremote.ai.FreeItalianTtsPolicy.voiceAllowed(
+                                req.optString("voice"));
+            }
+        };
+        RestApiRouter approvedFreeRouter = new RestApiRouter(routerSec, cmdHandler, memHandler,
+                pinHandler, approvedFreeHandler, "192.168.1.8", 8088);
+        MockHttpResponse freeGet = dispatch(approvedFreeRouter, "GET", "/api/ai/tts_config",
+                authHeaders, "", "192.168.1.10");
+        MockHttpResponse freePostMissingConsent = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"mode\":\"freetts_free\",\"voice\":\"it-IT-DiegoNeural\"}", "192.168.1.10");
+        MockHttpResponse freePostApproved = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"mode\":\"freetts_free\",\"voice\":\"it-IT-DiegoNeural\",\"free_tts_consent\":true,\"free_tier_confirmed\":true}", "192.168.1.10");
+        MockHttpResponse freePreviewAllowed = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_preview",
+                authHeaders, "{\"voice\":\"it-IT-DiegoNeural\",\"text\":\"Test\"}", "192.168.1.10");
+        MockHttpResponse freePreviewWrong = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_preview",
+                authHeaders, "{\"voice\":\"it-IT-IsabellaNeural\",\"text\":\"Test\"}", "192.168.1.10");
+        MockHttpResponse freeRejectAzure = dispatch(approvedFreeRouter, "POST", "/api/ai/tts_config",
+                authHeaders, "{\"mode\":\"freetts_free\",\"azure_key\":\"danger\"}", "192.168.1.10");
+        cfgDenied = cfgDenied
+                && freeGet.statusCode == 200
+                && !freeGet.json.has("freetts_api_key")
+                && freePostMissingConsent.statusCode == 403
+                && freePostApproved.statusCode == 200
+                && !freePostApproved.json.has("freetts_api_key")
+                && freePreviewAllowed.statusCode == 200
+                && freePreviewWrong.statusCode == 403
+                && freeRejectAzure.statusCode == 403;
 
         if (cfgDenied) {
             System.out.println("[PASS] Test 25 (PR-01 M1): Endpoint /api/ai/tts_config bloccato con HTTP 403 Forbidden su impostazione credenziali cloud Azure in modalità locale");
@@ -2038,6 +2131,12 @@ public class UnitTests {
                         for (int i = 0; i < 67000; i++) big.append('x');
                         big.append("\"}");
                         respBody = big.toString();
+                    } else if ("VISION".equals(mode)) {
+                        respBody = new JSONObject()
+                            .put("usage", new JSONObject().put("prompt_tokens", 110).put("completion_tokens", 28).put("total_tokens", 138))
+                            .put("choices", new JSONArray().put(new JSONObject().put("message", new JSONObject()
+                                .put("content", "Schermata con un menu TV; verifica etichette reali prima di cliccare."))))
+                            .toString();
                     } else if ("TOOL_CALL".equals(mode)) {
                         String argsJson = new JSONObject()
                             .put("reply", "Apro YouTube")
@@ -2109,6 +2208,45 @@ public class UnitTests {
             AiProviderAdapter.AiResponse localBlockPlan = adapter.planActionSequence("apri youtube", "{}", null, null);
             JSONObject localBlockConn = adapter.testConnection(AiProviderAdapter.PROVIDER_DEEPSEEK, null, null);
             boolean localZeroHttpOk = !localBlockPlan.success && !localBlockConn.optBoolean("success", true) && mockHttpCount.get() == 0;
+
+            // Test 1 above deliberately leaves LOCAL_ONLY enabled. Explicitly
+            // switch to cloud mode for the *mock* vision tests; no real APIs used.
+            AkaiAiController.setExecutionMode(AkaiAiController.MODE_CLOUD_OPTIONAL);
+
+            // Visual inference: mandatory OS+owner+cloud consent and ONLY DeepSeek/Kimi.
+            // Actual HTTP is a 127.0.0.1 host mock, never a paid API.
+            byte[] visionJpeg = new byte[256];
+            visionJpeg[0] = (byte) 0xff; visionJpeg[1] = (byte) 0xd8;
+            visionJpeg[254] = (byte) 0xff; visionJpeg[255] = (byte) 0xd9;
+            adapter.setCloudContextConsent(true);
+            mockBehavior[0] = "VISION";
+            int visionHttpBefore = mockHttpCount.get();
+            AiProviderAdapter.VisionCloudResult deniedVision = adapter.describeScreenJpegOnce(
+                    visionJpeg, 960, 540, true, false, false);
+            if (deniedVision.success || mockHttpCount.get() != visionHttpBefore) {
+                throw new AssertionError("Vision: separate cloud image consent MUST block network");
+            }
+            AiProviderAdapter.VisionCloudResult dsVision = adapter.describeScreenJpegOnce(
+                    visionJpeg, 960, 540, true, true, false);
+            if (!dsVision.success || !"UNVERIFIED_VISUAL_DESCRIPTION".equals(dsVision.status)
+                    || mockHttpCount.get() != visionHttpBefore + 1) {
+                throw new AssertionError("DeepSeek mock vision: cloud HTTP and unverified description expected");
+            }
+            adapter.setActiveProvider(AiProviderAdapter.PROVIDER_KIMI);
+            AiProviderAdapter.VisionCloudResult kimiVision = adapter.describeScreenJpegOnce(
+                    visionJpeg, 960, 540, true, true, false);
+            if (!kimiVision.success || mockHttpCount.get() != visionHttpBefore + 2) {
+                throw new AssertionError("Kimi mock vision: one HTTP request expected");
+            }
+            adapter.setCloudContextConsent(false);
+            AiProviderAdapter.VisionCloudResult blockedSensitive = adapter.describeScreenJpegOnce(
+                    visionJpeg, 960, 540, true, true, true);
+            if (blockedSensitive.success || mockHttpCount.get() != visionHttpBefore + 2) {
+                throw new AssertionError("Sensitive/no-consent screenshot MUST NOT upload");
+            }
+            adapter.setCloudContextConsent(true);
+            adapter.setActiveProvider(AiProviderAdapter.PROVIDER_DEEPSEEK);
+            mockBehavior[0] = "JSON_CONTENT";
 
             // 2. CLOUD_OPTIONAL DeepSeek JSON content + Kimi tool_calls
             AkaiAiController.setExecutionMode(AkaiAiController.MODE_CLOUD_OPTIONAL);
@@ -2560,10 +2698,30 @@ public class UnitTests {
             ScreenPerceptionEngine.PerceptionSnapshot mediaWrongTitle = new ScreenPerceptionEngine.PerceptionSnapshot(
                     "it.mediaset.infinitytv", Collections.singletonList("Canale 5"),
                     Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot mediaWrongNumber = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Italia 20"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot mediaLabelWithSuffix = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Ora in onda: Italia 2 HD"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot mediaCompactLabel = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.mediaset.infinitytv", Collections.singletonList("Italia2 HD"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot raiWrongNumber = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.rainet.androidtv", Collections.singletonList("Rai 10"),
+                    Collections.emptyList(), null, false, true, true);
+            ScreenPerceptionEngine.PerceptionSnapshot raiCompactLabel = new ScreenPerceptionEngine.PerceptionSnapshot(
+                    "it.rainet.androidtv", Collections.singletonList("Rai1 Diretta"),
+                    Collections.emptyList(), null, false, true, true);
             boolean goalContractOk = !GoalEvidenceVerifier.verify("apri impostazioni audio", settingsMenu).satisfied
                     && GoalEvidenceVerifier.verify("apri impostazioni audio", settingsDetail).satisfied
                     && !GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaWrongTitle).satisfied
                     && GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaPlaying).satisfied
+                    && !GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaWrongNumber).satisfied
+                    && GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaLabelWithSuffix).satisfied
+                    && GoalEvidenceVerifier.verify("metti Italia2 in diretta da Mediaset Infinity", mediaCompactLabel).satisfied
+                    && !GoalEvidenceVerifier.verify("metti Rai 1 in diretta", raiWrongNumber).satisfied
+                    && GoalEvidenceVerifier.verify("metti Rai1 in diretta", raiCompactLabel).satisfied
                     && !GoalEvidenceVerifier.verify("apri YouTube e cerca video di gatti",
                             "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}",
                             new ScreenPerceptionEngine.PerceptionSnapshot(
@@ -2924,6 +3082,9 @@ public class UnitTests {
             KeystoreSecurityHelper.setTestFallbackSecretKey(kg38.generateKey());
 
             final AtomicInteger e2eCloudCalls = new AtomicInteger(0);
+            final AtomicBoolean visualHintSeen38 = new AtomicBoolean(false);
+            final AtomicInteger visualPlanCalls38 = new AtomicInteger(0);
+            final AtomicInteger visualRelearnCalls38 = new AtomicInteger(0);
             final String[] e2eScenario = new String[]{"DISCOVERY_AUDIO"};
 
             mockE2eCloudServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -2931,6 +3092,10 @@ public class UnitTests {
                 try {
                     byte[] reqBytes = exchange.getRequestBody().readAllBytes();
                     String reqBody = new String(reqBytes, StandardCharsets.UTF_8);
+                    if (reqBody.contains("untrusted_visual_description")
+                            && reqBody.contains("Menu audio")) {
+                        visualHintSeen38.set(true);
+                    }
 
                     if ("FAIL_500".equals(e2eScenario[0]) || reqBody.contains("provoca_errore_500")) {
                         e2eCloudCalls.incrementAndGet();
@@ -2941,6 +3106,33 @@ public class UnitTests {
 
                     e2eCloudCalls.incrementAndGet();
                     JSONObject payload = new JSONObject();
+                    if ("VISUAL_RELEARN".equals(e2eScenario[0])) {
+                        visualRelearnCalls38.incrementAndGet();
+                        payload.put("reply", "Aggiorno il percorso Audio dopo cambio interfaccia")
+                                .put("intent_key", "visual_open_audio")
+                                .put("learn_procedure", true)
+                                .put("actions", new JSONArray().put(new JSONObject()
+                                        .put("type", "click_text")
+                                        .put("text", "Suono")))
+                                .put("success_condition", new JSONObject()
+                                        .put("type", "contains_text")
+                                        .put("value", "Uscita digitale"));
+                    } else if ("VISUAL_MULTI".equals(e2eScenario[0])) {
+                        int iteration = visualPlanCalls38.incrementAndGet();
+                        JSONObject action = iteration == 1
+                                ? new JSONObject().put("type", "launch_app")
+                                        .put("pkg", "com.android.tv.settings")
+                                : new JSONObject().put("type", "click_text")
+                                        .put("text", "Audio");
+                        payload.put("reply", iteration == 1
+                                        ? "Apro impostazioni" : "Entro in Audio")
+                                .put("intent_key", "visual_open_audio")
+                                .put("learn_procedure", true)
+                                .put("actions", new JSONArray().put(action))
+                                .put("success_condition", new JSONObject()
+                                        .put("type", "contains_text")
+                                        .put("value", "Uscita digitale"));
+                    } else {
                     payload.put("reply", "Apro impostazioni audio avanzate")
                            .put("intent_key", "open_audio_advanced")
                            .put("learn_procedure", true)
@@ -2949,6 +3141,7 @@ public class UnitTests {
                                .put(new JSONObject().put("type", "wait").put("ms", 200).put("expect_pkg", "com.android.tv.settings"))
                                .put(new JSONObject().put("type", "click_text").put("text", "Audio")))
                            .put("success_condition", new JSONObject().put("type", "contains_text").put("value", "Uscita digitale"));
+                    }
 
                     String apiBody = new JSONObject()
                         .put("usage", new JSONObject().put("prompt_tokens", 90).put("completion_tokens", 35).put("total_tokens", 125))
@@ -2980,6 +3173,7 @@ public class UnitTests {
             final List<String> actionLog38 = new ArrayList<>();
             final String[] currentPkg38 = new String[]{"it.akai.customhome.v8"};
             final boolean[] inAudioSettings38 = new boolean[]{false};
+            final String[] audioLabel38 = new String[]{"Audio"};
 
             AkaiAiController.PerceptionAndExecutionBridge bridge38 = new AkaiAiController.PerceptionAndExecutionBridge() {
                 @Override
@@ -2996,8 +3190,10 @@ public class UnitTests {
                     if ("com.android.tv.settings".equals(currentPkg38[0])) {
                         return new ScreenPerceptionEngine.PerceptionSnapshot(
                             "com.android.tv.settings",
-                            Arrays.asList("Impostazioni", "Rete", "Dispositivo", "Audio"),
-                            Collections.emptyList(),
+                            Arrays.asList("Impostazioni", "Rete", "Dispositivo", audioLabel38[0]),
+                            Arrays.asList(new ScreenPerceptionEngine.ClickableElement(
+                                    audioLabel38[0], "android.widget.TextView", "mock_audio",
+                                    new android.graphics.Rect(12, 22, 120, 66))),
                             "Audio",
                             false, false, false
                         );
@@ -3022,7 +3218,8 @@ public class UnitTests {
                                 executedActions38.incrementAndGet();
                                 if ("launch_app".equals(type) || "open_app".equals(type)) {
                                     currentPkg38[0] = act.optString("pkg", "com.android.tv.settings");
-                                } else if ("click_text".equals(type) && "Audio".equals(act.optString("text", ""))) {
+                                } else if ("click_text".equals(type)
+                                        && audioLabel38[0].equals(act.optString("text", ""))) {
                                     inAudioSettings38[0] = true;
                                 }
                             }
@@ -3161,10 +3358,17 @@ public class UnitTests {
             // =================================================================
             e2eScenario[0] = "DISCOVERY_AUDIO";
             int cloudCallsBeforeP3 = e2eCloudCalls.get();
+            ScreenPerceptionEngine.PerceptionSnapshot visualOrigin38 = bridge38.capture(ctx38);
+            long captureAt38 = System.currentTimeMillis() - 1000L;
+            boolean visualReady38 = VisualObservationBridge.publish(
+                    AiProviderAdapter.PROVIDER_DEEPSEEK, visualOrigin38.foregroundPackage,
+                    visualOrigin38.toRedactedMinimalContextPrompt(),
+                    "Menu audio: selezione Uscita digitale", captureAt38, System.currentTimeMillis());
 
             MockHttpResponse rUnknownAi = dispatch(router38, "POST", "/api/ai/ask", httpsAuthHeaders, "{\"query\":\"apri impostazioni audio avanzate\"}", "192.168.1.55", true);
 
-            boolean part3Ok = (rUnknownAi.statusCode == 200) &&
+            boolean part3Ok = visualReady38 && visualHintSeen38.get()
+                              && (rUnknownAi.statusCode == 200) &&
                               rUnknownAi.json != null &&
                               rUnknownAi.json.optBoolean("success") &&
                               rUnknownAi.json.optBoolean("learned_new_procedure") &&
@@ -3214,10 +3418,98 @@ public class UnitTests {
 
             boolean part5Ok = okStop && okFailHandled && okLegacyResilient;
 
-            test38Passed = part1Ok && part2Ok && part3Ok && part4Ok && part5Ok;
+            // =================================================================
+            // (6) REAL AGENT LOGIC / MOCK HARDWARE: each step requires a FRESH
+            // owner's vision observation; no local LLM or paid API calls.
+            // =================================================================
+            mem38.resetForTest(); // ensure no cached skill bypasses cloud loop
+            inAudioSettings38[0] = false;
+            currentPkg38[0] = "it.akai.customhome.v8";
+            e2eScenario[0] = "VISUAL_MULTI";
+            final AtomicInteger visualFrames38 = new AtomicInteger(0);
+            it.akai.customremote.ai.VisualObservationProvider.Session visual38 =
+                    new it.akai.customremote.ai.VisualObservationProvider.Session() {
+                @Override public it.akai.customremote.ai.VisualObservationProvider.Result observe(
+                        String provider, String pkg, String ui,
+                        it.akai.customremote.ai.VisualObservationProvider.Cancellation cancel) {
+                    visualFrames38.incrementAndGet();
+                    return it.akai.customremote.ai.VisualObservationProvider.Result.observed(
+                            provider, pkg, ui, "Menu audio per navigazione in " + pkg,
+                            System.currentTimeMillis(), 15, 0.001);
+                }
+            };
+            boolean part6Ok = false;
+            if (it.akai.customremote.ai.VisualObservationProvider.install(visual38)) {
+                try {
+                    int cloudBeforeVisual = e2eCloudCalls.get();
+                    JSONObject visualResult38 = ctrl38.processQuery(
+                            "apri impostazioni audio avanzate visivo", false);
+                    part6Ok = visualResult38.optBoolean("verified")
+                            && "STATE_VERIFIED".equals(visualResult38.optString("execution_outcome"))
+                            && visualResult38.optInt("visual_frames", 0) == 2
+                            && visualFrames38.get() == 2
+                            && visualPlanCalls38.get() == 2
+                            && visualResult38.optInt("executed_steps", 0) == 2
+                            && visualResult38.optBoolean("learned_new_procedure")
+                            && (e2eCloudCalls.get() == cloudBeforeVisual + 2)
+                            && mem38.getSavedProceduresCount() >= 1;
+                    if (!part6Ok) {
+                        System.err.println("[DEBUG Test38 visual] " + visualResult38
+                                + " frames=" + visualFrames38.get()
+                                + " plans=" + visualPlanCalls38.get());
+                    }
+                } finally {
+                    it.akai.customremote.ai.VisualObservationProvider.clear(visual38);
+                }
+            }
+
+            // =================================================================
+            // (7) SELF-IMPROVEMENT: cached 2-step route becomes stale after a
+            // simulated app UI change ("Audio" -> "Suono"). JARVIS must
+            // record the failure, use one NEW owner-consented visual frame,
+            // and replace the SQLite recipe ONLY after STATE_VERIFIED.
+            // =================================================================
+            audioLabel38[0] = "Suono";
+            inAudioSettings38[0] = false;
+            currentPkg38[0] = "it.akai.customhome.v8";
+            e2eScenario[0] = "VISUAL_RELEARN";
+            final AtomicInteger relearnFrames38 = new AtomicInteger(0);
+            it.akai.customremote.ai.VisualObservationProvider.Session newVisual38 =
+                    new it.akai.customremote.ai.VisualObservationProvider.Session() {
+                @Override public it.akai.customremote.ai.VisualObservationProvider.Result observe(
+                        String provider, String pkg, String ui,
+                        it.akai.customremote.ai.VisualObservationProvider.Cancellation cancel) {
+                    relearnFrames38.incrementAndGet();
+                    return it.akai.customremote.ai.VisualObservationProvider.Result.observed(
+                            provider, pkg, ui, "Menu Suono aggiornato",
+                            System.currentTimeMillis(), 15, 0.001);
+                }
+            };
+            boolean part7Ok = false;
+            if (it.akai.customremote.ai.VisualObservationProvider.install(newVisual38)) {
+                try {
+                    JSONObject adapted = ctrl38.processQuery(
+                            "apri impostazioni audio avanzate visivo", false);
+                    part7Ok = adapted.optBoolean("verified")
+                            && "STATE_VERIFIED".equals(adapted.optString("execution_outcome"))
+                            && adapted.optBoolean("learned_new_procedure")
+                            && relearnFrames38.get() >= 1
+                            && visualRelearnCalls38.get() >= 1;
+                    if (!part7Ok) {
+                        System.err.println("[DEBUG Test38 relearn] " + adapted
+                                + " frames=" + relearnFrames38.get()
+                                + " plans=" + visualRelearnCalls38.get());
+                    }
+                } finally {
+                    it.akai.customremote.ai.VisualObservationProvider.clear(newVisual38);
+                }
+            }
+
+            test38Passed = part1Ok && part2Ok && part3Ok && part4Ok
+                    && part5Ok && part6Ok && part7Ok;
             if (!test38Passed) {
                 System.err.println("[FAIL] Test 38: Fallimento collaudo E2E (p1=" + part1Ok + " [req=" + okPairReq + ", bad=" + okPairBad + ", good=" + okPairGood + ", keys=" + okLegacyKeys + ", static=" + okStaticAssets + ", sec=" + okNegativeSecurity + "]" +
-                        ", p2=" + part2Ok + ", p3=" + part3Ok + ", p4=" + part4Ok + ", p5=" + part5Ok + " [stop=" + okStop + ", fail=" + okFailHandled + ", legacy=" + okLegacyResilient + "])");
+                        ", p2=" + part2Ok + ", p3=" + part3Ok + ", p4=" + part4Ok + ", p5=" + part5Ok + ", p6=" + part6Ok + ", p7=" + part7Ok + " [stop=" + okStop + ", fail=" + okFailHandled + ", legacy=" + okLegacyResilient + "])");
             }
         } catch (Throwable t38) {
             System.err.println("[FAIL] Test 38 eccezione: " + t38.getMessage());

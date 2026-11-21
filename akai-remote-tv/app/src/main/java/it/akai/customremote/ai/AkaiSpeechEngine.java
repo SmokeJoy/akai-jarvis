@@ -4,6 +4,9 @@ import android.content.Context;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.os.Handler;
+import android.os.Looper;
+import org.json.JSONObject;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
@@ -15,13 +18,9 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * AkaiSpeechEngine: Motore vocale ibrido per AKAI Custom TV (Fase 15).
- * 
- * Orchestra a doppio livello:
- * 1. Livello Neurale Cloud: Microsoft Azure Speech F0 (voci naturali it-IT-DiegoNeural, it-IT-IsabellaNeural)
- *    con cache audio 8 MB su disco ed AudioFocus Ducking.
- * 2. Livello Offline Fallback: Android TextToSpeech nativo (com.reecedunn.espeak) in caso di assenza
- *    di connessione, quota esaurita o richiesta esplicita di modalità offline.
+ * AkaiSpeechEngine: Android platform TTS for AKAI TV.
+ * Speech uses the installed Android engine; no external Azure synthesis calls.
+ * DeepSeek/Kimi remain the exclusive cloud providers for AI inference.
  */
 public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     private static final String TAG = "AKAI_SpeechEngine";
@@ -41,10 +40,12 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     private final AudioManager mAudioManager;
     private final CloudSpeechAdapter mCloudAdapter;
     private final AkaiMemoryEngine mMemoryEngine;
+    private final FreeItalianTtsCoordinator mFreeVoice;
 
     private TextToSpeech mTts;
     private final AtomicBoolean mIsInitialized = new AtomicBoolean(false);
     private final AtomicBoolean mIsOfflineSpeaking = new AtomicBoolean(false);
+    private final SpeechUtteranceGate mOfflineGate = new SpeechUtteranceGate();
 
     private final AudioManager.OnAudioFocusChangeListener mFocusListener = new AudioManager.OnAudioFocusChangeListener() {
         @Override
@@ -64,44 +65,26 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         mContext = context;
         mAudioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         mMemoryEngine = AkaiMemoryEngine.getInstance(context);
-        mCloudAdapter = new CloudSpeechAdapter(context);
-
-        mCloudAdapter.setPlaybackListener(new CloudSpeechAdapter.PlaybackListener() {
-            @Override
-            public void onPreparing() {
-                mSpeechState = SpeechState.FETCHING;
-            }
-
-            @Override
-            public void onPlaying() {
-                mSpeechState = SpeechState.PLAYING;
-            }
-
-            @Override
-            public void onCompleted() {
-                mSpeechState = SpeechState.IDLE;
-            }
-
-            @Override
-            public void onError(String error) {
-                mSpeechState = SpeechState.IDLE;
-            }
-        });
-
+        // Legacy cloud adapter is deliberately not allocated (no cache or player).
+        // Compatibility API methods below tolerate a null adapter.
+        mCloudAdapter = null;
+        mFreeVoice = new FreeItalianTtsCoordinator(context);
         initOfflineTts();
     }
 
     private void initOfflineTts() {
+        // Do not construct a second engine while the first one is connecting.
+        if (mTts != null) return;
         try {
-            Log.i(TAG, "Initializing Android TextToSpeech with engine: " + PREFERRED_OFFLINE_ENGINE);
+            Log.i(TAG, "Initializing bundled offline TextToSpeech: " + PREFERRED_OFFLINE_ENGINE);
+            mIsInitialized.set(false);
             mTts = new TextToSpeech(mContext, this, PREFERRED_OFFLINE_ENGINE);
         } catch (Exception e) {
-            Log.w(TAG, "Failed with " + PREFERRED_OFFLINE_ENGINE + ", trying system default: " + e.getMessage());
-            try {
-                mTts = new TextToSpeech(mContext, this);
-            } catch (Exception ex) {
-                Log.e(TAG, "Fatal TTS initialization error: " + ex.getMessage());
-            }
+            mIsInitialized.set(false);
+            mTts = null;
+            // Unknown Android default engines can use third-party cloud speech.
+            // Prefer no voice over violating the owner's provider policy.
+            Log.e(TAG, "Offline eSpeak unavailable; no other provider fallback: " + e.getMessage());
         }
     }
 
@@ -118,31 +101,25 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                     Log.i(TAG, "Italian voice successfully loaded in offline TTS engine.");
                 }
 
-                mTts.setSpeechRate(1.0f);
-                mTts.setPitch(1.0f);
+                // The stock 1.0 speech rate/pitch are already defaults.
+                // Avoid redundant OEM eSpeak parameter writes during startup.
 
                 mTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                     @Override
                     public void onStart(String utteranceId) {
-                        mIsOfflineSpeaking.set(true);
-                        mSpeechState = SpeechState.PLAYING;
-                        Log.d(TAG, "Offline TTS speaking started: " + utteranceId);
+                        markOfflineUtteranceStarted(utteranceId);
                     }
 
                     @Override
                     public void onDone(String utteranceId) {
-                        mIsOfflineSpeaking.set(false);
-                        mSpeechState = SpeechState.IDLE;
+                        if (!finishOfflineUtterance(utteranceId)) return;
                         Log.d(TAG, "Offline TTS speaking finished: " + utteranceId);
-                        abandonAudioFocus();
                     }
 
                     @Override
                     public void onError(String utteranceId) {
-                        mIsOfflineSpeaking.set(false);
-                        mSpeechState = SpeechState.IDLE;
+                        if (!finishOfflineUtterance(utteranceId)) return;
                         Log.e(TAG, "Offline TTS error: " + utteranceId);
-                        abandonAudioFocus();
                     }
                 });
 
@@ -153,13 +130,18 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         } else {
             Log.e(TAG, "Offline TTS initialization failed with code: " + status);
             mIsInitialized.set(false);
+            // Dispose failed engine so a later explicit request can retry.
+            TextToSpeech failed = mTts;
+            mTts = null;
+            if (failed != null) {
+                try { failed.shutdown(); } catch (Exception ignored) {}
+            }
         }
     }
 
     /**
      * Pronuncia un testo attraverso gli altoparlanti della televisione.
-     * Tenta prioritariamente la voce neurale configurata (Diego/Isabella); in caso di errore
-     * o assenza di credenziali esegue un fallback trasparente su TTS locale offline.
+     * Uses only Android platform TTS. Legacy cloud synthesis is disabled.
      */
     public synchronized boolean speak(String text, boolean interrupt) {
         if (text == null || text.trim().isEmpty()) return false;
@@ -171,21 +153,36 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         mSpeechId.incrementAndGet();
         mSpeechState = SpeechState.FETCHING;
 
-        String voice = getTtsVoice();
-        String region = getAzureRegion();
-        String apiKey = getAzureKey();
-
-        // Tentativo con voce neurale cloud se configurata e chiave presente (inibito se STRICT_LOCAL_ONLY)
-        if (!AkaiAiController.isStrictLocalOnly() && !CloudSpeechAdapter.VOICE_OFFLINE.equals(voice) && apiKey != null && !apiKey.isEmpty()) {
-            Log.i(TAG, "Attempting neural speech with voice: " + voice + " (" + region + ")");
-            boolean neuralSuccess = mCloudAdapter.speakNeural(text, voice, region, apiKey, null);
-            if (neuralSuccess) {
-                return true;
-            }
-            Log.w(TAG, "Neural speech failed or unavailable. Falling back to offline AOSP TTS engine...");
+        // FreeTTS is only used after explicit opt-in with an encrypted personal
+        // FREE-tier key; it cannot run in Guest mode or on sensitive text.
+        final long requestedId = mSpeechId.get();
+        if (!mMemoryEngine.isGuestMode() && mFreeVoice.speak(text,
+                new FreeItalianTtsCoordinator.Events() {
+                    @Override public void onPlaying() {
+                        if (mSpeechId.get() != requestedId) return;
+                        requestAudioFocus();
+                        mSpeechState = SpeechState.PLAYING;
+                    }
+                    @Override public void onCompleted() {
+                        if (mSpeechId.get() != requestedId) return;
+                        mSpeechState = SpeechState.IDLE;
+                        abandonAudioFocus();
+                    }
+                    @Override public void onFallback(final String originalText) {
+                        // Exit the coordinator monitor before acquiring speech lock.
+                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                            @Override public void run() {
+                                synchronized (AkaiSpeechEngine.this) {
+                                    if (mSpeechId.get() == requestedId) {
+                                        speakOfflineTts(originalText, true);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                })) {
+            return true;
         }
-
-        // Fallback offline su Android TextToSpeech
         return speakOfflineTts(text, interrupt);
     }
 
@@ -196,11 +193,14 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         mSpeechId.incrementAndGet();
         mSpeechState = SpeechState.FETCHING;
 
-        String region = getAzureRegion();
-        String apiKey = getAzureKey();
-
-        if (!AkaiAiController.isStrictLocalOnly() && !CloudSpeechAdapter.VOICE_OFFLINE.equals(voice) && apiKey != null && !apiKey.isEmpty()) {
-            return mCloudAdapter.speakNeural(text, voice, region, apiKey, null);
+        // A preview must use the currently configured and consented provider.
+        // A request may never select a third-party voice by supplying its name.
+        String configured = mFreeVoice.configuredVoice();
+        if (!configured.equals(voice) && !"offline_espeak".equals(voice)) {
+            return false;
+        }
+        if (mFreeVoice.isFreeMode() && configured.equals(voice)) {
+            return speak(text, true);
         }
         return speakOfflineTts(text, true);
     }
@@ -213,18 +213,19 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
             return false;
         }
 
+        // Sequence ID prevents two requests in the same millisecond from sharing callbacks.
+        final String utteranceId = "akai_offline_" + mSpeechId.get();
+        mOfflineGate.activate(utteranceId);
         try {
             requestAudioFocus();
             int queueMode = interrupt ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
-            String utteranceId = "akai_offline_" + System.currentTimeMillis();
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 Bundle params = new Bundle();
                 params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
                 int res = mTts.speak(text, queueMode, params, utteranceId);
                 if (res != TextToSpeech.SUCCESS) {
-                    mSpeechState = SpeechState.IDLE;
-                    abandonAudioFocus();
+                    finishOfflineUtterance(utteranceId);
                     return false;
                 }
                 return true;
@@ -234,21 +235,24 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                 params.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId);
                 int res = mTts.speak(text, queueMode, params);
                 if (res != TextToSpeech.SUCCESS) {
-                    mSpeechState = SpeechState.IDLE;
-                    abandonAudioFocus();
+                    finishOfflineUtterance(utteranceId);
                     return false;
                 }
                 return true;
             }
         } catch (Exception e) {
             Log.e(TAG, "Error in speakOfflineTts: " + e.getMessage());
-            mSpeechState = SpeechState.IDLE;
-            abandonAudioFocus();
+            finishOfflineUtterance(utteranceId);
             return false;
         }
     }
 
     public synchronized void stop() {
+        // Invalidate any in-flight free cloud result before its audio is started.
+        mSpeechId.incrementAndGet();
+        mFreeVoice.stop();
+        // Invalidate first: TTS.stop() can trigger asynchronous onDone/onError.
+        mOfflineGate.stop();
         if (mCloudAdapter != null) {
             mCloudAdapter.stopCurrentPlayback();
         }
@@ -260,8 +264,26 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         abandonAudioFocus();
     }
 
+    // Serialize callbacks with speak()/stop(): the old onDone must not
+    // release audio focus after the next utterance has started.
+    private synchronized void markOfflineUtteranceStarted(String utteranceId) {
+        if (!mOfflineGate.isCurrent(utteranceId)) return;
+        mIsOfflineSpeaking.set(true);
+        mSpeechState = SpeechState.PLAYING;
+        Log.d(TAG, "Offline TTS speaking started: " + utteranceId);
+    }
+
+    private synchronized boolean finishOfflineUtterance(String utteranceId) {
+        if (!mOfflineGate.finish(utteranceId)) return false;
+        mIsOfflineSpeaking.set(false);
+        mSpeechState = SpeechState.IDLE;
+        abandonAudioFocus();
+        return true;
+    }
+
     public boolean isSpeaking() {
-        return mSpeechState != SpeechState.IDLE || (mCloudAdapter != null && mCloudAdapter.isPlaying()) || mIsOfflineSpeaking.get();
+        return mSpeechState != SpeechState.IDLE || mFreeVoice.isBusy()
+                || (mCloudAdapter != null && mCloudAdapter.isPlaying()) || mIsOfflineSpeaking.get();
     }
 
     public String getSpeechState() {
@@ -277,39 +299,45 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     // =========================================================================
 
     public String getTtsVoice() {
-        return mMemoryEngine.getPreference("tts_voice", CloudSpeechAdapter.VOICE_DIEGO);
+        return mFreeVoice.configuredVoice();
     }
 
     public void setTtsVoice(String voice) {
-        if (voice != null && !voice.isEmpty()) {
-            mMemoryEngine.setPreference("tts_voice", voice, "tts", 0);
-            Log.i(TAG, "Selected TTS voice: " + voice);
+        if (!CloudSpeechAdapter.VOICE_OFFLINE.equals(voice)) {
+            Log.w(TAG, "Voice selection requires explicit free-tier consent in TTS settings.");
+            return;
         }
+        mMemoryEngine.setPreference("tts_voice", CloudSpeechAdapter.VOICE_OFFLINE, "tts", 0);
     }
 
+    public JSONObject getVoiceConfiguration() {
+        return mFreeVoice.configuration();
+    }
+
+    public synchronized boolean configureVoice(JSONObject settings) {
+        boolean saved = mFreeVoice.configure(settings);
+        // Switching voice profiles must also clear Android TTS/AudioFocus
+        // state, not just stop the async MP3 player in the coordinator.
+        if (saved) stop();
+        return saved;
+    }
+
+    // Compatibility methods remain for older callers but cannot expose, write
+    // or reactivate legacy third-party speech credentials.
     public String getAzureRegion() {
-        return mMemoryEngine.getPreference("azure_speech_region", "westeurope");
+        return "";
     }
 
     public void setAzureRegion(String region) {
-        if (region != null && !region.isEmpty()) {
-            mMemoryEngine.setPreference("azure_speech_region", region, "tts", 0);
-        }
+        Log.w(TAG, "Legacy Azure speech configuration is disabled.");
     }
 
     public String getAzureKey() {
-        String enc = mMemoryEngine.getPreference("azure_speech_key_enc", "");
-        if (enc == null || enc.isEmpty()) return "";
-        return KeystoreSecurityHelper.decrypt(enc);
+        return "";
     }
 
     public void setAzureKey(String key) {
-        if (key == null || key.trim().isEmpty()) {
-            mMemoryEngine.deletePreference("azure_speech_key_enc");
-        } else {
-            String enc = KeystoreSecurityHelper.encrypt(key.trim());
-            mMemoryEngine.setPreference("azure_speech_key_enc", enc, "tts_security", 0);
-        }
+        Log.w(TAG, "Legacy Azure speech credentials are not accepted.");
     }
 
     public long getCacheSizeBytes() {

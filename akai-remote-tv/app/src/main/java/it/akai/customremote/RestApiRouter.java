@@ -41,6 +41,23 @@ public class RestApiRouter {
         JSONArray getSupportedCatalog();
         default boolean speak(String text, boolean interrupt) { return false; }
         default boolean previewVoice(String voice, String text) { return false; }
+        default JSONObject getTtsConfig() {
+            JSONObject out = new JSONObject();
+            try {
+                out.put("mode", "offline_espeak");
+                out.put("active_voice", "offline_espeak");
+                out.put("free_tts_enabled", false);
+                out.put("cloud_tts_enabled", false);
+                out.put("speech_provider_policy", "OWNER_OPT_IN_FREE_TTS_ONLY");
+            } catch (Exception ignored) {}
+            return out;
+        }
+        default boolean saveTtsConfig(JSONObject settings) {
+            return settings != null && !settings.has("azure_key")
+                    && !settings.has("azure_region")
+                    && "offline_espeak".equals(settings.optString("mode", "offline_espeak"))
+                    && "offline_espeak".equals(settings.optString("voice", "offline_espeak"));
+        }
         default JSONObject testConnection(String requestBody) {
             JSONObject res = new JSONObject();
             try {
@@ -635,6 +652,24 @@ public class RestApiRouter {
             return true;
         }
 
+        // Free-tier voice configuration is opt-in and separate from AI model selection.
+        if ("/api/ai/tts_config".equals(path) && "GET".equals(method)) {
+            String token = extractBearerToken(headers);
+            if (!securityManager.validateToken(token)) {
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato"));
+                return true;
+            }
+            JSONObject cfg = aiHandler != null ? aiHandler.getTtsConfig() : null;
+            if (cfg == null) cfg = new JSONObject()
+                    .put("mode", "offline_espeak")
+                    .put("active_voice", "offline_espeak")
+                    .put("free_tts_enabled", false);
+            // No provider key is ever returned by the TTS config API.
+            cfg.remove("freetts_api_key");
+            sendJsonResponse(os, 200, cfg);
+            return true;
+        }
+
         // AI Voice Preview (/api/ai/tts_preview)
         if ("/api/ai/tts_preview".equals(path) && "POST".equals(method)) {
             String token = extractBearerToken(headers);
@@ -647,11 +682,15 @@ public class RestApiRouter {
             String voice = req.optString("voice", "it-IT-DiegoNeural");
             boolean localOnly = aiHandler != null ? aiHandler.isStrictLocalOnly() : true;
 
-            if (localOnly && !"offline_espeak".equals(voice)) {
+            boolean approvedFreeVoice = it.akai.customremote.ai.FreeItalianTtsPolicy.voiceAllowed(voice)
+                    && aiHandler != null
+                    && aiHandler.getTtsConfig().optBoolean("free_tts_enabled", false)
+                    && voice.equals(aiHandler.getTtsConfig().optString("active_voice"));
+            if (!"offline_espeak".equals(voice) && !approvedFreeVoice) {
                 JSONObject err = new JSONObject();
                 err.put("success", false);
-                err.put("error", "Anteprima voci neurali cloud inibita nel profilo STRICT_LOCAL_ONLY (zero leak verso server esterni)");
-                err.put("strict_local_only", true);
+                err.put("error", "Voce non autorizzata. Per FreeTTS serve il consenso e un account gratuito configurato.");
+                err.put("strict_local_only", localOnly);
                 sendJsonResponse(os, 403, err);
                 return true;
             }
@@ -669,30 +708,34 @@ public class RestApiRouter {
             return true;
         }
 
-        // AI TTS Neural Configuration Update (/api/ai/tts_config)
+        // Personal free-tier FreeTTS is speech output ONLY, never an AI
+        // reasoning/model provider. All requests require HTTPS Bearer auth.
         if ("/api/ai/tts_config".equals(path) && "POST".equals(method)) {
             String token = extractBearerToken(headers);
             if (!securityManager.validateToken(token)) {
-                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato: token mancante o scaduto"));
+                sendJsonResponse(os, 401, new JSONObject().put("error", "Non autorizzato"));
                 return true;
             }
-
             JSONObject req = new JSONObject(body != null && !body.isEmpty() ? body : "{}");
-            boolean localOnly = aiHandler != null ? aiHandler.isStrictLocalOnly() : true;
-
-            if (localOnly) {
-                boolean settingAzureKey = req.has("azure_key") && !req.optString("azure_key", "").isEmpty();
-                boolean settingAzureRegion = req.has("azure_region");
-                boolean settingCloudVoice = req.has("voice") && !"offline_espeak".equals(req.optString("voice", ""));
-                if (settingAzureKey || settingAzureRegion || settingCloudVoice) {
-                    JSONObject err = new JSONObject();
-                    err.put("success", false);
-                    err.put("error", "Modifica credenziali o attivazione voci cloud inibita nel profilo STRICT_LOCAL_ONLY");
-                    err.put("strict_local_only", true);
-                    sendJsonResponse(os, 403, err);
-                    return true;
-                }
+            if (req.has("azure_key") || req.has("azure_region")
+                    || req.has("billing") || req.has("paid_plan") || req.has("api_endpoint")) {
+                sendJsonResponse(os, 403, new JSONObject()
+                        .put("success", false)
+                        .put("strict_local_only", aiHandler == null || aiHandler.isStrictLocalOnly())
+                        .put("error", "Provider non ammesso: solo eSpeak o FreeTTS gratuito personale"));
+                return true;
             }
+            if (aiHandler == null || !aiHandler.saveTtsConfig(req)) {
+                sendJsonResponse(os, 403, new JSONObject()
+                        .put("success", false)
+                        .put("error", "Configurazione vocale rifiutata. FreeTTS richiede consenso, chiave personale gratuita e quota disponibile."));
+                return true;
+            }
+            JSONObject out = aiHandler.getTtsConfig();
+            out.remove("freetts_api_key");
+            out.put("success", true);
+            sendJsonResponse(os, 200, out);
+            return true;
         }
 
         return false;

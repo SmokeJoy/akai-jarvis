@@ -20,7 +20,9 @@
         pingTimer: null,
         speechRecognition: null,
         isListening: false,
-        caFingerprint: null
+        caFingerprint: null,
+        // Opt-in per page: never switch the TV to phone audio silently.
+        phoneVoiceEnabled: false
     };
 
     // Conversation State Machine (P1-02, P1-03, P1-04)
@@ -147,10 +149,14 @@
 
         // Voice & TTS
         aiVoiceSelect: document.getElementById('ai-voice-select'),
-        azureSpeechKeyInput: document.getElementById('azure-speech-key-input'),
-        btnToggleAzureKey: document.getElementById('btn-toggle-azure-key'),
-        azureRegionSelect: document.getElementById('azure-region-select'),
-        ttsCacheSize: document.getElementById('tts-cache-size'),
+        freeTtsKeyInput: document.getElementById('free-tts-api-key'),
+        freeTtsConsent: document.getElementById('free-tts-consent'),
+        freeTtsFreePlan: document.getElementById('free-tts-free-plan'),
+        freeTtsQuotaStatus: document.getElementById('free-tts-quota-status'),
+        phoneVoiceToggle: document.getElementById('phone-voice-toggle'),
+        phoneVoiceStatus: document.getElementById('phone-voice-status'),
+        btnPreviewPhoneVoice: document.getElementById('btn-preview-phone-voice'),
+
         btnSaveVoice: document.getElementById('btn-save-voice'),
         btnPreviewVoice: document.getElementById('btn-preview-voice'),
         btnClearCache: document.getElementById('btn-clear-cache'),
@@ -469,6 +475,7 @@
     }
 
     async function cancelBackendAiTask() {
+        stopPhoneSpeech();
         const hadInFlight = Boolean(convoSession.aiAbortController);
         if (convoSession.aiAbortController) {
             convoSession.userCancelRequested = true;
@@ -499,6 +506,7 @@
     }
 
     function stopConversation() {
+        stopPhoneSpeech();
         const shouldCancelTv = Boolean(convoSession.aiAbortController) ||
             convoSession.state === JarvisConvoState.THINKING ||
             convoSession.state === JarvisConvoState.SPEAKING;
@@ -567,21 +575,25 @@
 
         // If conversation is still active, poll until TV finished speaking, then reopen microphone
         if (convoSession.active && ok !== false) {
-            await handleTvSpeechTurn();
+            const phoneSpeechTurn = convoSession.phoneSpeechPromise;
+            if (phoneSpeechTurn) await phoneSpeechTurn;
+            if (convoSession.active) await handleTvSpeechTurn(Boolean(phoneSpeechTurn));
         } else {
             convoSession.turnLocked = false;
         }
     }
 
     // P1-03: Robust speech status polling
-    async function handleTvSpeechTurn() {
-        setJarvisState(JarvisConvoState.SPEAKING, 'La TV sta rispondendo...', 'speaking');
+    async function handleTvSpeechTurn(phoneAlreadySpoken = false) {
+        setJarvisState(JarvisConvoState.SPEAKING,
+            phoneAlreadySpoken ? 'Risposta vocale locale completata' : 'La TV sta rispondendo...',
+            'speaking');
 
         let pollCount = 0;
         let speechSeen = false;
 
         // Poll TV speech status until finished
-        while (pollCount < 40 && convoSession.active) {
+        while (!phoneAlreadySpoken && pollCount < 40 && convoSession.active) {
             await new Promise(r => setTimeout(r, 400));
             if (!convoSession.active) return;
 
@@ -659,9 +671,98 @@
         }
     }
 
+    // Optional Web Remote output: the phone/browser's explicitly local Italian
+    // system voice. It plays on that device, NOT on the TV. No new cloud API,
+    // executable neural model or voice package is installed on the AKAI.
+    function getLocalItalianPhoneVoice() {
+        const synth = window.speechSynthesis;
+        if (!synth || typeof synth.getVoices !== 'function'
+                || typeof window.SpeechSynthesisUtterance !== 'function') return null;
+        let available = [];
+        try { available = synth.getVoices() || []; } catch (_) { return null; }
+        const candidates = available.filter(voice => voice
+                && voice.localService === true
+                && /^it(?:-|$)/i.test(voice.lang || ''));
+        // Prefer enhanced Italian voices when already installed by the browser/OS.
+        candidates.sort((a, b) => {
+            const score = v => /premium|enhanced|avanzat|migliorat/i.test(v.name || '') ? 2
+                : /^it-it$/i.test(v.lang || '') ? 1 : 0;
+            return score(b) - score(a);
+        });
+        return candidates.length ? candidates[0] : null;
+    }
+
+    function updatePhoneVoiceStatus() {
+        if (!elements.phoneVoiceStatus) return;
+        const voice = getLocalItalianPhoneVoice();
+        elements.phoneVoiceStatus.textContent = voice
+            ? 'Voce italiana locale disponibile su questo dispositivo: ' + voice.name
+            : 'Nessuna voce italiana locale verificata: JARVIS userà eSpeak sulla TV.';
+    }
+
+    function stopPhoneSpeech() {
+        if (convoSession.phoneSpeechResolve) {
+            convoSession.phoneSpeechResolve();
+            convoSession.phoneSpeechResolve = null;
+        }
+        convoSession.phoneSpeechPromise = null;
+        if (window.speechSynthesis) {
+            try { window.speechSynthesis.cancel(); } catch (_) {}
+        }
+    }
+
+    function speakPhoneReply(text) {
+        const voice = getLocalItalianPhoneVoice();
+        if (!voice || !text || typeof text !== 'string') return false;
+        stopPhoneSpeech();
+        const utterance = new window.SpeechSynthesisUtterance(text.slice(0, 1800));
+        utterance.voice = voice;
+        utterance.lang = 'it-IT';
+        utterance.rate = 0.97;
+        convoSession.phoneSpeechPromise = new Promise(resolve => {
+            let done = false;
+            let watchdog;
+            const finish = () => {
+                if (done) return;
+                done = true;
+                clearTimeout(watchdog);
+                if (convoSession.phoneSpeechResolve === finish) {
+                    convoSession.phoneSpeechResolve = null;
+                }
+                resolve();
+            };
+            convoSession.phoneSpeechResolve = finish;
+            utterance.onend = finish;
+            utterance.onerror = finish;
+            // A suspended/mobile browser must not deadlock the voice conversation.
+            watchdog = setTimeout(finish, 90000);
+            try { window.speechSynthesis.speak(utterance); }
+            catch (error) { finish(); }
+        });
+        return true;
+    }
+
     // =========================================================================
     // AI DISPATCHER & ACCURATE RESPONSE FEEDBACK (P0-01, P1-04, P1-05)
     // =========================================================================
+
+    // A processed AI result can have HTTP 400 when success means FINAL GOAL VERIFIED.
+    // Preserve the actual reply and outcome; an unverified command is not a
+    // network failure, and must never be presented as verified success.
+    function isHandledAiReply(httpStatus, data) {
+        return httpStatus === 400 && data !== null && typeof data === 'object'
+            && typeof data.status === 'string' && data.status.length > 0
+            && typeof data.reply === 'string' && data.reply.trim().length > 0;
+    }
+
+    // A status flag alone must never certify hardware success. Only a
+    // consistent STATE_VERIFIED result can be displayed as verified or
+    // advance the hands-free conversation as a successful TV action.
+    function isVerifiedAiReply(data) {
+        return data != null && data.success === true && data.verified === true
+            && data.status === 'SUCCESS_VERIFIED'
+            && data.execution_outcome === 'STATE_VERIFIED';
+    }
 
     async function askAi(userQuery, forceSpeak = true) {
         const query = (userQuery || elements.aiTextInput.value).trim();
@@ -678,12 +779,16 @@
             return false;
         }
 
-        // P1-04: AbortController with 25-second timeout
+        // Use the TV eSpeak unless an opt-in local Italian voice is available
+        // on the Web Remote device; no third-party cloud speech is requested.
+        const usePhoneSpeech = Boolean(forceSpeak && state.phoneVoiceEnabled && getLocalItalianPhoneVoice());
+
+        // Allow the bounded 2-minute autonomous visual task to finish, plus response grace.
         convoSession.userCancelRequested = false;
         convoSession.aiAbortController = new AbortController();
         const timeoutId = setTimeout(() => {
             if (convoSession.aiAbortController) convoSession.aiAbortController.abort();
-        }, 25000);
+        }, 135000);
 
         try {
             const res = await fetch(getApiUrl('/api/ai/ask'), {
@@ -692,16 +797,30 @@
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${state.token}`
                 },
-                body: JSON.stringify({ query, speak: forceSpeak, source: 'web_remote' }),
+                body: JSON.stringify({ query, speak: forceSpeak && !usePhoneSpeech, source: 'web_remote' }),
                 signal: convoSession.aiAbortController.signal
             });
             clearTimeout(timeoutId);
 
             const data = await res.json().catch(() => ({}));
 
-            if (res.ok) {
+            if (res.ok || isHandledAiReply(res.status, data)) {
                 displayAiResponse(data, query);
-                return true;
+                // The owner may turn phone audio off while a cloud task is pending.
+                // Never restart mobile speech after the opt-in has been revoked.
+                if (usePhoneSpeech && state.phoneVoiceEnabled && data.status !== 'CANCELLED'
+                        && !convoSession.userCancelRequested && typeof data.reply === 'string') {
+                    if (!speakPhoneReply(data.reply)) {
+                        showToast('Voce locale non disponibile; risposta mostrata a schermo.', true);
+                    }
+                }
+                // A conversational answer is handled even if no TV action was required.
+                return isVerifiedAiReply(data)
+                    || (data.status === 'ANSWERED_DIALOG'
+                        && data.execution_outcome === 'NOT_TESTED')
+                    || (data.status === 'MEMORY_HANDLED'
+                        && data.execution_outcome === 'NOT_TESTED'
+                        && data.success === true);
             } else if (res.status === 426) {
                 displayAiResponse({
                     success: false,
@@ -786,17 +905,23 @@
 
         // Status Badge (P1-05 & P1-16)
         if (elements.aiBadgeStatus) {
-            if (data.status === 'SUCCESS_VERIFIED' || data.verified === true) {
+            if (isVerifiedAiReply(data)) {
                 elements.aiBadgeStatus.className = 'ai-badge-status verified';
                 elements.aiBadgeStatus.textContent = '✓ Verificato';
                 showToast('Comando verificato con successo');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
-            } else if (data.status === 'ANSWERED_DIALOG') {
+            } else if ((data.status === 'ANSWERED_DIALOG'
+                    && data.execution_outcome === 'NOT_TESTED')
+                    || (data.status === 'MEMORY_HANDLED'
+                    && data.execution_outcome === 'NOT_TESTED'
+                    && data.success === true)) {
                 elements.aiBadgeStatus.className = 'ai-badge-status dialog';
-                elements.aiBadgeStatus.textContent = '💬 Risposta';
-                showToast('Risposta da JARVIS');
+                elements.aiBadgeStatus.textContent = data.status === 'MEMORY_HANDLED' ? '💾 Memoria' : '💬 Risposta';
+                showToast(data.status === 'MEMORY_HANDLED' ? 'Memoria gestita da JARVIS' : 'Risposta da JARVIS');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
-            } else if (data.status === 'COMPLETED_UNVERIFIED' || data.verified === false && data.success !== false) {
+            } else if (data.status === 'COMPLETED_UNVERIFIED'
+                    && data.execution_outcome === 'COMMAND_SENT'
+                    && data.verified !== true && data.success !== true) {
                 elements.aiBadgeStatus.className = 'ai-badge-status unverified';
                 elements.aiBadgeStatus.textContent = '⚠️ Eseguito (Non Verificato)';
                 showToast('Comando inviato (Non verificato)');
@@ -1041,7 +1166,7 @@
                     elements.aiKimiRegionSelect.value = cfg.kimi_region || 'intl';
                 }
                 if (elements.chkCloudContextConsent) {
-                    elements.chkCloudContextConsent.checked = (cfg.cloud_context_consent !== false);
+                    elements.chkCloudContextConsent.checked = (cfg.cloud_context_consent === true);
                 }
 
                 // Masked API Keys
@@ -1125,15 +1250,33 @@
             const res = await fetch(getApiUrl('/api/ai/tts_config'), {
                 headers: { 'Authorization': `Bearer ${state.token}` }
             });
-            if (res.ok) {
-                const cfg = await res.json();
-                if (elements.aiVoiceSelect && cfg.active_voice) elements.aiVoiceSelect.value = cfg.active_voice;
-                if (elements.azureRegionSelect && cfg.azure_region) elements.azureRegionSelect.value = cfg.azure_region;
-                if (elements.azureSpeechKeyInput) elements.azureSpeechKeyInput.value = cfg.masked_azure_key || '';
-                if (elements.ttsCacheSize) elements.ttsCacheSize.textContent = `${cfg.cache_size_kb || 0} KB / ${cfg.max_cache_mb || 8} MB`;
+            if (!res.ok) return;
+            const cfg = await res.json();
+            const voice = cfg.active_voice;
+            if (elements.aiVoiceSelect) {
+                elements.aiVoiceSelect.value = (
+                    voice === 'it-IT-DiegoNeural' || voice === 'it-IT-IsabellaNeural'
+                ) && cfg.free_tts_enabled === true ? voice : 'offline_espeak';
+            }
+            if (elements.freeTtsConsent) {
+                elements.freeTtsConsent.checked = cfg.free_tts_consent === true;
+            }
+            if (elements.freeTtsFreePlan) elements.freeTtsFreePlan.checked = false;
+            if (elements.freeTtsKeyInput) {
+                elements.freeTtsKeyInput.value = '';
+                elements.freeTtsKeyInput.placeholder = cfg.free_tts_has_key
+                    ? 'Chiave gratuita già salvata in forma cifrata'
+                    : 'Incolla la chiave gratuita del tuo account personale';
+            }
+            if (elements.freeTtsQuotaStatus) {
+                const used = Number(cfg.free_tts_used_chars || 0);
+                const limit = Number(cfg.free_tts_limit_chars || 5000);
+                elements.freeTtsQuotaStatus.textContent =
+                    `FreeTTS: ${cfg.free_tts_enabled ? 'attiva' : 'disattiva'} · ${Math.max(0, limit - used)} caratteri rimanenti su ${limit} al mese. `
+                    + 'Le risposte non supportate continuano con eSpeak.';
             }
         } catch (e) {
-            console.warn('Errore caricamento TTS:', e);
+            console.warn('Errore lettura stato sintesi vocale:', e);
         }
     }
 
@@ -1148,7 +1291,7 @@
         const executionMode = (provider === 'local') ? 'LOCAL_ONLY' : 'CLOUD_OPTIONAL';
         const model = elements.aiModelSelect ? elements.aiModelSelect.value : 'deepseek-flash';
         const kimiRegion = elements.aiKimiRegionSelect ? elements.aiKimiRegionSelect.value : 'intl';
-        const cloudContextConsent = elements.chkCloudContextConsent ? Boolean(elements.chkCloudContextConsent.checked) : true;
+        const cloudContextConsent = elements.chkCloudContextConsent ? Boolean(elements.chkCloudContextConsent.checked) : false;
         const key = elements.aiApiKeyInput ? elements.aiApiKeyInput.value.trim() : '';
 
         const payload = {
@@ -1189,13 +1332,26 @@
     }
 
     async function saveTtsConfig() {
-        if (!state.token) return;
-        const voice = elements.aiVoiceSelect ? elements.aiVoiceSelect.value : 'it-IT-DiegoNeural';
-        const region = elements.azureRegionSelect ? elements.azureRegionSelect.value : 'westeurope';
-        const key = elements.azureSpeechKeyInput ? elements.azureSpeechKeyInput.value.trim() : '';
-
-        const payload = { voice, azure_region: region };
-        if (key && !key.includes('••••')) payload.azure_key = key;
+        if (!state.token) {
+            showToast('Associa il telecomando alla TV prima di configurare la voce.', true);
+            return;
+        }
+        const voice = elements.aiVoiceSelect ? elements.aiVoiceSelect.value : 'offline_espeak';
+        const cloudSpeech = voice !== 'offline_espeak';
+        const consent = Boolean(elements.freeTtsConsent && elements.freeTtsConsent.checked);
+        const confirmedFree = Boolean(elements.freeTtsFreePlan && elements.freeTtsFreePlan.checked);
+        if (cloudSpeech && (!consent || !confirmedFree)) {
+            showToast('Per la voce gratuita devi confermare il consenso e il piano personale Free.', true);
+            return;
+        }
+        const payload = {
+            mode: cloudSpeech ? 'freetts_free' : 'offline_espeak',
+            voice,
+            free_tts_consent: cloudSpeech && consent,
+            free_tier_confirmed: cloudSpeech && confirmedFree
+        };
+        const key = elements.freeTtsKeyInput ? elements.freeTtsKeyInput.value.trim() : '';
+        if (cloudSpeech && key) payload.freetts_api_key = key;
 
         try {
             const res = await fetch(getApiUrl('/api/ai/tts_config'), {
@@ -1206,39 +1362,47 @@
                 },
                 body: JSON.stringify(payload)
             });
-            if (res.ok) {
-                showToast('Impostazioni vocali salvate!');
-                loadTtsConfig();
-            } else {
-                showToast('Errore salvataggio vocale', true);
+            const answer = await res.json().catch(() => ({}));
+            if (!res.ok || answer.success !== true) {
+                showToast(answer.error || 'Configurazione vocale non autorizzata o chiave non disponibile.', true);
+                return;
             }
+            if (elements.freeTtsKeyInput) elements.freeTtsKeyInput.value = '';
+            showToast(cloudSpeech
+                ? 'Voce italiana FreeTTS attivata con limite gratuito e fallback eSpeak'
+                : 'Voce offline eSpeak attivata. FreeTTS e relativa chiave disattivate.');
+            loadTtsConfig();
         } catch (e) {
-            showToast('Errore di comunicazione', true);
+            showToast('Errore di comunicazione col motore vocale della TV.', true);
         }
     }
 
     async function previewVoice() {
         if (!state.token) return;
-        const voice = elements.aiVoiceSelect ? elements.aiVoiceSelect.value : 'it-IT-DiegoNeural';
-        const sampleText = voice.includes('Isabella') ?
-            'Ciao, sono Isabella. Questa è la voce naturale dell\'assistente per la tua televisione AKAI.' :
-            'Ciao, sono Diego. Questa è la voce naturale dell\'assistente per la tua televisione AKAI.';
-
+        const voice = elements.aiVoiceSelect ? elements.aiVoiceSelect.value : 'offline_espeak';
+        const isFreeVoice = voice !== 'offline_espeak';
+        if (isFreeVoice && !Boolean(elements.freeTtsConsent && elements.freeTtsConsent.checked)) {
+            showToast('Attiva il consenso FreeTTS prima di usare l\'anteprima.', true);
+            return;
+        }
         try {
-            showToast(`Riproduzione anteprima (${voice})...`);
             const res = await fetch(getApiUrl('/api/ai/tts_preview'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${state.token}`
                 },
-                body: JSON.stringify({ voice, text: sampleText })
+                body: JSON.stringify({
+                    voice,
+                    text: 'Ciao, sono JARVIS. Questa è la mia voce italiana sulla tua televisione.'
+                })
             });
-            if (!res.ok) {
-                showToast('Errore anteprima vocale sulla TV', true);
-            }
+            showToast(res.ok
+                ? 'Anteprima inviata agli altoparlanti della TV.'
+                : 'Anteprima non disponibile. Salva prima la voce o verifica la quota gratuita.',
+                !res.ok);
         } catch (e) {
-            showToast('Errore anteprima voce', true);
+            showToast('Errore anteprima sulla TV', true);
         }
     }
 
@@ -1820,6 +1984,31 @@
         // Voice & TTS
         if (elements.btnSaveVoice) elements.btnSaveVoice.addEventListener('click', saveTtsConfig);
         if (elements.btnPreviewVoice) elements.btnPreviewVoice.addEventListener('click', previewVoice);
+        if (elements.phoneVoiceToggle) {
+            elements.phoneVoiceToggle.checked = false;
+            elements.phoneVoiceToggle.addEventListener('change', () => {
+                if (elements.phoneVoiceToggle.checked && !getLocalItalianPhoneVoice()) {
+                    elements.phoneVoiceToggle.checked = false;
+                    showToast('Voce italiana locale non disponibile: resta attivo eSpeak sulla TV.', true);
+                }
+                state.phoneVoiceEnabled = elements.phoneVoiceToggle.checked;
+                if (!state.phoneVoiceEnabled) stopPhoneSpeech();
+                updatePhoneVoiceStatus();
+            });
+            if (window.speechSynthesis && window.speechSynthesis.addEventListener) {
+                window.speechSynthesis.addEventListener('voiceschanged', updatePhoneVoiceStatus);
+            }
+            updatePhoneVoiceStatus();
+        }
+        if (elements.btnPreviewPhoneVoice) {
+            elements.btnPreviewPhoneVoice.addEventListener('click', () => {
+                if (!getLocalItalianPhoneVoice()) {
+                    showToast('Nessuna voce italiana locale disponibile nel browser.', true);
+                    return;
+                }
+                speakPhoneReply('Ciao, questa è la voce italiana del tuo telefono per JARVIS.');
+            });
+        }
         if (elements.btnClearCache) elements.btnClearCache.addEventListener('click', clearAudioCache);
 
         // Procedural & Preferences
@@ -1844,13 +2033,7 @@
                 elements.btnToggleKeyVisibility.textContent = isPw ? '🔒' : '👁';
             });
         }
-        if (elements.btnToggleAzureKey) {
-            elements.btnToggleAzureKey.addEventListener('click', () => {
-                const isPw = elements.azureSpeechKeyInput.type === 'password';
-                elements.azureSpeechKeyInput.type = isPw ? 'text' : 'password';
-                elements.btnToggleAzureKey.textContent = isPw ? '🔒' : '👁';
-            });
-        }
+
 
         // Auto-switch default model when provider radio changes
         document.querySelectorAll('input[name="ai-provider"]').forEach(r => {
