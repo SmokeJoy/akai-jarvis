@@ -193,7 +193,8 @@ c.close()
         try {
             $psCallArgs = if ($isWin) { @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script16) } else { @("-NoProfile", "-File", $script16) }
             $out = (& $psExe @psCallArgs @ScriptArgs 2>&1 | Out-String)
-            return @{ ExitCode = $LASTEXITCODE; Output = $out }
+            $norm = ($out -replace '\s+', ' ').Trim()
+            return @{ ExitCode = $LASTEXITCODE; Output = $out; Normalized = $norm }
         } finally {
             $ErrorActionPreference = $prevEap
         }
@@ -220,7 +221,7 @@ c.close()
     # Test 2: Wrong passphrase fails HMAC
     $env:JARVIS_RECOVERY_PASSPHRASE = "Wrong_Test_Bundle_Passphrase_2026!!"
     $wrongRes = Invoke-Script16 @("-Action", "verify-restore-offline", "-BundlePath", $bundlePath, "-VerificationTempRoot", $verifyScratch)
-    if ($wrongRes.ExitCode -ne 0 -and $wrongRes.Output -match "Autenticazione HMAC fallita") {
+    if ($wrongRes.ExitCode -ne 0 -and $wrongRes.Normalized -match "Autenticazione HMAC fallita") {
         Write-Host "[PASS] Bundle Test 2: Passphrase errata bloccata in Fail-Closed" -ForegroundColor Green
         $passed++
     } else {
@@ -236,7 +237,7 @@ c.close()
     $envJson.cipherB64 = [Convert]::ToBase64String($cBytesTamper)
     [IO.File]::WriteAllText($tamperedBundle, ($envJson | ConvertTo-Json -Depth 4))
     $tamperRes = Invoke-Script16 @("-Action", "verify-restore-offline", "-BundlePath", $tamperedBundle, "-VerificationTempRoot", $verifyScratch)
-    if ($tamperRes.ExitCode -ne 0 -and $tamperRes.Output -match "Autenticazione HMAC fallita") {
+    if ($tamperRes.ExitCode -ne 0 -and $tamperRes.Normalized -match "Autenticazione HMAC fallita") {
         Write-Host "[PASS] Bundle Test 3: Bit-flip ciphertext bloccato pre-decifratura da HMAC" -ForegroundColor Green
         $passed++
     } else {
@@ -246,7 +247,7 @@ c.close()
     # Test 4: Short passphrase rejected
     $env:JARVIS_RECOVERY_PASSPHRASE = "too_short_123"
     $shortRes = Invoke-Script16 @("-Action", "verify-restore-offline", "-BundlePath", $bundlePath)
-    if ($shortRes.ExitCode -ne 0 -and $shortRes.Output -match "almeno 20 caratteri") {
+    if ($shortRes.ExitCode -ne 0 -and $shortRes.Normalized -match "almeno 20 caratteri") {
         Write-Host "[PASS] Bundle Test 4: Passphrase < 20 caratteri bloccata" -ForegroundColor Green
         $passed++
     } else {
@@ -256,9 +257,9 @@ c.close()
     # Test 5: Repo path & Cloud-sync path rejected
     $env:JARVIS_RECOVERY_PASSPHRASE = "Correct_Test_Bundle_Passphrase_2026!"
     $repoRes = Invoke-Script16 @("-Action", "export", "-BackupSessionDir", $sessionDir, "-OutputBundlePath", (Join-Path $repoRoot "forbidden_bundle.akv.json"))
-    $cloudTarget = Join-Path $workRoot "OneDrive\forbidden_bundle.akv.json"
+    $cloudTarget = Join-Path (Join-Path $workRoot "OneDrive") "forbidden_bundle.akv.json"
     $cloudRes = Invoke-Script16 @("-Action", "export", "-BackupSessionDir", $sessionDir, "-OutputBundlePath", $cloudTarget)
-    if ($repoRes.ExitCode -ne 0 -and $repoRes.Output -match "dentro il repository Git vietato" -and $cloudRes.ExitCode -ne 0 -and $cloudRes.Output -match "cloud-sync vietato") {
+    if ($repoRes.ExitCode -ne 0 -and $repoRes.Normalized -match "dentro il repository Git vietato" -and $cloudRes.ExitCode -ne 0 -and $cloudRes.Normalized -match "cloud-sync vietato") {
         Write-Host "[PASS] Bundle Test 5: Percorsi in Git repo e cloud-sync bloccati" -ForegroundColor Green
         $passed++
     } else {
