@@ -62,6 +62,12 @@ reject({ ...fixture, badging: fixture.badging.replace("targetSdkVersion:'28'", "
        'wrong target sdk');
 reject({ ...fixture, badging: fixture.badging.replace("native-code: 'armeabi-v7a'", "native-code: 'arm64-v8a'") },
        'wrong architecture');
+reject({ ...fixture, badging: fixture.badging + "sdkVersion:'29'\n" },
+       'duplicate contradictory minimum SDK must fail closed');
+reject({ ...fixture, badging: fixture.badging + "targetSdkVersion:'29'\n" },
+       'duplicate contradictory target SDK must fail closed');
+reject({ ...fixture, badging: fixture.badging + "native-code: 'arm64-v8a'\n" },
+       'duplicate contradictory ABI must fail closed');
 reject({ ...fixture, manifestXml: fixture.manifestXml.replace('(type 0x12)0x0', '(type 0x12)0xffffffff') },
        'debuggable true');
 reject({ ...fixture, manifestXml: 'E: manifest\n E: application\n' },
