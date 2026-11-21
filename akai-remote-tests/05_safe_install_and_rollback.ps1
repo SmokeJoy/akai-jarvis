@@ -36,7 +36,8 @@ param(
     [string]$AuthToken = $null,
     [string]$ExpectedCaFingerprint = $null,
     [switch]$AllowHardwareExecution = $false,
-    [switch]$GreenfieldStart = $false
+    [switch]$GreenfieldStart = $false,
+    [switch]$RequirePairing = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -887,6 +888,13 @@ function Invoke-WithAdbElevation {
                 & $AdbExe -s $TargetAdb wait-for-device 2>$null | Out-Null
                 $idCheck = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
                 $idCheckExit = $LASTEXITCODE
+                if ($idCheckExit -ne 0) {
+                    Start-Sleep -Milliseconds 1000
+                    & $AdbExe connect $TargetAdb 2>$null | Out-Null
+                    & $AdbExe -s $TargetAdb wait-for-device 2>$null | Out-Null
+                    $idCheck = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
+                    $idCheckExit = $LASTEXITCODE
+                }
                 if ($idCheckExit -eq 0 -and (Test-AdbRootIdOutput $idCheck)) {
                     $isRootActive = $true
                 }
@@ -907,6 +915,13 @@ function Invoke-WithAdbElevation {
             & $AdbExe -s $TargetAdb wait-for-device 2>$null | Out-Null
             $idAfter = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
             $idAfterExit = $LASTEXITCODE
+            if ($unrootExit -eq 0 -and $idAfterExit -ne 0) {
+                Start-Sleep -Milliseconds 1000
+                & $AdbExe connect $TargetAdb 2>$null | Out-Null
+                & $AdbExe -s $TargetAdb wait-for-device 2>$null | Out-Null
+                $idAfter = (& $AdbExe -s $TargetAdb shell "id" 2>&1 | Out-String).Trim()
+                $idAfterExit = $LASTEXITCODE
+            }
             $verifiedNonRootShell = (
                 $unrootExit -eq 0 -and
                 $idAfterExit -eq 0 -and
@@ -971,11 +986,16 @@ function Restore-TargetApplicationService {
             try { $procState = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName } catch { $procState = $null }
         }
 
-        # 3. Fallback Android 9 (.RemoteServerService non esportato vs .MainActivity esportata)
+        # 3. Fallback Android 9 (.RemoteServerService non esportato vs .MainActivity esportata) con attese cold-start
         if (-not $procState -or -not $procState.IsRunning) {
             & $AdbExe -s $TargetAdb shell "am start -n $PackageName/.MainActivity" 2>&1 | Out-Null
-            Start-Sleep -Milliseconds 400
-            try { $procState = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName } catch { $procState = $null }
+            $pidAttempts = if ($env:RESTORE_PID_ATTEMPTS) { [int]$env:RESTORE_PID_ATTEMPTS } else { 3 }
+            $pidDelayMs = if ($env:RESTORE_PID_DELAY_MS) { [int]$env:RESTORE_PID_DELAY_MS } else { 500 }
+            for ($pa = 1; $pa -le $pidAttempts; $pa++) {
+                Start-Sleep -Milliseconds $pidDelayMs
+                try { $procState = Get-ApplicationProcessState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName } catch { $procState = $null }
+                if ($procState -and $procState.IsRunning) { break }
+            }
         }
 
         if (-not $procState -or -not $procState.IsRunning) {
@@ -987,10 +1007,12 @@ function Restore-TargetApplicationService {
             }
         }
 
-        # Verifica applicativa GET /api/status (status=ok && uinput_ready=true)
+        # Verifica applicativa GET /api/status (status=ok && uinput_ready=true) con tolleranza cold-start Android 9
+        $statusAttempts = if ($env:RESTORE_STATUS_ATTEMPTS) { [int]$env:RESTORE_STATUS_ATTEMPTS } else { 10 }
+        $statusDelayMs = if ($env:RESTORE_STATUS_DELAY_MS) { [int]$env:RESTORE_STATUS_DELAY_MS } else { 1000 }
         $statusHealthy = $false
         $lastStatusDetail = "nessuna risposta"
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
+        for ($attempt = 1; $attempt -le $statusAttempts; $attempt++) {
             $httpSucceeded = $false
             try {
                 $resp = Invoke-RestMethod -Uri "http://${TargetTv}:${ExpectedHttpPort}/api/status" -Method Get -TimeoutSec 2 -ErrorAction Stop
@@ -1021,7 +1043,7 @@ function Restore-TargetApplicationService {
                     }
                 }
             }
-            if ($attempt -lt 3) { Start-Sleep -Milliseconds 300 }
+            if ($attempt -lt $statusAttempts) { Start-Sleep -Milliseconds $statusDelayMs }
         }
 
         if (-not $statusHealthy) {
@@ -1136,9 +1158,10 @@ function Probe-DeviceFileState {
         [string]$RelativePath,
         [string]$Channel = "any" # "any", "auto", "run-as", "su", "root"
     )
+    $rootCheckDir = if ($RelativePath -like "databases/*") { "/data/data/$PackageName/databases" } else { "/data/data/$PackageName" }
     $probeCmdRunAs = "run-as $PackageName sh -c 'test -f $RelativePath && echo FILE_PROBE_RESULT:EXISTS || echo FILE_PROBE_RESULT:NOT_FOUND'"
     $probeCmdSu = "su -c 'test -f /data/data/$PackageName/$RelativePath && echo FILE_PROBE_RESULT:EXISTS || echo FILE_PROBE_RESULT:NOT_FOUND'"
-    $probeCmdRoot = "sh -c 'if [ ! -d /data/data/$PackageName/databases ] || [ ! -r /data/data/$PackageName/databases ]; then echo FILE_PROBE_RESULT:ACCESS_DENIED; exit 13; fi; test -f /data/data/$PackageName/$RelativePath && echo FILE_PROBE_RESULT:EXISTS || echo FILE_PROBE_RESULT:NOT_FOUND'"
+    $probeCmdRoot = "sh -c 'if [ ! -d $rootCheckDir ] || [ ! -r $rootCheckDir ]; then echo FILE_PROBE_RESULT:ACCESS_DENIED; exit 13; fi; test -f /data/data/$PackageName/$RelativePath && echo FILE_PROBE_RESULT:EXISTS || echo FILE_PROBE_RESULT:NOT_FOUND'"
 
     $runAsAttempted = $false
     $runAsExit = -1
@@ -1548,10 +1571,11 @@ function Unprotect-TlsData {
     }
 }
 
-function Resolve-TlsVaultDir {
+function Resolve-SecureVaultSubdir {
     param(
         [string]$SessionDir,
-        [string]$PackageName
+        [string]$PackageName,
+        [string]$SubdirName = "tls_identity"
     )
     $sessionName = Split-Path $SessionDir -Leaf
     $isWin = [System.Environment]::OSVersion.Platform -match "Win"
@@ -1569,21 +1593,21 @@ function Resolve-TlsVaultDir {
     $vaultDir = $null
     if ($isWin) {
         # REQUISITO SUPERVISORE P1: Su Windows, indipendentemente dal percorso di SessionDir (anche relativo o non rilevato),
-        # il vault delle credenziali TLS è SEMPRE e OBBLIGATORIAMENTE deviato in LOCALAPPDATA per garantire l'isolamento assoluto da cloud sync.
+        # il vault delle credenziali è SEMPRE e OBBLIGATORIAMENTE deviato in LOCALAPPDATA per garantire l'isolamento assoluto da cloud sync.
         if (-not $env:LOCALAPPDATA) {
-            throw "ERRORE FAIL-CLOSED: Environment variable LOCALAPPDATA non definita o non accessibile su Windows. Impossibile garantire isolamento sicuro del vault TLS."
+            throw "ERRORE FAIL-CLOSED: Environment variable LOCALAPPDATA non definita o non accessibile su Windows. Impossibile garantire isolamento sicuro del vault ($SubdirName)."
         }
-        $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "AkaiTvSecureVault\$PackageName\$sessionName\tls_identity"))
+        $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "AkaiTvSecureVault\$PackageName\$sessionName\$SubdirName"))
     } else {
         # Su Linux / macOS (standard XDG data dir locale)
         if ($isCloudSynced -or $env:AKAI_FORCE_LOCAL_VAULT -eq 'true' -or ($env:HOME -and (Test-Path (Join-Path $env:HOME ".local")))) {
             if ($env:HOME) {
-                $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $env:HOME ".local/share/akai_tv_secure_vault/$PackageName/$sessionName/tls_identity"))
+                $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $env:HOME ".local/share/akai_tv_secure_vault/$PackageName/$sessionName/$SubdirName"))
             } else {
-                $vaultDir = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) "akai_tv_secure_vault/$PackageName/$sessionName/tls_identity"))
+                $vaultDir = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) "akai_tv_secure_vault/$PackageName/$sessionName/$SubdirName"))
             }
         } else {
-            $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $fullSessionDir "tls_identity"))
+            $vaultDir = [System.IO.Path]::GetFullPath((Join-Path $fullSessionDir $SubdirName))
         }
     }
 
@@ -1624,6 +1648,30 @@ function Resolve-TlsVaultDir {
     }
 }
 
+function Resolve-TlsVaultDir {
+    param(
+        [string]$SessionDir,
+        [string]$PackageName
+    )
+    return Resolve-SecureVaultSubdir -SessionDir $SessionDir -PackageName $PackageName -SubdirName "tls_identity"
+}
+
+function Clear-EphemeralPlaintextDir {
+    param([string]$EphemeralDir)
+    if ([string]::IsNullOrWhiteSpace($EphemeralDir) -or -not (Test-Path $EphemeralDir)) { return }
+    try {
+        foreach ($ef in (Get-ChildItem -Path $EphemeralDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+            try {
+                if ($ef.Length -gt 0) {
+                    [System.IO.File]::WriteAllBytes($ef.FullName, (New-Object byte[] $ef.Length))
+                }
+            } catch {}
+        }
+    } finally {
+        Remove-Item $EphemeralDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Backup-DeviceTlsIdentity {
     param(
         [string]$AdbExe,
@@ -1634,93 +1682,128 @@ function Backup-DeviceTlsIdentity {
     $sessionTlsDir = Join-Path $SessionDir "tls_identity"
     New-Item -ItemType Directory -Force -Path $sessionTlsDir | Out-Null
 
-    $probeKs = $null
+    $filesToBackup = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
+    $ephemeralDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_tls_rx_$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $ephemeralDir | Out-Null
+
+    $manifestFiles = @{}
     try {
-        $probeKs = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/server_keystore.p12" -Channel "any"
-    } catch {
-        # Se i canali unprivileged (run-as/su) sono negati, prova probe via root escalation
+        $probeKs = $null
+        $unprivProbeSucceeded = $false
         try {
+            $probeKs = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/server_keystore.p12" -Channel "any"
+            $unprivProbeSucceeded = $true
+        } catch {
+            $unprivProbeSucceeded = $false
+        }
+
+        if ($unprivProbeSucceeded -and $probeKs -eq "NOT_FOUND") {
+            Write-Host "      Snapshot identita' TLS: ASSENTE sul device (release legacy HTTP-only v5). Nessun backup TLS richiesto." -ForegroundColor Green
+            $manifest = @{
+                HasTls = $false
+                Reason = "LEGACY_NO_TLS"
+            }
+            [System.IO.File]::WriteAllText((Join-Path $sessionTlsDir "tls_manifest.json"), ($manifest | ConvertTo-Json -Depth 5), [System.Text.Encoding]::UTF8)
+            return $manifest
+        }
+
+        if ($unprivProbeSucceeded -and $probeKs -eq "EXISTS") {
+            $needElevation = @()
+            foreach ($f in $filesToBackup) {
+                $rxTempPath = Join-Path $ephemeralDir $f
+                $minB = if ($f -eq "server_keystore.p12") { 512 } else { 1 }
+                $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/$f" -LocalFilePath $rxTempPath -MinBytes $minB
+                if (-not ($rx.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB)) {
+                    $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/$f'" -LocalFilePath $rxTempPath -MinBytes $minB
+                }
+                if (-not ($rx.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB)) {
+                    $needElevation += $f
+                }
+            }
+            if ($needElevation.Count -gt 0) {
+                $script:tlsBatchErr = $null
+                try {
+                    Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                        foreach ($f in $needElevation) {
+                            $rxTempPath = Join-Path $ephemeralDir $f
+                            $minB = if ($f -eq "server_keystore.p12") { 512 } else { 1 }
+                            $rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$f" -LocalFilePath $rxTempPath -MinBytes $minB
+                            if (-not ($rxElev.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB)) {
+                                $script:tlsBatchErr = "ERRORE FAIL-CLOSED (P1 Gate): Estrazione asset TLS obbligatorio ($f) fallita o dimensione insufficiente. Tutti i 5 file sono obbligatori su installazione TLS."
+                                break
+                            }
+                        }
+                    }
+                } catch {
+                    if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { throw }
+                    $script:tlsBatchErr = "ERRORE FAIL-CLOSED (P1 Gate): Estrazione asset TLS obbligatorio ($($needElevation[0])) fallita o dimensione insufficiente ($($_.Exception.Message)). Tutti i 5 file sono obbligatori su installazione TLS."
+                }
+                if ($script:tlsBatchErr) {
+                    $errToThrow = $script:tlsBatchErr
+                    $script:tlsBatchErr = $null
+                    throw $errToThrow
+                }
+            }
+        } elseif (-not $unprivProbeSucceeded) {
+            # Unprivileged channels negati: singola sessione root adbd (1 root + 1 unroot) per probe + estrazione di tutti i 5 file
             $script:elevProbeKs = $null
+            $script:tlsElevExtractErr = $null
             Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
                 $script:elevProbeKs = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/server_keystore.p12" -Channel "root"
+                if ($script:elevProbeKs -eq "EXISTS") {
+                    foreach ($f in $filesToBackup) {
+                        $rxTempPath = Join-Path $ephemeralDir $f
+                        $minB = if ($f -eq "server_keystore.p12") { 512 } else { 1 }
+                        $rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$f" -LocalFilePath $rxTempPath -MinBytes $minB
+                        if (-not ($rxElev.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB)) {
+                            $script:tlsElevExtractErr = "ERRORE FAIL-CLOSED (P1 Gate): Estrazione asset TLS obbligatorio ($f) fallita o dimensione insufficiente. Tutti i 5 file sono obbligatori su installazione TLS."
+                            break
+                        }
+                    }
+                }
             }
             if ($script:elevProbeKs) {
                 $probeKs = $script:elevProbeKs
                 $script:elevProbeKs = $null
             }
-        } catch {
-            throw $_
+            if ($probeKs -eq "NOT_FOUND") {
+                $script:tlsElevExtractErr = $null
+                Write-Host "      Snapshot identita' TLS: ASSENTE sul device (release legacy HTTP-only v5). Nessun backup TLS richiesto." -ForegroundColor Green
+                $manifest = @{
+                    HasTls = $false
+                    Reason = "LEGACY_NO_TLS"
+                }
+                [System.IO.File]::WriteAllText((Join-Path $sessionTlsDir "tls_manifest.json"), ($manifest | ConvertTo-Json -Depth 5), [System.Text.Encoding]::UTF8)
+                return $manifest
+            }
+            if ($script:tlsElevExtractErr) {
+                $errToThrow = $script:tlsElevExtractErr
+                $script:tlsElevExtractErr = $null
+                throw $errToThrow
+            }
         }
-    }
 
-    if ($probeKs -eq "NOT_FOUND") {
-        Write-Host "      Snapshot identita' TLS: ASSENTE sul device (release legacy HTTP-only v5). Nessun backup TLS richiesto." -ForegroundColor Green
-        $manifest = @{
-            HasTls = $false
-            Reason = "LEGACY_NO_TLS"
+        if ($probeKs -ne "EXISTS") {
+            Write-Host "      Probe server_keystore.p12: stato $probeKs (permessi negati o storage non accessibile)." -ForegroundColor Yellow
+            throw "ERRORE FAIL-CLOSED: Impossibile accertare con sicurezza lo stato del keystore TLS sul dispositivo."
         }
-        [System.IO.File]::WriteAllText((Join-Path $sessionTlsDir "tls_manifest.json"), ($manifest | ConvertTo-Json -Depth 5), [System.Text.Encoding]::UTF8)
-        return $manifest
-    } elseif ($probeKs -ne "EXISTS") {
-        Write-Host "      Probe server_keystore.p12: stato $probeKs (permessi negati o storage non accessibile)." -ForegroundColor Yellow
-        throw "ERRORE FAIL-CLOSED: Impossibile accertare con sicurezza lo stato del keystore TLS sul dispositivo."
-    }
 
-    # Risoluzione vault protetto non sincronizzato
-    $vaultInfo = Resolve-TlsVaultDir -SessionDir $SessionDir -PackageName $PackageName
-    $vaultDir = $vaultInfo.VaultDir
-    $isCloudSynced = $vaultInfo.IsCloudSynced
-
-    # Creazione cartella temporanea locale effimera isolata per ricezione
-    $ephemeralDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_tls_rx_$([Guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -Force -Path $ephemeralDir | Out-Null
-
-    $filesToBackup = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
-    $manifestFiles = @{}
-
-    try {
+        # Verifica completezza 5/5 prima di aprire/scrivere il vault definitivo
         foreach ($f in $filesToBackup) {
             $rxTempPath = Join-Path $ephemeralDir $f
-            $extracted = $false
-
-            # Tentativo 1: run-as
             $minB = if ($f -eq "server_keystore.p12") { 512 } else { 1 }
-            $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/$f" -LocalFilePath $rxTempPath -MinBytes $minB
-            if ($rx.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB) {
-                $extracted = $true
-            }
-
-            # Tentativo 2: su
-            if (-not $extracted) {
-                $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/$f'" -LocalFilePath $rxTempPath -MinBytes $minB
-                if ($rx.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB) {
-                    $extracted = $true
-                }
-            }
-
-            # Tentativo 3: root adbd
-            if (-not $extracted) {
-                $script:elevRx = $false
-                try {
-                    Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
-                        $rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$f" -LocalFilePath $rxTempPath -MinBytes $minB
-                        if ($rxElev.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB) {
-                            $script:elevRx = $true
-                        }
-                    }
-                } catch {}
-                if ($script:elevRx) {
-                    $extracted = $true
-                    $script:elevRx = $false
-                }
-            }
-
-            # REQUISITO P1-2: Su versione con TLS, se anche un solo file manca o non e' leggibile -> FAIL-CLOSED!
-            if (-not $extracted -or -not (Test-Path $rxTempPath) -or (Get-Item $rxTempPath).Length -lt $minB) {
+            if (-not (Test-Path $rxTempPath) -or (Get-Item $rxTempPath).Length -lt $minB) {
                 throw "ERRORE FAIL-CLOSED (P1 Gate): Estrazione asset TLS obbligatorio ($f) fallita o dimensione insufficiente. Tutti i 5 file sono obbligatori su installazione TLS."
             }
+        }
 
-            # Lettura byte in chiaro, computo hash e dimensioni
+        # Risoluzione vault protetto non sincronizzato
+        $vaultInfo = Resolve-TlsVaultDir -SessionDir $SessionDir -PackageName $PackageName
+        $vaultDir = $vaultInfo.VaultDir
+        $isCloudSynced = $vaultInfo.IsCloudSynced
+
+        foreach ($f in $filesToBackup) {
+            $rxTempPath = Join-Path $ephemeralDir $f
             $plainBytes = [System.IO.File]::ReadAllBytes($rxTempPath)
             $plainHash = Get-Sha256Hex $rxTempPath
             $plainLen = $plainBytes.Length
@@ -1754,7 +1837,7 @@ function Backup-DeviceTlsIdentity {
             }
         }
     } finally {
-        Remove-Item $ephemeralDir -Recurse -Force -ErrorAction SilentlyContinue
+        Clear-EphemeralPlaintextDir -EphemeralDir $ephemeralDir
     }
 
     # Creazione del manifest (zero segreti in chiaro)
@@ -1824,8 +1907,10 @@ function Restore-DeviceTlsIdentity {
 
     $filesToRestore = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
     $manifestFilesProp = $manifest.Files
+    $decryptedPayloads = @{}
 
-    # 1. Ripristino di ciascuno dei 5 file crittografici
+    # 1. Decifratura in RAM, parita' hash pre-invio e invio unprivileged (run-as / su) o batch root
+    $needElevSend = @()
     foreach ($fName in $filesToRestore) {
         $fileMeta = $manifestFilesProp.$fName
         if (-not $fileMeta) {
@@ -1835,7 +1920,6 @@ function Restore-DeviceTlsIdentity {
         $encPath = Join-Path $vaultDir "$fName.enc"
         $decryptedBytes = $null
         if (-not (Test-Path $encPath)) {
-            # Supporto per file legacy non cifrati se presenti
             $legacyPlain = Join-Path $vaultDir $fName
             if (Test-Path $legacyPlain) {
                 $decryptedBytes = [System.IO.File]::ReadAllBytes($legacyPlain)
@@ -1854,39 +1938,40 @@ function Restore-DeviceTlsIdentity {
         if ($preSendHash -ne $fileMeta.Sha256) {
             throw "ERRORE FAIL-CLOSED: Corruzione rilevata durante la decifratura di $fName! Hash non corrisponde al manifesto pre-invio."
         }
+        $decryptedPayloads[$fName] = $decryptedBytes
 
         $restored = $false
-
-        # Tentativo 1: run-as (streaming diretto da memoria con zero plaintext su disco PC)
         $cmd = "run-as $PackageName sh -c 'mkdir -p files; cat > files/$fName; chmod 600 files/$fName'"
         $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $decryptedBytes -RemoteCommand $cmd
         if ($res.Success) { $restored = $true }
 
-        # Tentativo 2: su
         if (-not $restored) {
             $cmd = "su -c 'mkdir -p /data/data/$PackageName/files; cat > /data/data/$PackageName/files/$fName; chown $ChownTarget /data/data/$PackageName/files/$fName; chmod 600 /data/data/$PackageName/files/$fName'"
             $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $decryptedBytes -RemoteCommand $cmd
             if ($res.Success) { $restored = $true }
         }
 
-        # Tentativo 3: root adbd
         if (-not $restored) {
-            $script:elevRest = $false
-            try {
-                Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
-                    $cmd = "sh -c 'mkdir -p /data/data/$PackageName/files; cat > /data/data/$PackageName/files/$fName; chown $ChownTarget /data/data/$PackageName/files/$fName; chmod 600 /data/data/$PackageName/files/$fName'"
-                    $sRes = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $decryptedBytes -RemoteCommand $cmd
-                    if ($sRes.Success) { $script:elevRest = $true }
+            $needElevSend += $fName
+        }
+    }
+
+    if ($needElevSend.Count -gt 0) {
+        $script:tlsSendFailedFile = $null
+        Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+            foreach ($fName in $needElevSend) {
+                $cmd = "sh -c 'mkdir -p /data/data/$PackageName/files; cat > /data/data/$PackageName/files/$fName; chown $ChownTarget /data/data/$PackageName/files/$fName; chmod 600 /data/data/$PackageName/files/$fName'"
+                $sRes = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $decryptedPayloads[$fName] -RemoteCommand $cmd
+                if (-not $sRes.Success) {
+                    $script:tlsSendFailedFile = $fName
+                    break
                 }
-            } catch {}
-            if ($script:elevRest) {
-                $restored = $true
-                $script:elevRest = $false
             }
         }
-
-        if (-not $restored) {
-            throw "ERRORE FAIL-CLOSED: Invio file TLS ($fName) fallito sul dispositivo."
+        if ($script:tlsSendFailedFile) {
+            $badFile = $script:tlsSendFailedFile
+            $script:tlsSendFailedFile = $null
+            throw "ERRORE FAIL-CLOSED: Invio file TLS ($badFile) fallito sul dispositivo."
         }
     }
 
@@ -1895,8 +1980,8 @@ function Restore-DeviceTlsIdentity {
     New-Item -ItemType Directory -Force -Path $verifyDir | Out-Null
 
     try {
+        $needElevRead = @()
         foreach ($fName in $filesToRestore) {
-            $expectedHash = $manifestFilesProp.$fName.Sha256
             $verifyFilePath = Join-Path $verifyDir $fName
             $minB = if ($fName -eq "server_keystore.p12") { 512 } else { 1 }
 
@@ -1905,18 +1990,24 @@ function Restore-DeviceTlsIdentity {
                 $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/$fName'" -LocalFilePath $verifyFilePath -MinBytes $minB
             }
             if (-not $rx.Success) {
-                $script:rxElev = $null
-                try {
-                    Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
-                        $script:rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$fName" -LocalFilePath $verifyFilePath -MinBytes $minB
-                    }
-                } catch {}
-                if ($script:rxElev -and $script:rxElev.Success) {
-                    $rx = $script:rxElev
-                    $script:rxElev = $null
+                $needElevRead += $fName
+            }
+        }
+
+        if ($needElevRead.Count -gt 0) {
+            Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                foreach ($fName in $needElevRead) {
+                    $verifyFilePath = Join-Path $verifyDir $fName
+                    $minB = if ($fName -eq "server_keystore.p12") { 512 } else { 1 }
+                    [void](Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$fName" -LocalFilePath $verifyFilePath -MinBytes $minB)
                 }
             }
+        }
 
+        foreach ($fName in $filesToRestore) {
+            $expectedHash = $manifestFilesProp.$fName.Sha256
+            $verifyFilePath = Join-Path $verifyDir $fName
+            $minB = if ($fName -eq "server_keystore.p12") { 512 } else { 1 }
             if (-not (Test-Path $verifyFilePath) -or (Get-Item $verifyFilePath).Length -lt $minB) {
                 throw "ERRORE FAIL-CLOSED: Impossibile rileggere $fName ripristinato sul dispositivo per verifica integrita'."
             }
@@ -1927,12 +2018,453 @@ function Restore-DeviceTlsIdentity {
             }
         }
     } finally {
-        Remove-Item $verifyDir -Recurse -Force -ErrorAction SilentlyContinue
+        Clear-EphemeralPlaintextDir -EphemeralDir $verifyDir
     }
 
     $ksHash = $manifestFilesProp."server_keystore.p12".Sha256
     Write-Host "      Parita' hash SHA-256 verificata con successo per TUTTI i 5 file TLS post-rollback (keystore SHA-256: $ksHash)." -ForegroundColor Green
     return @{ Restored = $true; KeystoreSha256 = $ksHash; All5FilesVerified = $true }
+}
+
+function Backup-DevicePairingSessions {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$SessionDir,
+        [switch]$RequirePairing = $false,
+        [string[]]$OptionalPrefFiles = @("akai_ai_security_prefs.xml", "akai_ai_secure_prefs.xml", "jarvis_free_voice_v1.xml", "jarvis_ota_result.xml")
+    )
+    $sessionPairingDir = Join-Path $SessionDir "pairing_sessions"
+    New-Item -ItemType Directory -Force -Path $sessionPairingDir | Out-Null
+
+    $primaryPref = "akai_remote_sessions.xml"
+    $ephemeralDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_pairing_rx_$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $ephemeralDir | Out-Null
+
+    $manifestFiles = @{}
+    $extractedNames = @()
+    try {
+        $probePrimary = $null
+        $unprivProbeOk = $false
+        try {
+            $probePrimary = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "shared_prefs/$primaryPref" -Channel "any"
+            $unprivProbeOk = $true
+        } catch {
+            $unprivProbeOk = $false
+        }
+
+        if ($unprivProbeOk -and $probePrimary -eq "NOT_FOUND") {
+            if ($RequirePairing) {
+                throw "ERRORE FAIL-CLOSED (Pairing Gate): Sessioni smartphone attive o richieste ma shared_prefs/$primaryPref assente sul dispositivo."
+            }
+            Write-Host "      Snapshot pairing/sessions: shared_prefs/$primaryPref assente (nessuna sessione attiva)." -ForegroundColor Cyan
+            $manifest = @{
+                HasPairing = $false
+                Reason = "PAIRING_NOT_FOUND"
+            }
+            [System.IO.File]::WriteAllText((Join-Path $sessionPairingDir "pairing_manifest.json"), ($manifest | ConvertTo-Json -Depth 5), [System.Text.Encoding]::UTF8)
+            return $manifest
+        }
+
+        if ($unprivProbeOk -and $probePrimary -eq "EXISTS") {
+            $presentFiles = @($primaryPref)
+            foreach ($opt in $OptionalPrefFiles) {
+                try {
+                    $stOpt = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "shared_prefs/$opt" -Channel "any"
+                    if ($stOpt -eq "EXISTS") { $presentFiles += $opt }
+                } catch {}
+            }
+
+            $needElev = @()
+            foreach ($pf in $presentFiles) {
+                $rxTemp = Join-Path $ephemeralDir $pf
+                $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat shared_prefs/$pf" -LocalFilePath $rxTemp -MinBytes 16
+                if (-not ($rx.Success -and (Test-Path $rxTemp) -and (Get-Item $rxTemp).Length -ge 16)) {
+                    $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/shared_prefs/$pf'" -LocalFilePath $rxTemp -MinBytes 16
+                }
+                if ($rx.Success -and (Test-Path $rxTemp) -and (Get-Item $rxTemp).Length -ge 16) {
+                    $extractedNames += $pf
+                } else {
+                    $needElev += $pf
+                }
+            }
+            if ($needElev.Count -gt 0) {
+                $script:pairBatchErr = $null
+                try {
+                    Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                        foreach ($pf in $needElev) {
+                            $rxTemp = Join-Path $ephemeralDir $pf
+                            $rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/shared_prefs/$pf" -LocalFilePath $rxTemp -MinBytes 16
+                            if (-not ($rxElev.Success -and (Test-Path $rxTemp) -and (Get-Item $rxTemp).Length -ge 16)) {
+                                $script:pairBatchErr = "ERRORE FAIL-CLOSED (Pairing Gate): Estrazione file shared_prefs/$pf fallita o incompleta."
+                                break
+                            }
+                        }
+                    }
+                } catch {
+                    if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { throw }
+                    $script:pairBatchErr = "ERRORE FAIL-CLOSED (Pairing Gate): Estrazione file shared_prefs/$($needElev[0]) fallita ($($_.Exception.Message))."
+                }
+                if ($script:pairBatchErr) {
+                    $e = $script:pairBatchErr
+                    $script:pairBatchErr = $null
+                    throw $e
+                }
+                $extractedNames += $needElev
+            }
+        } elseif (-not $unprivProbeOk) {
+            # Unprivileged channels negati: singola sessione root adbd per probe + estrazione
+            $script:elevProbePair = $null
+            $script:elevPairExtracted = @()
+            $script:elevPairErr = $null
+            Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                $script:elevProbePair = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "shared_prefs/$primaryPref" -Channel "root"
+                if ($script:elevProbePair -eq "EXISTS") {
+                    $rxPrimary = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/shared_prefs/$primaryPref" -LocalFilePath (Join-Path $ephemeralDir $primaryPref) -MinBytes 16
+                    if (-not $rxPrimary.Success) {
+                        $script:elevPairErr = "ERRORE FAIL-CLOSED (Pairing Gate): Estrazione file shared_prefs/$primaryPref fallita sotto root."
+                    } else {
+                        $script:elevPairExtracted += $primaryPref
+                        foreach ($opt in $OptionalPrefFiles) {
+                            $optState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "shared_prefs/$opt" -Channel "root"
+                            if ($optState -eq "EXISTS") {
+                                $rxOpt = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/shared_prefs/$opt" -LocalFilePath (Join-Path $ephemeralDir $opt) -MinBytes 16
+                                if (-not $rxOpt.Success) {
+                                    $script:elevPairErr = "ERRORE FAIL-CLOSED (Pairing Gate): Estrazione file shared_prefs/$opt (presente su device) fallita sotto root."
+                                    break
+                                }
+                                $script:elevPairExtracted += $opt
+                            }
+                        }
+                    }
+                }
+            }
+            if ($script:elevProbePair) {
+                $probePrimary = $script:elevProbePair
+                $script:elevProbePair = $null
+            }
+            if ($probePrimary -eq "NOT_FOUND") {
+                $script:elevPairErr = $null
+                $script:elevPairExtracted = @()
+                if ($RequirePairing) {
+                    throw "ERRORE FAIL-CLOSED (Pairing Gate): Sessioni smartphone attive o richieste ma shared_prefs/$primaryPref assente sul dispositivo."
+                }
+                Write-Host "      Snapshot pairing/sessions: shared_prefs/$primaryPref assente (nessuna sessione attiva)." -ForegroundColor Cyan
+                $manifest = @{
+                    HasPairing = $false
+                    Reason = "PAIRING_NOT_FOUND"
+                }
+                [System.IO.File]::WriteAllText((Join-Path $sessionPairingDir "pairing_manifest.json"), ($manifest | ConvertTo-Json -Depth 5), [System.Text.Encoding]::UTF8)
+                return $manifest
+            }
+            if ($script:elevPairErr) {
+                $e = $script:elevPairErr
+                $script:elevPairErr = $null
+                throw $e
+            }
+            $extractedNames = @($script:elevPairExtracted)
+            $script:elevPairExtracted = @()
+        }
+
+        if ($probePrimary -ne "EXISTS" -or ($extractedNames -notcontains $primaryPref)) {
+            throw "ERRORE FAIL-CLOSED (Pairing Gate): Impossibile estrarre shared_prefs/$primaryPref (stato=$probePrimary)."
+        }
+
+        # Validazione XML rigorosa in memoria prima della cifratura
+        foreach ($pf in $extractedNames) {
+            $rxTemp = Join-Path $ephemeralDir $pf
+            if (-not (Test-Path $rxTemp) -or (Get-Item $rxTemp).Length -lt 16) {
+                throw "ERRORE FAIL-CLOSED (Pairing Gate): File $pf assente o troncato."
+            }
+            $xmlText = [System.IO.File]::ReadAllText($rxTemp, [System.Text.Encoding]::UTF8)
+            if ($xmlText -notmatch "<map[\s/>]") {
+                throw "ERRORE FAIL-CLOSED (Pairing Gate): Contenuto XML non valido o corrotto per $pf (elemento <map> assente)."
+            }
+            try {
+                [xml]$parsed = $xmlText
+                if (-not $parsed -or -not $parsed.map) {
+                    throw "struttura XML priva di nodo <map>"
+                }
+            } catch {
+                throw "ERRORE FAIL-CLOSED (Pairing Gate): Parsing XML fallito per $pf ($($_.Exception.Message))."
+            }
+        }
+
+        $vaultInfo = Resolve-SecureVaultSubdir -SessionDir $SessionDir -PackageName $PackageName -SubdirName "pairing_sessions"
+        $vaultDir = $vaultInfo.VaultDir
+        $isCloudSynced = $vaultInfo.IsCloudSynced
+
+        foreach ($pf in $extractedNames) {
+            $rxTemp = Join-Path $ephemeralDir $pf
+            $plainBytes = [System.IO.File]::ReadAllBytes($rxTemp)
+            $plainHash = Get-Sha256Hex $rxTemp
+            $plainLen = $plainBytes.Length
+
+            $protectRes = Protect-TlsData -PlainBytes $plainBytes -VaultDir $vaultDir
+            $encDestPath = Join-Path $vaultDir "$pf.enc"
+            [System.IO.File]::WriteAllBytes($encDestPath, $protectRes.CipherBytes)
+
+            $zeroBuf = New-Object byte[] $plainLen
+            [System.IO.File]::WriteAllBytes($rxTemp, $zeroBuf)
+            Remove-Item $rxTemp -Force -ErrorAction SilentlyContinue
+
+            $unprotectTest = Unprotect-TlsData -CipherBytes $protectRes.CipherBytes -Mechanism $protectRes.Mechanism -VaultDir $vaultDir
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $testDecHash = -join ($sha.ComputeHash($unprotectTest) | ForEach-Object { "{0:x2}" -f $_ })
+            if ($testDecHash -ne $plainHash) {
+                throw "ERRORE FAIL-CLOSED (Pairing Gate): Verifica roundtrip decifratura fallita per $pf."
+            }
+
+            $cipherHash = -join ($sha.ComputeHash($protectRes.CipherBytes) | ForEach-Object { "{0:x2}" -f $_ })
+            $manifestFiles[$pf] = @{
+                Sha256 = $plainHash
+                SizeBytes = $plainLen
+                Encrypted = $true
+                CipherSha256 = $cipherHash
+                Mechanism = $protectRes.Mechanism
+                Required = ($pf -eq $primaryPref)
+            }
+        }
+    } finally {
+        Clear-EphemeralPlaintextDir -EphemeralDir $ephemeralDir
+    }
+
+    $manifest = @{
+        HasPairing = $true
+        SessionDir = $SessionDir
+        VaultDir = $vaultDir
+        IsCloudSynced = $isCloudSynced
+        PrimaryFile = $primaryPref
+        Files = $manifestFiles
+        PrimarySha256 = $manifestFiles[$primaryPref].Sha256
+    }
+    [System.IO.File]::WriteAllText((Join-Path $sessionPairingDir "pairing_manifest.json"), ($manifest | ConvertTo-Json -Depth 5), [System.Text.Encoding]::UTF8)
+
+    if ($vaultDir -ne $sessionPairingDir) {
+        $pointer = @{
+            VaultDir = $vaultDir
+            CreatedAt = (Get-Date -Format "o")
+        }
+        [System.IO.File]::WriteAllText((Join-Path $sessionPairingDir "vault_pointer.json"), ($pointer | ConvertTo-Json), [System.Text.Encoding]::UTF8)
+    }
+
+    Write-Host "      Snapshot cifrato preferenze pairing/AI salvato ($($manifestFiles.Count) file in vault $vaultDir), ZERO XML o token in chiaro su disco." -ForegroundColor Green
+    return $manifest
+}
+
+function Restore-DevicePairingSessions {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$SessionDir,
+        [string]$ChownTarget
+    )
+    $sessionPairingDir = Join-Path $SessionDir "pairing_sessions"
+    $manifestPath = Join-Path $sessionPairingDir "pairing_manifest.json"
+    if (-not (Test-Path $manifestPath)) {
+        Write-Host "      Ripristino pairing: nessun manifesto pairing nel backup. Salto ripristino pairing." -ForegroundColor Cyan
+        return @{ Restored = $false; Reason = "NO_PAIRING_BACKUP" }
+    }
+
+    $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.HasPairing -ne $true) {
+        Write-Host "      Ripristino pairing: sessione senza pairing salvato (HasPairing=false). Salto ripristino pairing." -ForegroundColor Cyan
+        return @{ Restored = $false; Reason = "NO_PAIRING_BACKUP" }
+    }
+
+    $vaultDir = $manifest.VaultDir
+    $pointerPath = Join-Path $sessionPairingDir "vault_pointer.json"
+    if (Test-Path $pointerPath) {
+        try {
+            $ptr = Get-Content $pointerPath -Raw | ConvertFrom-Json
+            if ($ptr.VaultDir -and (Test-Path $ptr.VaultDir)) { $vaultDir = $ptr.VaultDir }
+        } catch {}
+    }
+    if (-not $vaultDir -or -not (Test-Path $vaultDir)) {
+        $vaultDir = $sessionPairingDir
+    }
+
+    $fileProps = @($manifest.Files.psobject.properties)
+    if ($fileProps.Count -eq 0) {
+        throw "ERRORE FAIL-CLOSED: Manifesto pairing privo di file da ripristinare."
+    }
+
+    $payloads = @{}
+    $expectedHashes = @{}
+    $needElevSend = @()
+
+    foreach ($prop in $fileProps) {
+        $fName = $prop.Name
+        $fMeta = $prop.Value
+        $encPath = Join-Path $vaultDir "$fName.enc"
+        if (-not (Test-Path $encPath)) {
+            throw "ERRORE FAIL-CLOSED: File cifrato pairing $fName.enc assente nel vault ($vaultDir)."
+        }
+        $cipherBytes = [System.IO.File]::ReadAllBytes($encPath)
+        $plainBytes = Unprotect-TlsData -CipherBytes $cipherBytes -Mechanism $fMeta.Mechanism -VaultDir $vaultDir
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $preHash = -join ($sha.ComputeHash($plainBytes) | ForEach-Object { "{0:x2}" -f $_ })
+        if ($preHash -ne $fMeta.Sha256) {
+            throw "ERRORE FAIL-CLOSED: Corruzione rilevata durante decifratura pairing ($fName)! Hash mismatch pre-invio."
+        }
+        $payloads[$fName] = $plainBytes
+        $expectedHashes[$fName] = $fMeta.Sha256
+
+        $restored = $false
+        $cmd = "run-as $PackageName sh -c 'mkdir -p shared_prefs; cat > shared_prefs/$fName; chmod 660 shared_prefs/$fName'"
+        $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $plainBytes -RemoteCommand $cmd
+        if ($res.Success) { $restored = $true }
+
+        if (-not $restored) {
+            $cmd = "su -c 'mkdir -p /data/data/$PackageName/shared_prefs; cat > /data/data/$PackageName/shared_prefs/$fName; chown $ChownTarget /data/data/$PackageName/shared_prefs/$fName; chmod 660 /data/data/$PackageName/shared_prefs/$fName'"
+            $res = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $plainBytes -RemoteCommand $cmd
+            if ($res.Success) { $restored = $true }
+        }
+        if (-not $restored) {
+            $needElevSend += $fName
+        }
+    }
+
+    if ($needElevSend.Count -gt 0) {
+        $script:pairSendFailed = $null
+        Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+            foreach ($fName in $needElevSend) {
+                $cmd = "sh -c 'mkdir -p /data/data/$PackageName/shared_prefs; cat > /data/data/$PackageName/shared_prefs/$fName; chown $ChownTarget /data/data/$PackageName/shared_prefs/$fName; chmod 660 /data/data/$PackageName/shared_prefs/$fName'"
+                $sRes = Send-FileViaAdbExecIn -AdbExe $AdbExe -TargetAdb $TargetAdb -RawBytes $payloads[$fName] -RemoteCommand $cmd
+                if (-not $sRes.Success) {
+                    $script:pairSendFailed = $fName
+                    break
+                }
+            }
+        }
+        if ($script:pairSendFailed) {
+            $bf = $script:pairSendFailed
+            $script:pairSendFailed = $null
+            throw "ERRORE FAIL-CLOSED: Invio file pairing ($bf) fallito sul dispositivo."
+        }
+    }
+
+    $verifyDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_verify_pairing_$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $verifyDir | Out-Null
+    try {
+        $needElevRead = @()
+        foreach ($prop in $fileProps) {
+            $fName = $prop.Name
+            $verifyPath = Join-Path $verifyDir $fName
+            $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat shared_prefs/$fName" -LocalFilePath $verifyPath -MinBytes 16
+            if (-not $rx.Success) {
+                $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/shared_prefs/$fName'" -LocalFilePath $verifyPath -MinBytes 16
+            }
+            if (-not $rx.Success) {
+                $needElevRead += $fName
+            }
+        }
+
+        if ($needElevRead.Count -gt 0) {
+            Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
+                foreach ($fName in $needElevRead) {
+                    $verifyPath = Join-Path $verifyDir $fName
+                    [void](Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/shared_prefs/$fName" -LocalFilePath $verifyPath -MinBytes 16)
+                }
+            }
+        }
+
+        foreach ($prop in $fileProps) {
+            $fName = $prop.Name
+            $verifyPath = Join-Path $verifyDir $fName
+            if (-not (Test-Path $verifyPath) -or (Get-Item $verifyPath).Length -lt 16) {
+                throw "ERRORE FAIL-CLOSED: Impossibile rileggere file pairing ($fName) post-ripristino."
+            }
+            $actualHash = Get-Sha256Hex $verifyPath
+            if ($actualHash -ne $expectedHashes[$fName]) {
+                throw "ERRORE FAIL-CLOSED: Mismatch SHA-256 post-ripristino per $fName! Atteso: $($expectedHashes[$fName]), Attuale: $actualHash"
+            }
+        }
+    } finally {
+        Clear-EphemeralPlaintextDir -EphemeralDir $verifyDir
+    }
+
+    $primHash = $manifest.PrimarySha256
+    Write-Host "      Parita' SHA-256 verificata per tutti i $($fileProps.Count) file pairing/AI post-rollback." -ForegroundColor Green
+    return @{ Restored = $true; PrimarySha256 = $primHash; FileCount = $fileProps.Count }
+}
+
+function Assert-BackupSessionNoPlaintextSecrets {
+    param(
+        [string]$SessionDir,
+        [string[]]$VaultDirs = @()
+    )
+    if ([string]::IsNullOrWhiteSpace($SessionDir) -or -not (Test-Path $SessionDir)) {
+        throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: SessionDir non valido o inesistente: '$SessionDir'."
+    }
+    $isWin = [System.Environment]::OSVersion.Platform -match "Win"
+    $fullSession = [System.IO.Path]::GetFullPath($SessionDir)
+
+    $forbiddenPlainNames = @(
+        "server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der",
+        "akai_remote_sessions.xml", "akai_ai_security_prefs.xml", "akai_ai_secure_prefs.xml",
+        "jarvis_free_voice_v1.xml", "jarvis_ota_result.xml", ".vault_master.key"
+    )
+    $resolvedVaults = @()
+    $scanDirs = @($fullSession)
+
+    foreach ($vd in $VaultDirs) {
+        if (-not [string]::IsNullOrWhiteSpace($vd) -and (Test-Path $vd)) {
+            $fullVd = [System.IO.Path]::GetFullPath($vd)
+            $resolvedVaults += $fullVd
+            if ($scanDirs -notcontains $fullVd) { $scanDirs += $fullVd }
+
+            if ($fullVd -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") {
+                throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: Vault individuato in percorso cloud-sync ($fullVd)."
+            }
+            if ($isWin) {
+                if (-not $env:LOCALAPPDATA -or -not $fullVd.StartsWith([System.IO.Path]::GetFullPath($env:LOCALAPPDATA), [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: Vault Windows ($fullVd) al di fuori di LOCALAPPDATA."
+                }
+                $dirInfo = New-Object System.IO.DirectoryInfo($fullVd)
+                $dirSec = $dirInfo.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+                if ($dirSec.AreAccessRulesProtected -ne $true) {
+                    throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: ACL del vault ($fullVd) non protette (ereditarieta' attiva)."
+                }
+            }
+        }
+    }
+
+    foreach ($dirToScan in $scanDirs) {
+        $items = Get-ChildItem -Path $dirToScan -Recurse -Force -File -ErrorAction SilentlyContinue
+        foreach ($item in $items) {
+            $n = $item.Name
+            if ($forbiddenPlainNames -contains $n) {
+                if ($n -eq ".vault_master.key") {
+                    if ($isWin -or ($resolvedVaults -notcontains [System.IO.Path]::GetFullPath($item.Directory.FullName))) {
+                        throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: Master key rilevata fuori configurazione sicura ($($item.FullName))."
+                    }
+                } else {
+                    throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: File sensibile in chiaro rilevato su disco: $($item.FullName)"
+                }
+            }
+            if ($n -match "(?i)\.(p12|jks|keystore|key|der|pass|pem)$" -and $n -notmatch "\.enc$") {
+                if ($isWin -or $n -ne ".vault_master.key") {
+                    throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: Materiale crittografico non cifrato rilevato: $($item.FullName)"
+                }
+            }
+            if ($n -match "(?i)\.xml$" -and $n -notmatch "\.enc$") {
+                throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: File XML preferenze/pairing in chiaro rilevato su disco: $($item.FullName)"
+            }
+        }
+    }
+
+    # Scansione manifesti JSON in SessionDir contro secret leak
+    $jsonFiles = Get-ChildItem -Path $fullSession -Recurse -File -Filter "*.json" -ErrorAction SilentlyContinue
+    foreach ($jf in $jsonFiles) {
+        $raw = Get-Content -LiteralPath $jf.FullName -Raw -ErrorAction SilentlyContinue
+        if ($raw -and $raw -match "(?i)(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|Bearer\s+[A-Za-z0-9\-_\.=]{8,}|<string\s+name=)") {
+            throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: Possibile segreto o token rilevato nel manifest JSON: $($jf.FullName)"
+        }
+    }
+    return $true
 }
 
 switch ($Action) {
@@ -2199,6 +2731,18 @@ switch ($Action) {
         $backupDbWal = Join-Path $sessionDir "akai_memory.db-wal"
         $preStopState = Get-ApplicationProcessState -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
         $wasRunning = [bool]$preStopState.IsRunning
+        $hasActivePairing = $false
+        if ($wasRunning) {
+            try {
+                $preStatus = Invoke-RestMethod -Uri $StatusUrl -Method Get -TimeoutSec 2 -ErrorAction Stop
+                if ($preStatus -and $null -ne $preStatus.active_sessions -and [int]$preStatus.active_sessions -gt 0) {
+                    $hasActivePairing = $true
+                }
+            } catch {
+                # Endpoint HTTP non raggiungibile o non pronto prima dello stop
+            }
+        }
+        $requirePairingEffective = [bool]($RequirePairing -or $hasActivePairing)
         $stopIssued = $false
         $unrootUnknown = $false
         $backupException = $null
@@ -2329,8 +2873,15 @@ switch ($Action) {
             Write-Host "      Database SQLite consolidato e verificato integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$dbHash)" -ForegroundColor Green
 
             # Snapshot identita' TLS protetto (server_keystore.p12, pass, ca.pem, ca.crt, ca_key.der)
-            Backup-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir | Out-Null
+            $tlsManifest = Backup-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir
+            # Snapshot cifrato preferenze pairing smartphone / config AI
+            $pairingManifest = Backup-DevicePairingSessions -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir -RequirePairing:$requirePairingEffective
+            $vaultDirs = @()
+            if ($tlsManifest -and $tlsManifest.VaultDir) { $vaultDirs += $tlsManifest.VaultDir }
+            if ($pairingManifest -and $pairingManifest.VaultDir) { $vaultDirs += $pairingManifest.VaultDir }
+            Assert-BackupSessionNoPlaintextSecrets -SessionDir $sessionDir -VaultDirs $vaultDirs | Out-Null
         } catch {
+            if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { $unrootUnknown = $true }
             $backupException = $_
         } finally {
             if ($wasRunning -and $stopIssued) {
@@ -2514,7 +3065,13 @@ switch ($Action) {
                 Write-Host "      Database SQLite consolidato e integro: $backupDb ($((Get-Item $backupDb).Length) bytes, SHA-256=$backupDbHash)" -ForegroundColor Green
 
                 # Snapshot identita' TLS protetto (server_keystore.p12, pass, ca.pem, ca.crt, ca_key.der)
-                Backup-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir | Out-Null
+                $installTlsManifest = Backup-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir
+                # Snapshot cifrato preferenze pairing smartphone / config AI
+                $installPairingManifest = Backup-DevicePairingSessions -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir -RequirePairing:$RequirePairing
+                $installVaultDirs = @()
+                if ($installTlsManifest -and $installTlsManifest.VaultDir) { $installVaultDirs += $installTlsManifest.VaultDir }
+                if ($installPairingManifest -and $installPairingManifest.VaultDir) { $installVaultDirs += $installPairingManifest.VaultDir }
+                Assert-BackupSessionNoPlaintextSecrets -SessionDir $sessionDir -VaultDirs $installVaultDirs | Out-Null
             }
 
             # 2. Verifica compatibilità firme FAIL-CLOSED
@@ -2773,8 +3330,9 @@ $chownTarget = "${appUid}:${appUid}"
 
                 Write-Host "      Database SQLite v5 ripristinato con successo." -ForegroundColor Green
 
-                # Ripristino snapshot identita' TLS se presente
+                # Ripristino snapshot identita' TLS e pairing cifrati se presenti
                 Restore-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir -ChownTarget $chownTarget | Out-Null
+                Restore-DevicePairingSessions -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $sessionDir -ChownTarget $chownTarget | Out-Null
 
                 Write-Host "[ROLLBACK 3/4] Riavvio servizio RemoteServerService..."
                 & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
@@ -2921,8 +3479,9 @@ $chownTarget = "${appUid}:${appUid}"
 
         Write-Host "      Database SQLite ripristinato." -ForegroundColor Green
 
-        # Ripristino snapshot identita' TLS se presente
+        # Ripristino snapshot identita' TLS e pairing cifrati se presenti
         Restore-DeviceTlsIdentity -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $latestSession.FullName -ChownTarget $chownTarget | Out-Null
+        Restore-DevicePairingSessions -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -SessionDir $latestSession.FullName -ChownTarget $chownTarget | Out-Null
 
         Write-Host "[3/4] Riavvio servizio RemoteServerService..."
         & $adb -s $TargetAdb shell "am startservice $PackageName/.RemoteServerService" | Out-Null
