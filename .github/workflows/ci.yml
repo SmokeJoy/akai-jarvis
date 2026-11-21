@@ -173,6 +173,31 @@ jobs:
           }
           Write-Host 'Final v4 source-only build recipe parses and is gated; no APK/device built in this step.'
 
+      - name: 1c2. Rescue builder, portable recovery bundle & OTA readiness PowerShell gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($rel in @(
+            'scripts/15_build_jarvis_a2_rescue.ps1',
+            'scripts/16_export_portable_recovery_bundle.ps1',
+            'scripts/17_check_ota_provisioning_readiness.ps1',
+            'akai-remote-tests/test_portable_recovery_bundle.ps1'
+          )) {
+            $path = Join-Path $PWD $rel
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $parseErrors | ForEach-Object { Write-Error "$rel : $($_.Message)" }
+              exit 1
+            }
+            $src = Get-Content $path -Raw
+            if ($src -match '(?i)\badb(?:\.exe)?\s+(install|root|push|pull|connect|shell)\b') {
+              throw "Script $rel must never invoke real ADB device commands"
+            }
+          }
+          Write-Host 'Scripts 15/16/17 and bundle test suite parse cleanly with zero real ADB commands.'
+
       - name: 1d. Android JNI Bionic and secret-free packaging source regressions
         run: python3 akai-remote-tests/test_android_jni_ci_contract.py
 
@@ -250,12 +275,14 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AkaiAiController.java \
             akai-remote-tests/UnitTests.java \
             akai-remote-tests/AgentSkillGateTest.java \
-            akai-remote-tests/AgentFactMemoryTest.java
+            akai-remote-tests/AgentFactMemoryTest.java \
+            akai-remote-tests/KeystoreCredentialHealthTest.java
 
           java -cp test_bin it.akai.customremote.UnitTests
           java -cp test_bin it.akai.customremote.AgentSkillGateTest
           java -cp test_bin it.akai.customremote.AgentFactMemoryTest
-          echo "All 40 Java unit tests passed with 100% success."
+          java -cp test_bin it.akai.customremote.KeystoreCredentialHealthTest
+          echo "All 40 Java unit tests + Keystore health probe tests passed with 100% success."
 
       - name: 4b. V4 OTA archive/manifest signature and exact upgrade policy gates (JDK 8)
         run: |
@@ -289,6 +316,9 @@ jobs:
           java -cp test_ota it.akai.customremote.OtaSessionByteTransferTest
           java -cp test_ota it.akai.customremote.VerifiedAtomicFileCopyTest
           echo "Archive/staging policy gates passed; OTA real-device download, owner UI and installation remain unverified."
+
+      - name: 4b2. Signed OTA Provisioning E2E (RSA-3072 trust, channel & A2 rescue v5->v6 upgrade + Script 17 readiness)
+        run: node akai-remote-tests/test_ota_provisioning_e2e.mjs
 
       - name: 4c. DeepSeek/Kimi-only provider guard (no local AI models)
         run: |
@@ -557,7 +587,12 @@ jobs:
           fi
           echo "MANDATORY APK COMPONENTS VERIFIED: DEX, Android ARMv7 SO, Web, no embedded TLS secrets."
 
-      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (35 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, ADB Root/Unroot, Watchdog HTTPS Down/SAN Mismatch Auto-Rollback, HTTP 426 LAN Regression, Provisional vs Approved OOB Trust, Read-Only verify-tls & Candidate TLS Forbidden Asset Negative Gate)"
+      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (42 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, .p12.bak, In-Place Rescue Zero-Uninstall, Keystore Health Probe)"
         shell: pwsh
         run: |
           ./akai-remote-tests/test_safe_install_mocked_adb.ps1
+
+      - name: "8b. Portable Encrypted Recovery Bundle Export & Offline Restore Verification"
+        shell: pwsh
+        run: |
+          ./akai-remote-tests/test_portable_recovery_bundle.ps1

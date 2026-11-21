@@ -242,6 +242,80 @@ public class KeystoreSecurityHelper {
     }
 
     /**
+     * Verifica rigorosamente in sola lettura se l'alias AndroidKeyStore (o la chiave test host)
+     * esiste gia' per il pacchetto/UID corrente, senza mai inizializzare o generare nuove chiavi.
+     */
+    public static synchronized boolean hasExistingKeyAlias() {
+        if (sForceKeystoreUnavailableForTest) {
+            return false;
+        }
+        try {
+            KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
+            keyStore.load(null);
+            return keyStore.containsAlias(KEY_ALIAS) && keyStore.getKey(KEY_ALIAS, null) != null;
+        } catch (Throwable ignored) {
+        }
+        return sTestFallbackSecretKey != null;
+    }
+
+    /**
+     * Verifica booleana non distruttiva della decifrabilita' di un payload "ks:..." con
+     * la chiave esistente in AndroidKeyStore. Non istanzia Stringhe in chiaro ne' espone segreti.
+     */
+    public static boolean canDecryptCiphertextBoolean(String ciphertext) {
+        if (ciphertext == null || !ciphertext.startsWith("ks:")) {
+            return false;
+        }
+        if (!hasExistingKeyAlias()) {
+            return false;
+        }
+        byte[] plainBytes = null;
+        try {
+            byte[] combined = Base64.decode(ciphertext.substring(3), Base64.DEFAULT);
+            if (combined == null || combined.length < 13) return false;
+
+            int ivLen = combined[0] & 0xFF;
+            if (ivLen < 12 || 1 + ivLen >= combined.length) return false;
+            byte[] iv = Arrays.copyOfRange(combined, 1, 1 + ivLen);
+            byte[] encrypted = Arrays.copyOfRange(combined, 1 + ivLen, combined.length);
+
+            SecretKey key = resolveActiveSecretKey();
+            if (key == null) return false;
+
+            Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv));
+            plainBytes = cipher.doFinal(encrypted);
+            return plainBytes != null && plainBytes.length > 0;
+        } catch (Throwable ignored) {
+            return false;
+        } finally {
+            if (plainBytes != null) {
+                Arrays.fill(plainBytes, (byte) 0);
+            }
+        }
+    }
+
+    /**
+     * Verifica in sola lettura (solo se l'alias esiste gia') se la chiave e' insideSecureHardware().
+     */
+    public static boolean isExistingAliasHardwareBacked() {
+        if (!hasExistingKeyAlias()) {
+            return false;
+        }
+        try {
+            KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
+            keyStore.load(null);
+            SecretKey key = (SecretKey) keyStore.getKey(KEY_ALIAS, null);
+            if (key == null) return false;
+            SecretKeyFactory factory = SecretKeyFactory.getInstance(key.getAlgorithm(), ANDROID_KEY_STORE);
+            KeyInfo keyInfo = (KeyInfo) factory.getKeySpec(key, KeyInfo.class);
+            return keyInfo != null && keyInfo.isInsideSecureHardware();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
      * Alias pubblico per isHardwareBacked(): rileva realmente KeyInfo.isInsideSecureHardware().
      */
     public static boolean isHardwareBackedKeystore() {

@@ -5776,6 +5776,455 @@ try { Assert-BackupSessionNoPlaintextSecrets -SessionDir '$s40cEsc' | Out-Null; 
     Remove-Item $testDir40 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ==============================================================================
+# TEST 41: [TEST AFFERMATIVO & NEGATIVO] 6o asset TLS opzionale server_keystore.p12.bak
+# Verifica backup cifrato, hasKeystoreBak=true (mantenendo manifest.Files a 5 voci),
+# restore con parita' hash SHA-256 readback e blocco Fail-Closed di .bak in chiaro.
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 41: Backup/Restore opzionale server_keystore.p12.bak & blocco plaintext .bak ---" -ForegroundColor Yellow
+$testDir41 = Join-Path $tempDir "test41_bak_$([Guid]::NewGuid().ToString('N'))"
+$devStorage41 = Join-Path $testDir41 "dev_storage"
+$restoredStorage41 = Join-Path $testDir41 "dev_restored"
+$session41 = Join-Path $testDir41 "session_41_bak"
+New-Item -ItemType Directory -Force -Path $devStorage41, $restoredStorage41, $session41 | Out-Null
+$vaultDir41 = $null
+
+try {
+    $rng41 = New-Object System.Random 41
+    $ksBytes41 = New-Object byte[] 768; $rng41.NextBytes($ksBytes41)
+    $bakBytes41 = New-Object byte[] 768; $rng41.NextBytes($bakBytes41)
+    [System.IO.File]::WriteAllBytes((Join-Path $devStorage41 "server_keystore.p12"), $ksBytes41)
+    [System.IO.File]::WriteAllBytes((Join-Path $devStorage41 "server_keystore.p12.bak"), $bakBytes41)
+    [System.IO.File]::WriteAllText((Join-Path $devStorage41 "server_keystore.pass"), "dummy_ks_pass_41")
+    [System.IO.File]::WriteAllText((Join-Path $devStorage41 "ca.pem"), "-----BEGIN CERTIFICATE-----`nDUMMY41`n-----END CERTIFICATE-----")
+    [System.IO.File]::WriteAllText((Join-Path $devStorage41 "ca.crt"), "DUMMY_CA_CRT_41")
+    [System.IO.File]::WriteAllText((Join-Path $devStorage41 "ca_key.der"), "DUMMY_CA_KEY_41")
+
+    $devEsc41 = $devStorage41.Replace('\', '/')
+    $restEsc41 = $restoredStorage41.Replace('\', '/')
+    $mockAdbJs41 = Join-Path $testDir41 "mock_adb_41.js"
+    @"
+const fs = require('fs');
+const path = require('path');
+const argv = process.argv.slice(2);
+const argStr = argv.join(' ');
+if (argStr.includes('am get-config')) { console.log('it.akai.customremote'); process.exit(0); }
+if (argv.includes('shell') && argv[argv.length - 1] === 'id') {
+    console.log('uid=2000(shell) gid=2000(shell) context=u:r:shell:s0');
+    process.exit(0);
+}
+if (argStr.includes('test -f') || argStr.includes('FILE_PROBE_RESULT')) {
+    if (argStr.includes('server_keystore.p12.bak') || argStr.includes('server_keystore.p12')) {
+        console.log('FILE_PROBE_RESULT:EXISTS');
+        process.exit(0);
+    }
+    console.log('FILE_PROBE_RESULT:NOT_FOUND');
+    process.exit(0);
+}
+if (argv.includes('exec-out')) {
+    const m = argStr.match(/files\/(server_keystore\.p12\.bak|server_keystore\.p12|server_keystore\.pass|ca\.pem|ca\.crt|ca_key\.der)/);
+    if (m) {
+        const srcRest = path.join('$restEsc41', m[1]);
+        const srcOrig = path.join('$devEsc41', m[1]);
+        const fp = fs.existsSync(srcRest) ? srcRest : srcOrig;
+        if (fs.existsSync(fp)) {
+            process.stdout.write(fs.readFileSync(fp), () => process.exit(0));
+            return;
+        }
+    }
+    process.exit(1);
+}
+if (argv.includes('exec-in')) {
+    const m = argStr.match(/files\/(server_keystore\.p12\.bak|server_keystore\.p12|server_keystore\.pass|ca\.pem|ca\.crt|ca_key\.der)/);
+    if (m) {
+        const chunks = [];
+        process.stdin.on('data', c => chunks.push(c));
+        process.stdin.on('end', () => {
+            fs.writeFileSync(path.join('$restEsc41', m[1]), Buffer.concat(chunks));
+            process.exit(0);
+        });
+        return;
+    }
+    process.exit(0);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdbJs41 -Encoding ascii
+
+    $mockAdbCmd41 = if ($isWin) { Join-Path $testDir41 "adb.cmd" } else { Join-Path $testDir41 "adb" }
+    if ($isWin) {
+        "@echo off`n`"%NODE_EXE%`" `"$mockAdbJs41`" %*" | Out-File -FilePath $mockAdbCmd41 -Encoding ascii
+    } else {
+        "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdbJs41`" `"`$@`"" | Out-File -FilePath $mockAdbCmd41 -Encoding ascii
+        & chmod +x $mockAdbCmd41
+    }
+
+    $scriptEsc41 = $scriptPath.Replace('\', '/')
+    $sessEsc41 = $session41.Replace('\', '/')
+    $adbEsc41 = $mockAdbCmd41.Replace('\', '/')
+    $nodeEsc41 = $validNode.Replace('\', '/')
+    $plainBakSess41 = Join-Path $testDir41 "session_41_plainbak"
+    New-Item -ItemType Directory -Force -Path $plainBakSess41 | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $plainBakSess41 "server_keystore.p12.bak"), "PLAINTEXT_BAK_FORBIDDEN")
+    $plainBakEsc41 = $plainBakSess41.Replace('\', '/')
+
+    $cmd41 = @"
+`$env:NODE_EXE = '$nodeEsc41'
+. '$scriptEsc41' -Action plan | Out-Null
+`$bRes = Backup-DeviceTlsIdentity -AdbExe '$adbEsc41' -TargetAdb 'mock41:5555' -PackageName 'it.akai.customremote' -SessionDir '$sessEsc41'
+`$man = Get-Content (Join-Path '$sessEsc41' 'tls_identity/tls_manifest.json') -Raw | ConvertFrom-Json
+`$fileCount = (`$man.Files.psobject.properties | Measure-Object).Count
+`$vaultEncExists = Test-Path (Join-Path `$bRes.VaultDir 'server_keystore.p12.bak.enc')
+`$noPlainBakInSess = -not (Test-Path (Join-Path '$sessEsc41' 'tls_identity/server_keystore.p12.bak'))
+`$rRes = Restore-DeviceTlsIdentity -AdbExe '$adbEsc41' -TargetAdb 'mock41:5555' -PackageName 'it.akai.customremote' -SessionDir '$sessEsc41' -ChownTarget '10088:10088'
+`$plainGuardBlocked = `$false
+try { Assert-BackupSessionNoPlaintextSecrets -SessionDir '$plainBakEsc41' | Out-Null } catch { if (`$_.Exception.Message -match 'CREDENZIALI FUORI VAULT') { `$plainGuardBlocked = `$true } }
+Write-Output (@{ VaultDir = `$bRes.VaultDir; HasBak = [bool]`$man.HasKeystoreBak; FileCount = `$fileCount; VaultEncExists = `$vaultEncExists; NoPlainBak = `$noPlainBakInSess; BakRestored = [bool]`$rRes.KeystoreBakRestored; PlainGuardBlocked = `$plainGuardBlocked } | ConvertTo-Json -Compress)
+"@
+    $out41 = (& $psExe -ExecutionPolicy Bypass -Command $cmd41 2>&1 | Out-String)
+    $jsonLine41 = ($out41 -split "\r?\n" | Where-Object { $_ -match '^\{' } | Select-Object -Last 1)
+    if (-not $jsonLine41) { throw "Output 41 privo di JSON: $out41" }
+    $resObj41 = $jsonLine41 | ConvertFrom-Json
+    $vaultDir41 = $resObj41.VaultDir
+
+    $expectedBakHash41 = (Get-FileHash (Join-Path $devStorage41 "server_keystore.p12.bak") -Algorithm SHA256).Hash.ToLower()
+    $restoredBakPath41 = Join-Path $restoredStorage41 "server_keystore.p12.bak"
+    $actualBakRestoredHash41 = if (Test-Path $restoredBakPath41) { (Get-FileHash $restoredBakPath41 -Algorithm SHA256).Hash.ToLower() } else { "" }
+
+    if ($resObj41.HasBak -eq $true -and $resObj41.FileCount -eq 5 -and $resObj41.VaultEncExists -eq $true -and $resObj41.NoPlainBak -eq $true -and $resObj41.BakRestored -eq $true -and $resObj41.PlainGuardBlocked -eq $true -and $actualBakRestoredHash41 -eq $expectedBakHash41) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / 6o ASSET .p12.bak] Test 41: Backup cifrato, restore + parity SHA-256 e guardia plaintext .bak verificati al 100%" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / 6o ASSET .p12.bak] Test 41: Verifica non conforme: $out41 (restoredHash=$actualBakRestoredHash41 vs $expectedBakHash41)" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / 6o ASSET .p12.bak] Test 41: Eccezione: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($vaultDir41 -and $vaultDir41 -match "session_41_bak" -and (Test-Path $vaultDir41)) {
+        Remove-Item (Split-Path $vaultDir41 -Parent) -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item $testDir41 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ==============================================================================
+# TEST 42: [TEST AFFERMATIVO & NEGATIVO / IN-PLACE RESCUE & PROTEZIONE ANDROIDKEYSTORE]
+# 42a: Watchdog fail con -RescueApkPath -> adb install -r <rescue v5>, ZERO -d, ZERO uninstall
+# 42b: Gate negativo Test-RescueApkCompatibility (versionCode <= cand, wrong signer, wrong pkg, missing)
+# 42c: Downgrade fail senza rescue -> ERRORE FAIL-CLOSED [DOWNGRADE NEGATO / UNINSTALL VIETATO], ZERO uninstall
+# 42d: Test-DeviceKeystoreCredentialHealth (no-token, unreachable, strict fail, healthy, undecryptable=true)
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 42: In-Place Rescue Rollback (zero -d/uninstall), Gate Compatibilita' & Health Keystore ---" -ForegroundColor Yellow
+$testDir42 = Join-Path $tempDir "test42_rescue_$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $testDir42 | Out-Null
+$httpProc42 = $null
+
+try {
+    $subPassed42 = 0
+    $realDb42 = Join-Path $testDir42 "device_42.sqlite"
+    New-MockRealDatabase -FilePath $realDb42
+    $deviceApk42 = Join-Path $testDir42 "device_v3.apk"
+    $candApk42 = Join-Path $testDir42 "candidate_v4.apk"
+    $rescueApk42 = Join-Path $testDir42 "rescue_v5.apk"
+    $badVcApk42 = Join-Path $testDir42 "bad_vc4.apk"
+    $wrongPkgApk42 = Join-Path $testDir42 "wrong_pkg.apk"
+    foreach ($p42 in @($deviceApk42, $candApk42, $rescueApk42, $badVcApk42, $wrongPkgApk42)) {
+        New-TestApkArchive $p42 @("classes.dex", "AndroidManifest.xml", "assets/www/index.html")
+    }
+
+    # Mock SDK isolato per Test 42 (versionCode=5 per *rescue*, 4 per *bad_vc4*/*candidate*, wrong_pkg per *wrong_pkg*)
+    $sdkRoot42 = Join-Path $testDir42 "sdk42"
+    $bt42 = Join-Path $sdkRoot42 "build-tools\99.0.0"
+    New-Item -ItemType Directory -Force -Path $bt42 | Out-Null
+    $mockAapt42Js = Join-Path $sdkRoot42 "mock_aapt42.js"
+    @'
+const fs = require('fs');
+const path = require('path');
+const args = process.argv.slice(2);
+if (args.length !== 3 || args[0] !== 'dump' || args[1] !== 'badging' || !fs.existsSync(args[2])) {
+    process.exit(2);
+}
+const b = path.basename(args[2]);
+if (b.includes('wrong_pkg')) {
+    console.log("package: name='com.evil.other' versionCode='5' versionName='1.2.0-a2-rescue-v5'");
+} else if (b.includes('rescue_v5')) {
+    console.log("package: name='it.akai.customremote' versionCode='5' versionName='1.2.0-a2-rescue-v5'");
+} else {
+    console.log("package: name='it.akai.customremote' versionCode='4' versionName='1.3.0-v4'");
+}
+'@ | Set-Content -LiteralPath $mockAapt42Js -Encoding UTF8
+    if ($isWin) {
+        $aapt42Cmd = Join-Path $bt42 "aapt.cmd"
+        Set-Content -LiteralPath $aapt42Cmd -Value ("@echo off`n`"{0}`" `"{1}`" %*" -f $validNode, $mockAapt42Js) -Encoding ASCII
+    } else {
+        $aapt42Cmd = Join-Path $bt42 "aapt"
+        Set-Content -LiteralPath $aapt42Cmd -Value ("#!/bin/sh`nexec `"{0}`" `"{1}`" `"`$@`"" -f $validNode, $mockAapt42Js) -Encoding UTF8
+        & chmod +x $aapt42Cmd
+    }
+
+    # Mock apksigner che distingue wrong_signer vs signer owner-mock coerente
+    $mockSigner42Js = Join-Path $testDir42 "mock_signer42.js"
+    @'
+const path = require('path');
+const target = process.argv[process.argv.length - 1] || '';
+if (path.basename(target).includes('wrong_signer')) {
+    console.log('Signer #1 certificate SHA-256 digest: 1111111111111111111111111111111111111111111111111111111111111111');
+} else {
+    console.log('Signer #1 certificate SHA-256 digest: aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb');
+}
+process.exit(0);
+'@ | Set-Content -LiteralPath $mockSigner42Js -Encoding UTF8
+    $mockSigner42Cmd = if ($isWin) { Join-Path $testDir42 "apksigner.cmd" } else { Join-Path $testDir42 "apksigner" }
+    if ($isWin) {
+        "@echo off`n`"%NODE_EXE%`" `"$mockSigner42Js`" %*" | Out-File -FilePath $mockSigner42Cmd -Encoding ascii
+    } else {
+        "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSigner42Js`" `"`$@`"" | Out-File -FilePath $mockSigner42Cmd -Encoding ascii
+        & chmod +x $mockSigner42Cmd
+    }
+
+    $port42 = Get-FreeLoopbackPort
+    $ready42 = Join-Path $testDir42 "http42.ready"
+    $state42 = Join-Path $testDir42 "app_state42.txt"
+    $adbLog42 = Join-Path $testDir42 "adb42.log"
+    $restoreTarget42 = Join-Path $testDir42 "restored_db42.sqlite"
+    [System.IO.File]::WriteAllText($state42, "v3_healthy")
+
+    $mockHttp42Js = Join-Path $testDir42 "mock_http42.js"
+    $readyEsc42 = $ready42.Replace('\', '/')
+    $stateEsc42 = $state42.Replace('\', '/')
+    @"
+const http = require('http');
+const fs = require('fs');
+const srv = http.createServer((req, res) => {
+    const st = fs.readFileSync('$stateEsc42', 'utf8').trim();
+    if (st === 'v4_broken') {
+        res.writeHead(500); res.end(JSON.stringify({ status: 'error' })); return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uinput_ready: true }));
+});
+srv.listen($port42, '127.0.0.1', () => { fs.writeFileSync('$readyEsc42', '1'); });
+"@ | Out-File -FilePath $mockHttp42Js -Encoding ascii
+    $httpProc42 = Start-Process -FilePath $validNode -ArgumentList "`"$mockHttp42Js`"" -PassThru -NoNewWindow
+    $w42 = 0; while (-not (Test-Path $ready42) -and $w42 -lt 30) { Start-Sleep -Milliseconds 100; $w42++ }
+
+    $mockAdb42Js = Join-Path $testDir42 "mock_adb42.js"
+    $adbLogEsc42 = $adbLog42.Replace('\', '/')
+    $realDbEsc42 = $realDb42.Replace('\', '/')
+    $devApkEsc42 = $deviceApk42.Replace('\', '/')
+    $restTargetEsc42 = $restoreTarget42.Replace('\', '/')
+    @"
+const fs = require('fs');
+const argv = process.argv.slice(2);
+const argStr = argv.join(' ');
+fs.appendFileSync('$adbLogEsc42', argStr + '\n');
+if (argStr.includes('get-state')) { console.log('device'); process.exit(0); }
+if (argStr.includes('am get-config')) { console.log('it.akai.customremote'); process.exit(0); }
+if (argStr.includes('pm list packages')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (argStr.includes('pm path')) { console.log('package:/data/app/it.akai.customremote/base.apk'); process.exit(0); }
+if (argStr.includes('dumpsys package it.akai.customremote')) {
+    const st = fs.readFileSync('$stateEsc42', 'utf8').trim();
+    console.log(st === 'v4_broken' ? '    versionCode=4 minSdk=21 targetSdk=28' : '    versionCode=3 minSdk=21 targetSdk=28');
+    console.log('    userId=10088');
+    process.exit(0);
+}
+if (argStr.includes('stat -c')) { console.log('10088'); process.exit(0); }
+if (argStr.includes('pidof')) { console.log('4242'); process.exit(0); }
+if (argStr.includes('FILE_PROBE_RESULT') || argStr.includes('test -f')) { console.log('FILE_PROBE_RESULT:NOT_FOUND'); process.exit(0); }
+if (argv.includes('pull')) { fs.copyFileSync('$devApkEsc42', argv[argv.length - 1]); console.log('1 file pulled'); process.exit(0); }
+if (argv.includes('exec-out')) {
+    if (argStr.includes('verify_restore') || fs.existsSync('$restTargetEsc42')) {
+        const src = fs.existsSync('$restTargetEsc42') ? '$restTargetEsc42' : '$realDbEsc42';
+        process.stdout.write(fs.readFileSync(src), () => process.exit(0)); return;
+    }
+    process.stdout.write(fs.readFileSync('$realDbEsc42'), () => process.exit(0)); return;
+}
+if (argv.includes('exec-in')) {
+    const chunks = [];
+    process.stdin.on('data', c => chunks.push(c));
+    process.stdin.on('end', () => {
+        if (argStr.includes('akai_memory.db')) fs.writeFileSync('$restTargetEsc42', Buffer.concat(chunks));
+        process.exit(0);
+    });
+    return;
+}
+if (argv.includes('install')) {
+    if (argStr.includes(' -d ')) { console.error('Failure [INSTALL_FAILED_VERSION_DOWNGRADE]'); process.exit(1); }
+    const target = argv[argv.length - 1] || '';
+    if (target.includes('candidate_v4')) {
+        fs.writeFileSync('$stateEsc42', 'v4_broken');
+    } else if (target.includes('rescue_v5')) {
+        fs.writeFileSync('$stateEsc42', 'v5_rescued');
+    }
+    console.log('Success');
+    process.exit(0);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdb42Js -Encoding ascii
+    $mockAdb42Cmd = if ($isWin) { Join-Path $testDir42 "adb.cmd" } else { Join-Path $testDir42 "adb" }
+    if ($isWin) {
+        "@echo off`n`"%NODE_EXE%`" `"$mockAdb42Js`" %*" | Out-File -FilePath $mockAdb42Cmd -Encoding ascii
+    } else {
+        "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdb42Js`" `"`$@`"" | Out-File -FilePath $mockAdb42Cmd -Encoding ascii
+        & chmod +x $mockAdb42Cmd
+    }
+
+    $backupDir42 = Join-Path $testDir42 "backup_42"
+    New-Item -ItemType Directory -Force -Path $backupDir42 | Out-Null
+    $scriptEsc42 = $scriptPath.Replace('\', '/')
+    $candEsc42 = $candApk42.Replace('\', '/')
+    $rescueEsc42 = $rescueApk42.Replace('\', '/')
+    $backupDirEsc42 = $backupDir42.Replace('\', '/')
+    $adb42Esc = $mockAdb42Cmd.Replace('\', '/')
+    $signer42Esc = $mockSigner42Cmd.Replace('\', '/')
+    $sdk42Esc = $sdkRoot42.Replace('\', '/')
+    $bt42Esc = $bt42.Replace('\', '/')
+    $nodeEsc42 = $validNode.Replace('\', '/')
+
+    function Invoke-SubPs42([string]$ScriptBlockText) {
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            return (& $psExe -ExecutionPolicy Bypass -Command $ScriptBlockText 2>&1 | Out-String)
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
+    }
+
+    # 42a: Happy-path rollback in-place via -RescueApkPath v5 (ZERO -d, ZERO uninstall)
+    $cmd42a = @"
+`$env:NODE_EXE = '$nodeEsc42'
+`$env:ADB_EXECUTABLE = '$adb42Esc'
+`$env:APKSIGNER_EXECUTABLE = '$signer42Esc'
+`$env:ANDROID_HOME = '$sdk42Esc'
+`$env:ANDROID_SDK_ROOT = '$sdk42Esc'
+`$env:PATH = '$bt42Esc' + [IO.Path]::PathSeparator + `$env:PATH
+`$env:WATCHDOG_ATTEMPTS = '2'
+`$env:WATCHDOG_SLEEP_SEC = '1'
+& '$scriptEsc42' -Action install -ApkPath '$candEsc42' -RescueApkPath '$rescueEsc42' -TargetTv '127.0.0.1' -HttpPort $port42 -BackupDir '$backupDirEsc42' -AllowHardwareExecution
+"@
+    $out42a = Invoke-SubPs42 $cmd42a
+    $adbLogText42 = if (Test-Path $adbLog42) { Get-Content $adbLog42 -Raw } else { "" }
+    $hasRescueInstall42 = $adbLogText42 -match "install -r .*rescue_v5\.apk"
+    $hasForbiddenFlag42 = ($adbLogText42 -match "(?m)install\s+-r\s+-d\b") -or ($adbLogText42 -match "\buninstall\b")
+    if ($out42a -match "Gate A2 Rescue verificato \(rescueVC=5 > candidateVC=4" -and $out42a -match "ROLLBACK CONSERVATIVO.*A2 Rescue v5" -and $out42a -match "ROLLBACK RIUSCITO E VERIFICATO" -and $hasRescueInstall42 -and -not $hasForbiddenFlag42) {
+        $subPassed42++
+        Write-Host "   [PASS] Sotto-test 42a: Watchdog rollback in-place via Rescue v5 (zero -d, zero uninstall)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 42a: out='$out42a' log='$adbLogText42'" -ForegroundColor Red
+    }
+
+    # 42b: Gate negativo Test-RescueApkCompatibility
+    $wrongSigner42 = Join-Path $testDir42 "wrong_signer.apk"
+    New-TestApkArchive $wrongSigner42 @("classes.dex", "AndroidManifest.xml")
+    $badVcEsc42 = $badVcApk42.Replace('\', '/')
+    $wrongPkgEsc42 = $wrongPkgApk42.Replace('\', '/')
+    $wrongSigEsc42 = $wrongSigner42.Replace('\', '/')
+    $cmd42b = @"
+`$env:NODE_EXE = '$nodeEsc42'
+`$env:APKSIGNER_EXECUTABLE = '$signer42Esc'
+`$env:ANDROID_HOME = '$sdk42Esc'
+`$env:ANDROID_SDK_ROOT = '$sdk42Esc'
+`$env:PATH = '$bt42Esc' + [IO.Path]::PathSeparator + `$env:PATH
+. '$scriptEsc42' -Action plan | Out-Null
+try { Test-RescueApkCompatibility -RescueApkPath '$testDir42/missing.apk' -PackageName 'it.akai.customremote' -MustExceedVersionCode 4 | Out-Null; Write-Output 'MISS1' } catch { Write-Output ('H1:' + `$_.Exception.Message) }
+try { Test-RescueApkCompatibility -RescueApkPath '$badVcEsc42' -PackageName 'it.akai.customremote' -MustExceedVersionCode 4 | Out-Null; Write-Output 'MISS2' } catch { Write-Output ('H2:' + `$_.Exception.Message) }
+try { Test-RescueApkCompatibility -RescueApkPath '$wrongPkgEsc42' -PackageName 'it.akai.customremote' -MustExceedVersionCode 4 | Out-Null; Write-Output 'MISS3' } catch { Write-Output ('H3:' + `$_.Exception.Message) }
+try { Test-RescueApkCompatibility -RescueApkPath '$wrongSigEsc42' -PackageName 'it.akai.customremote' -MustExceedVersionCode 4 -ExpectedSignerSha256 'aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb' | Out-Null; Write-Output 'MISS4' } catch { Write-Output ('H4:' + `$_.Exception.Message) }
+"@
+    $out42b = Invoke-SubPs42 $cmd42b
+    if ($out42b -match "H1:ERRORE FAIL-CLOSED \[RESCUE APK NON VALIDO\]" -and $out42b -match "H2:ERRORE FAIL-CLOSED \[RESCUE APK NON VALIDO\].*versionCode rescue" -and $out42b -match "H3:ERRORE FAIL-CLOSED \[RESCUE APK NON VALIDO\].*package rescue" -and $out42b -match "H4:ERRORE FAIL-CLOSED \[RESCUE APK NON VALIDO\].*Firma certificato rescue" -and $out42b -notmatch "(?m)^MISS\d") {
+        $subPassed42++
+        Write-Host "   [PASS] Sotto-test 42b: Tutti e 4 i gate negativi Test-RescueApkCompatibility bloccati" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 42b: $out42b" -ForegroundColor Red
+    }
+
+    # 42c: Downgrade fail senza -RescueApkPath vieta adb uninstall
+    $adbLog42c = Join-Path $testDir42 "adb42c.log"
+    $mockAdb42cJs = Join-Path $testDir42 "mock_adb42c.js"
+    $adbLog42cEsc = $adbLog42c.Replace('\', '/')
+    @"
+const fs = require('fs');
+const argv = process.argv.slice(2);
+fs.appendFileSync('$adbLog42cEsc', argv.join(' ') + '\n');
+if (argv.includes('install')) { console.error('Failure [INSTALL_FAILED_VERSION_DOWNGRADE]'); process.exit(1); }
+process.exit(0);
+"@ | Out-File -FilePath $mockAdb42cJs -Encoding ascii
+    $mockAdb42cCmd = if ($isWin) { Join-Path $testDir42 "adb42c.cmd" } else { Join-Path $testDir42 "adb42c" }
+    if ($isWin) {
+        "@echo off`n`"%NODE_EXE%`" `"$mockAdb42cJs`" %*" | Out-File -FilePath $mockAdb42cCmd -Encoding ascii
+    } else {
+        "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdb42cJs`" `"`$@`"" | Out-File -FilePath $mockAdb42cCmd -Encoding ascii
+        & chmod +x $mockAdb42cCmd
+    }
+    $devApk42Esc = $deviceApk42.Replace('\', '/')
+    $adb42cEsc = $mockAdb42cCmd.Replace('\', '/')
+    $cmd42c = @"
+`$env:NODE_EXE = '$nodeEsc42'
+. '$scriptEsc42' -Action plan | Out-Null
+try {
+    Invoke-ConservativeRollbackApkInstall -AdbExe '$adb42cEsc' -TargetAdb 'mock42c:5555' -PackageName 'it.akai.customremote' -BackupApkPath '$devApk42Esc' | Out-Null
+    Write-Output 'MISS_42C'
+} catch {
+    Write-Output ('HIT_42C:' + `$_.Exception.Message)
+}
+"@
+    $out42c = Invoke-SubPs42 $cmd42c
+    $log42cText = if (Test-Path $adbLog42c) { Get-Content $adbLog42c -Raw } else { "" }
+    if ($out42c -match "HIT_42C:ERRORE FAIL-CLOSED \[DOWNGRADE NEGATO / UNINSTALL VIETATO PER PROTEZIONE ANDROIDKEYSTORE\]" -and $out42c -notmatch "MISS_42C" -and $log42cText -notmatch "uninstall") {
+        $subPassed42++
+        Write-Host "   [PASS] Sotto-test 42c: Downgrade fail senza rescue rifiuta adb uninstall (Keystore protetto)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 42c: out='$out42c' log='$log42cText'" -ForegroundColor Red
+    }
+
+    # 42d: Test-DeviceKeystoreCredentialHealth states
+    $closedPort42d = Get-FreeLoopbackPort
+    $cmd42d = @"
+. '$scriptEsc42' -Action plan | Out-Null
+`$r1 = Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort42d
+`$r2 = Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort42d -AuthToken 'dummy_tok'
+`$strictErr = ''
+try { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort42d -AuthToken 'dummy_tok' -FailOnUnreachable | Out-Null } catch { `$strictErr = 'STRICT_THROWN' }
+`$script:mockMode42d = 'healthy'
+function Invoke-RestMethod {
+    if (`$script:mockMode42d -eq 'healthy') {
+        return [pscustomobject]@{ keystore_alias_present = `$true; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+    }
+    return [pscustomobject]@{ keystore_alias_present = `$false; undecryptable_stored_credentials = `$true; all_stored_credentials_decryptable = `$false }
+}
+`$r3 = Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort42d -AuthToken 'dummy_tok'
+`$script:mockMode42d = 'undecryptable'
+`$badErr = ''
+try { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort42d -AuthToken 'dummy_tok' | Out-Null } catch { `$badErr = `$_.Exception.Message }
+Write-Output (@{ R1 = `$r1.Status; R2 = `$r2.Status; Strict = `$strictErr; R3 = `$r3.Status; R3Alias = [bool]`$r3.KeystoreAliasPresent; BadErr = `$badErr } | ConvertTo-Json -Compress)
+"@
+    $out42d = Invoke-SubPs42 $cmd42d
+    $json42dLine = ($out42d -split "\r?\n" | Where-Object { $_ -match '^\{' } | Select-Object -Last 1)
+    $res42d = if ($json42dLine) { $json42dLine | ConvertFrom-Json } else { $null }
+    if ($res42d -and $res42d.R1 -eq "UNVERIFIED_NO_TOKEN" -and $res42d.R2 -eq "UNVERIFIED_UNREACHABLE" -and $res42d.Strict -eq "STRICT_THROWN" -and $res42d.R3 -eq "HEALTHY" -and $res42d.R3Alias -eq $true -and $res42d.BadErr -match "ANDROIDKEYSTORE CREDENZIALI NON DECIFRABILI") {
+        $subPassed42++
+        Write-Host "   [PASS] Sotto-test 42d: Test-DeviceKeystoreCredentialHealth verifica stati no-token/unreachable/healthy/undecryptable" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 42d: $out42d" -ForegroundColor Red
+    }
+
+    if ($subPassed42 -eq 4) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / IN-PLACE RESCUE & KEYSTORE HEALTH] Test 42: Superati 4/4" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / IN-PLACE RESCUE & KEYSTORE HEALTH] Test 42: Superati $subPassed42 / 4" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / IN-PLACE RESCUE & KEYSTORE HEALTH] Test 42: Eccezione: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($httpProc42 -and -not $httpProc42.HasExited) { Stop-Process -Id $httpProc42.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir42 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 

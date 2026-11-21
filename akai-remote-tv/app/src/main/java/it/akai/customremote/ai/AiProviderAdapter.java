@@ -378,6 +378,41 @@ public class AiProviderAdapter {
         prefs.edit().putString(prefKey, enc).apply();
     }
 
+    /**
+     * Restituisce esclusivamente booleani sullo stato dell'alias AndroidKeyStore e
+     * sulla reale decifrabilita' delle credenziali AI cifrate memorizzate in SharedPreferences.
+     * Sola lettura: non crea chiavi, non altera SharedPreferences, non espone segreti.
+     */
+    public org.json.JSONObject getCredentialKeystoreHealth() {
+        boolean aliasPresent = KeystoreSecurityHelper.hasExistingKeyAlias();
+        boolean hwBacked = aliasPresent && KeystoreSecurityHelper.isExistingAliasHardwareBacked();
+
+        String rawDeepSeek = prefs.getString(KEY_DEEPSEEK_KEY, "");
+        String rawKimi = prefs.getString(KEY_KIMI_KEY, "");
+        boolean dsPresent = rawDeepSeek != null && !rawDeepSeek.trim().isEmpty();
+        boolean kmPresent = rawKimi != null && !rawKimi.trim().isEmpty();
+
+        boolean dsDecryptable = dsPresent && KeystoreSecurityHelper.canDecryptCiphertextBoolean(rawDeepSeek);
+        boolean kmDecryptable = kmPresent && KeystoreSecurityHelper.canDecryptCiphertextBoolean(rawKimi);
+
+        boolean anyUndecryptable = (dsPresent && !dsDecryptable) || (kmPresent && !kmDecryptable);
+        boolean allStoredDecryptable = (!dsPresent || dsDecryptable) && (!kmPresent || kmDecryptable);
+
+        org.json.JSONObject out = new org.json.JSONObject();
+        try {
+            out.put("keystore_alias_present", aliasPresent);
+            out.put("keystore_hardware_backed", hwBacked);
+            out.put("deepseek_ciphertext_present", dsPresent);
+            out.put("deepseek_decryptable", dsDecryptable);
+            out.put("kimi_ciphertext_present", kmPresent);
+            out.put("kimi_decryptable", kmDecryptable);
+            out.put("undecryptable_stored_credentials", anyUndecryptable);
+            out.put("all_stored_credentials_decryptable", allStoredDecryptable);
+        } catch (org.json.JSONException ignored) {
+        }
+        return out;
+    }
+
     public String getMaskedApiKey(String provider) {
         String k = getApiKey(provider);
         if (k == null || k.isEmpty()) return "";

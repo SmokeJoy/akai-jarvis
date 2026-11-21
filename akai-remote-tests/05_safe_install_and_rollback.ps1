@@ -29,6 +29,7 @@ param(
     [ValidateSet("status", "backup", "install", "rollback", "plan", "preflight", "verify-tls")]
     [string]$Action = "status",
     [string]$ApkPath = $null,
+    [string]$RescueApkPath = $null,
     [string]$BackupDir = ".\backup_tv",
     [string]$TargetTv = "192.168.1.8",
     [int]$HttpPort = 8088,
@@ -1068,20 +1069,7 @@ function Restore-TargetApplicationService {
     }
 }
 
-function Test-PackageUpgradeGate {
-    param(
-        [string]$AdbExe,
-        [string]$TargetAdb,
-        [string]$PackageName,
-        [string]$CandidateApkPath,
-        [switch]$PreviousAbsentConfirmed = $false
-    )
-
-    # P0 pre-install audit: metadata MUST be independently parsed, never inferred from ZIP magic.
-    # A missing aapt, malformed APK, unknown installed version or ambiguous output blocks installation.
-    if (-not (Test-Path -LiteralPath $CandidateApkPath -PathType Leaf)) {
-        throw "ERRORE FAIL-CLOSED: APK candidato assente."
-    }
+function Get-ResolvedAaptExecutable {
     $aaptPath = $null
     $sdkRoot = $env:ANDROID_HOME
     if (-not $sdkRoot) { $sdkRoot = $env:ANDROID_SDK_ROOT }
@@ -1089,7 +1077,7 @@ function Test-PackageUpgradeGate {
         $toolsRoot = Join-Path $sdkRoot "build-tools"
         if (Test-Path $toolsRoot) {
             foreach ($dir in @(Get-ChildItem $toolsRoot -Directory | Sort-Object Name -Descending)) {
-                foreach ($name in @("aapt.exe", "aapt")) {
+                foreach ($name in @("aapt.exe", "aapt.cmd", "aapt")) {
                     $candidate = Join-Path $dir.FullName $name
                     if (Test-Path $candidate) { $aaptPath = $candidate; break }
                 }
@@ -1104,6 +1092,165 @@ function Test-PackageUpgradeGate {
     if (-not $aaptPath) {
         throw "ERRORE FAIL-CLOSED: aapt dump badging obbligatorio per validare package/versionCode."
     }
+    return $aaptPath
+}
+
+function Test-RescueApkCompatibility {
+    param(
+        [string]$RescueApkPath,
+        [string]$PackageName,
+        [long]$MustExceedVersionCode,
+        [string]$ExpectedSignerSha256 = $null
+    )
+    if ([string]::IsNullOrWhiteSpace($RescueApkPath) -or -not (Test-Path -LiteralPath $RescueApkPath -PathType Leaf)) {
+        throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: File RescueApkPath mancante o non leggibile ($RescueApkPath)."
+    }
+    if ($RescueApkPath -match "app-ci-test-nondistributable\.apk") {
+        throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: Artefatto CI non distribuibile rifiutato come rescue."
+    }
+    Assert-CandidateApkNoForbiddenTlsAssets $RescueApkPath | Out-Null
+
+    $rescueFp = Get-ApkCertificateFingerprint $RescueApkPath
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedSignerSha256) -and $rescueFp -ne $ExpectedSignerSha256.ToLowerInvariant()) {
+        throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: Firma certificato rescue ($rescueFp) diversa da app installata ($ExpectedSignerSha256)."
+    }
+
+    $aaptPath = Get-ResolvedAaptExecutable
+    $previousEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $badgingOut = (& $aaptPath dump badging $RescueApkPath 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) {
+            throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: aapt dump badging fallito (exit=$LASTEXITCODE)."
+        }
+        $packageLines = @($badgingOut -split "\r?\n" | Where-Object { $_ -match "^package:\s" })
+        if ($packageLines.Count -ne 1 -or $packageLines[0] -notmatch "^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'(?:\s|$)") {
+            throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: metadata package/versionCode assenti o ambigui nel rescue APK."
+        }
+        $rescuePkg = $Matches[1]
+        $rescueVc = [long]::Parse($Matches[2], [System.Globalization.CultureInfo]::InvariantCulture)
+        if ($rescuePkg -ne $PackageName) {
+            throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: package rescue '$rescuePkg' diverso da '$PackageName'."
+        }
+        if ($rescueVc -le $MustExceedVersionCode) {
+            throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: versionCode rescue ($rescueVc) deve superare strettamente versionCode=$MustExceedVersionCode per evitare downgrade/uninstall."
+        }
+        return @{
+            Valid = $true
+            PackageName = $rescuePkg
+            VersionCode = $rescueVc
+            SignerSha256 = $rescueFp
+        }
+    } finally {
+        $ErrorActionPreference = $previousEap
+    }
+}
+
+function Invoke-ConservativeRollbackApkInstall {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$BackupApkPath,
+        [string]$RescueApkPath = $null,
+        [long]$MustExceedVersionCode = 0,
+        [string]$ExpectedSignerSha256 = $null
+    )
+    if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) {
+        $effectiveMin = $MustExceedVersionCode
+        $prevEapDump = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $dumpsysOut = (& $AdbExe -s $TargetAdb shell "dumpsys package $PackageName" 2>&1 | Out-String)
+            if ($LASTEXITCODE -eq 0 -and $dumpsysOut -match "(?m)^\s*versionCode=([0-9]+)\b") {
+                $curVc = [long]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture)
+                if ($curVc -gt $effectiveMin) { $effectiveMin = $curVc }
+            }
+        } finally {
+            $ErrorActionPreference = $prevEapDump
+        }
+        $rescueMeta = Test-RescueApkCompatibility -RescueApkPath $RescueApkPath -PackageName $PackageName -MustExceedVersionCode $effectiveMin -ExpectedSignerSha256 $ExpectedSignerSha256
+        Write-Host "[ROLLBACK CONSERVATIVO] Reinstallazione in-place A2 Rescue v$($rescueMeta.VersionCode) (adb install -r, zero downgrade -d, zero uninstall)..." -ForegroundColor Cyan
+        $rbRes = & $AdbExe -s $TargetAdb install -r $RescueApkPath
+        Write-Host "      Esito adb install rescue: $rbRes"
+        if ($LASTEXITCODE -ne 0 -or (($rbRes -join "`n") -notmatch "Success")) {
+            throw "ERRORE FAIL-CLOSED: Installazione in-place A2 Rescue fallita (exit=$LASTEXITCODE): $rbRes"
+        }
+        return @{
+            Mode = "IN_PLACE_RESCUE"
+            VersionCode = $rescueMeta.VersionCode
+            Output = ($rbRes -join "`n")
+        }
+    }
+
+    Write-Host "[ROLLBACK LEGACY] Tentativo adb install -r -d su APK precedente (senza uninstall)..." -ForegroundColor Yellow
+    $rbLegacy = & $AdbExe -s $TargetAdb install -r -d $BackupApkPath
+    Write-Host "      Esito adb install rollback: $rbLegacy"
+    $rbJoined = ($rbLegacy -join "`n")
+    if ($LASTEXITCODE -ne 0 -or ($rbJoined -notmatch "Success")) {
+        throw "ERRORE FAIL-CLOSED [DOWNGRADE NEGATO / UNINSTALL VIETATO PER PROTEZIONE ANDROIDKEYSTORE]: Reinstallazione rollback tramite 'adb install -r -d' fallita ($rbJoined). La disinstallazione rimuoverebbe le chiavi AES dell'app in AndroidKeyStore (AKAI_AI_CREDENTIALS_VAULT). Fornire un APK A2 Rescue con -RescueApkPath e versionCode superiore a quello installato."
+    }
+    return @{
+        Mode = "DOWNGRADE_D"
+        Output = $rbJoined
+    }
+}
+
+function Test-DeviceKeystoreCredentialHealth {
+    param(
+        [string]$TargetTv,
+        [int]$HttpsPort = 8443,
+        [string]$AuthToken = $null,
+        [switch]$FailOnUnreachable = $false
+    )
+    if ([string]::IsNullOrWhiteSpace($AuthToken)) {
+        return @{
+            Checked = $false
+            Status = "UNVERIFIED_NO_TOKEN"
+        }
+    }
+    $cfgUrl = "https://$($TargetTv):$HttpsPort/api/ai/config"
+    $headers = @{ "Authorization" = "Bearer $AuthToken" }
+    $cfg = $null
+    try {
+        $cfg = Invoke-RestMethod -Uri $cfgUrl -Method Get -Headers $headers -TimeoutSec 4 -ErrorAction Stop
+    } catch {
+        if ($FailOnUnreachable) {
+            throw
+        }
+        Write-Host "      [AVVISO] Probe HTTPS Keystore /api/ai/config non raggiungibile ($($_.Exception.Message)): verifica credenziali non conclusa." -ForegroundColor Yellow
+        return @{
+            Checked = $false
+            Status = "UNVERIFIED_UNREACHABLE"
+            Error = $_.Exception.Message
+        }
+    }
+    if ($cfg.undecryptable_stored_credentials -eq $true) {
+        throw "ERRORE FAIL-CLOSED [ANDROIDKEYSTORE CREDENZIALI NON DECIFRABILI]: L'alias AndroidKeyStore non decifra una o piu' credenziali AI salvate in SharedPreferences."
+    }
+    return @{
+        Checked = $true
+        Status = "HEALTHY"
+        KeystoreAliasPresent = [bool]$cfg.keystore_alias_present
+        AllStoredCredentialsDecryptable = [bool]$cfg.all_stored_credentials_decryptable
+    }
+}
+
+function Test-PackageUpgradeGate {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName,
+        [string]$CandidateApkPath,
+        [switch]$PreviousAbsentConfirmed = $false
+    )
+
+    # P0 pre-install audit: metadata MUST be independently parsed, never inferred from ZIP magic.
+    # A missing aapt, malformed APK, unknown installed version or ambiguous output blocks installation.
+    if (-not (Test-Path -LiteralPath $CandidateApkPath -PathType Leaf)) {
+        throw "ERRORE FAIL-CLOSED: APK candidato assente."
+    }
+    $aaptPath = Get-ResolvedAaptExecutable
 
     $previousEap = $ErrorActionPreference
     try {
@@ -1683,10 +1830,15 @@ function Backup-DeviceTlsIdentity {
     New-Item -ItemType Directory -Force -Path $sessionTlsDir | Out-Null
 
     $filesToBackup = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
+    $bakFileName = "server_keystore.p12.bak"
+    $bakPresent = $false
+    $bakExtracted = $false
     $ephemeralDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_tls_rx_$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force -Path $ephemeralDir | Out-Null
 
     $manifestFiles = @{}
+    $hasKeystoreBak = $false
+    $keystoreBakMeta = $null
     try {
         $probeKs = $null
         $unprivProbeSucceeded = $false
@@ -1720,24 +1872,43 @@ function Backup-DeviceTlsIdentity {
                     $needElevation += $f
                 }
             }
+            try {
+                $probeBak = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/$bakFileName" -Channel "any"
+                if ($probeBak -eq "EXISTS") {
+                    $bakPresent = $true
+                    $bakTemp = Join-Path $ephemeralDir $bakFileName
+                    $rxBak = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/$bakFileName" -LocalFilePath $bakTemp -MinBytes 512
+                    if (-not ($rxBak.Success -and (Test-Path $bakTemp) -and (Get-Item $bakTemp).Length -ge 512)) {
+                        $rxBak = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "su -c 'cat /data/data/$PackageName/files/$bakFileName'" -LocalFilePath $bakTemp -MinBytes 512
+                    }
+                    if ($rxBak.Success -and (Test-Path $bakTemp) -and (Get-Item $bakTemp).Length -ge 512) {
+                        $bakExtracted = $true
+                    } else {
+                        $needElevation += $bakFileName
+                    }
+                }
+            } catch {}
             if ($needElevation.Count -gt 0) {
                 $script:tlsBatchErr = $null
+                $script:bakElevGot = $false
                 try {
                     Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
                         foreach ($f in $needElevation) {
                             $rxTempPath = Join-Path $ephemeralDir $f
-                            $minB = if ($f -eq "server_keystore.p12") { 512 } else { 1 }
+                            $minB = if ($f -eq "server_keystore.p12" -or $f -eq $bakFileName) { 512 } else { 1 }
                             $rxElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$f" -LocalFilePath $rxTempPath -MinBytes $minB
                             if (-not ($rxElev.Success -and (Test-Path $rxTempPath) -and (Get-Item $rxTempPath).Length -ge $minB)) {
-                                $script:tlsBatchErr = "ERRORE FAIL-CLOSED (P1 Gate): Estrazione asset TLS obbligatorio ($f) fallita o dimensione insufficiente. Tutti i 5 file sono obbligatori su installazione TLS."
+                                $script:tlsBatchErr = "ERRORE FAIL-CLOSED (P1 Gate): Estrazione asset TLS obbligatorio ($f) fallita o dimensione insufficiente. Tutti gli asset TLS presenti sono obbligatori."
                                 break
                             }
+                            if ($f -eq $bakFileName) { $script:bakElevGot = $true }
                         }
                     }
                 } catch {
                     if ($_.Exception.Message -match "STATO ADBD UNKNOWN") { throw }
                     $script:tlsBatchErr = "ERRORE FAIL-CLOSED (P1 Gate): Estrazione asset TLS obbligatorio ($($needElevation[0])) fallita o dimensione insufficiente ($($_.Exception.Message)). Tutti i 5 file sono obbligatori su installazione TLS."
                 }
+                if ($script:bakElevGot) { $bakExtracted = $true; $script:bakElevGot = $false }
                 if ($script:tlsBatchErr) {
                     $errToThrow = $script:tlsBatchErr
                     $script:tlsBatchErr = $null
@@ -1745,9 +1916,11 @@ function Backup-DeviceTlsIdentity {
                 }
             }
         } elseif (-not $unprivProbeSucceeded) {
-            # Unprivileged channels negati: singola sessione root adbd (1 root + 1 unroot) per probe + estrazione di tutti i 5 file
+            # Unprivileged channels negati: singola sessione root adbd (1 root + 1 unroot) per probe + estrazione di tutti i file TLS (.bak incluso se presente)
             $script:elevProbeKs = $null
             $script:tlsElevExtractErr = $null
+            $script:elevBakPresent = $false
+            $script:elevBakExtracted = $false
             Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
                 $script:elevProbeKs = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/server_keystore.p12" -Channel "root"
                 if ($script:elevProbeKs -eq "EXISTS") {
@@ -1760,12 +1933,29 @@ function Backup-DeviceTlsIdentity {
                             break
                         }
                     }
+                    if (-not $script:tlsElevExtractErr) {
+                        $probeBakRoot = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "files/$bakFileName" -Channel "root"
+                        if ($probeBakRoot -eq "EXISTS") {
+                            $script:elevBakPresent = $true
+                            $bakTempPath = Join-Path $ephemeralDir $bakFileName
+                            $rxBakElev = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$bakFileName" -LocalFilePath $bakTempPath -MinBytes 512
+                            if (-not ($rxBakElev.Success -and (Test-Path $bakTempPath) -and (Get-Item $bakTempPath).Length -ge 512)) {
+                                $script:tlsElevExtractErr = "ERRORE FAIL-CLOSED (P1 Gate): File $bakFileName presente sul dispositivo ma estrazione fallita sotto root."
+                            } else {
+                                $script:elevBakExtracted = $true
+                            }
+                        }
+                    }
                 }
             }
             if ($script:elevProbeKs) {
                 $probeKs = $script:elevProbeKs
                 $script:elevProbeKs = $null
             }
+            $bakPresent = [bool]$script:elevBakPresent
+            $bakExtracted = [bool]$script:elevBakExtracted
+            $script:elevBakPresent = $false
+            $script:elevBakExtracted = $false
             if ($probeKs -eq "NOT_FOUND") {
                 $script:tlsElevExtractErr = $null
                 Write-Host "      Snapshot identita' TLS: ASSENTE sul device (release legacy HTTP-only v5). Nessun backup TLS richiesto." -ForegroundColor Green
@@ -1836,6 +2026,34 @@ function Backup-DeviceTlsIdentity {
                 Mechanism = $protectRes.Mechanism
             }
         }
+
+        if ($bakPresent -and $bakExtracted) {
+            $bakTemp = Join-Path $ephemeralDir $bakFileName
+            $bakBytes = [System.IO.File]::ReadAllBytes($bakTemp)
+            $bakHash = Get-Sha256Hex $bakTemp
+            $bakLen = $bakBytes.Length
+            $bakProt = Protect-TlsData -PlainBytes $bakBytes -VaultDir $vaultDir
+            [System.IO.File]::WriteAllBytes((Join-Path $vaultDir "$bakFileName.enc"), $bakProt.CipherBytes)
+            $zeroBak = New-Object byte[] $bakLen
+            [System.IO.File]::WriteAllBytes($bakTemp, $zeroBak)
+            Remove-Item $bakTemp -Force -ErrorAction SilentlyContinue
+
+            $bakUnp = Unprotect-TlsData -CipherBytes $bakProt.CipherBytes -Mechanism $bakProt.Mechanism -VaultDir $vaultDir
+            $shaBak = [System.Security.Cryptography.SHA256]::Create()
+            $bakDecHash = -join ($shaBak.ComputeHash($bakUnp) | ForEach-Object { "{0:x2}" -f $_ })
+            if ($bakDecHash -ne $bakHash) {
+                throw "ERRORE FAIL-CLOSED: Verifica roundtrip decifratura fallita per $bakFileName."
+            }
+            $bakCipherHash = -join ($shaBak.ComputeHash($bakProt.CipherBytes) | ForEach-Object { "{0:x2}" -f $_ })
+            $hasKeystoreBak = $true
+            $keystoreBakMeta = @{
+                Sha256 = $bakHash
+                SizeBytes = $bakLen
+                Encrypted = $true
+                CipherSha256 = $bakCipherHash
+                Mechanism = $bakProt.Mechanism
+            }
+        }
     } finally {
         Clear-EphemeralPlaintextDir -EphemeralDir $ephemeralDir
     }
@@ -1849,6 +2067,10 @@ function Backup-DeviceTlsIdentity {
         Files = $manifestFiles
         KeystoreSha256 = $manifestFiles["server_keystore.p12"].Sha256
         KeystoreBytes = $manifestFiles["server_keystore.p12"].SizeBytes
+        HasKeystoreBak = $hasKeystoreBak
+    }
+    if ($hasKeystoreBak -and $keystoreBakMeta) {
+        $manifest["KeystoreBak"] = $keystoreBakMeta
     }
     $manifestJson = $manifest | ConvertTo-Json -Depth 5
     [System.IO.File]::WriteAllText((Join-Path $sessionTlsDir "tls_manifest.json"), $manifestJson, [System.Text.Encoding]::UTF8)
@@ -1907,23 +2129,34 @@ function Restore-DeviceTlsIdentity {
 
     $filesToRestore = @("server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der")
     $manifestFilesProp = $manifest.Files
-    $decryptedPayloads = @{}
-
-    # 1. Decifratura in RAM, parita' hash pre-invio e invio unprivileged (run-as / su) o batch root
-    $needElevSend = @()
+    $hasBak = ($manifest.HasKeystoreBak -eq $true -and $null -ne $manifest.KeystoreBak)
+    $targetMetaMap = [ordered]@{}
     foreach ($fName in $filesToRestore) {
         $fileMeta = $manifestFilesProp.$fName
         if (-not $fileMeta) {
             throw "ERRORE FAIL-CLOSED: File obbligatorio $fName assente nel manifesto di rollback."
         }
+        $targetMetaMap[$fName] = $fileMeta
+    }
+    if ($hasBak) {
+        $targetMetaMap["server_keystore.p12.bak"] = $manifest.KeystoreBak
+    }
+    $decryptedPayloads = @{}
 
+    # 1. Decifratura in RAM, parita' hash pre-invio e invio unprivileged (run-as / su) o batch root
+    $needElevSend = @()
+    foreach ($fName in $targetMetaMap.Keys) {
+        $fileMeta = $targetMetaMap[$fName]
         $encPath = Join-Path $vaultDir "$fName.enc"
         $decryptedBytes = $null
         if (-not (Test-Path $encPath)) {
-            $legacyPlain = Join-Path $vaultDir $fName
-            if (Test-Path $legacyPlain) {
-                $decryptedBytes = [System.IO.File]::ReadAllBytes($legacyPlain)
-            } else {
+            if ($fName -ne "server_keystore.p12.bak") {
+                $legacyPlain = Join-Path $vaultDir $fName
+                if (Test-Path $legacyPlain) {
+                    $decryptedBytes = [System.IO.File]::ReadAllBytes($legacyPlain)
+                }
+            }
+            if ($null -eq $decryptedBytes) {
                 throw "ERRORE FAIL-CLOSED: File cifrato $fName.enc assente nel vault crittografico: $vaultDir"
             }
         } else {
@@ -1975,15 +2208,15 @@ function Restore-DeviceTlsIdentity {
         }
     }
 
-    # 2. REQUISITO P1-2: Verifica di parita' hash SHA-256 su TUTTI e 5 i file post-ripristino dal device
+    # 2. REQUISITO P1-2: Verifica di parita' hash SHA-256 su tutti i file TLS post-ripristino dal device
     $verifyDir = Join-Path ([System.IO.Path]::GetTempPath()) "akai_verify_restore_$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force -Path $verifyDir | Out-Null
 
     try {
         $needElevRead = @()
-        foreach ($fName in $filesToRestore) {
+        foreach ($fName in $targetMetaMap.Keys) {
             $verifyFilePath = Join-Path $verifyDir $fName
-            $minB = if ($fName -eq "server_keystore.p12") { 512 } else { 1 }
+            $minB = if ($fName -eq "server_keystore.p12" -or $fName -eq "server_keystore.p12.bak") { 512 } else { 1 }
 
             $rx = Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "run-as $PackageName cat files/$fName" -LocalFilePath $verifyFilePath -MinBytes $minB
             if (-not $rx.Success) {
@@ -1998,16 +2231,16 @@ function Restore-DeviceTlsIdentity {
             Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
                 foreach ($fName in $needElevRead) {
                     $verifyFilePath = Join-Path $verifyDir $fName
-                    $minB = if ($fName -eq "server_keystore.p12") { 512 } else { 1 }
+                    $minB = if ($fName -eq "server_keystore.p12" -or $fName -eq "server_keystore.p12.bak") { 512 } else { 1 }
                     [void](Receive-FileViaAdbExecOut -AdbExe $AdbExe -TargetAdb $TargetAdb -RemoteCommand "cat /data/data/$PackageName/files/$fName" -LocalFilePath $verifyFilePath -MinBytes $minB)
                 }
             }
         }
 
-        foreach ($fName in $filesToRestore) {
-            $expectedHash = $manifestFilesProp.$fName.Sha256
+        foreach ($fName in $targetMetaMap.Keys) {
+            $expectedHash = $targetMetaMap[$fName].Sha256
             $verifyFilePath = Join-Path $verifyDir $fName
-            $minB = if ($fName -eq "server_keystore.p12") { 512 } else { 1 }
+            $minB = if ($fName -eq "server_keystore.p12" -or $fName -eq "server_keystore.p12.bak") { 512 } else { 1 }
             if (-not (Test-Path $verifyFilePath) -or (Get-Item $verifyFilePath).Length -lt $minB) {
                 throw "ERRORE FAIL-CLOSED: Impossibile rileggere $fName ripristinato sul dispositivo per verifica integrita'."
             }
@@ -2022,8 +2255,12 @@ function Restore-DeviceTlsIdentity {
     }
 
     $ksHash = $manifestFilesProp."server_keystore.p12".Sha256
-    Write-Host "      Parita' hash SHA-256 verificata con successo per TUTTI i 5 file TLS post-rollback (keystore SHA-256: $ksHash)." -ForegroundColor Green
-    return @{ Restored = $true; KeystoreSha256 = $ksHash; All5FilesVerified = $true }
+    if ($hasBak) {
+        Write-Host "      Parita' hash SHA-256 verificata con successo per TUTTI i 6 file TLS (+ .p12.bak) post-rollback (keystore SHA-256: $ksHash)." -ForegroundColor Green
+    } else {
+        Write-Host "      Parita' hash SHA-256 verificata con successo per TUTTI i 5 file TLS post-rollback (keystore SHA-256: $ksHash)." -ForegroundColor Green
+    }
+    return @{ Restored = $true; KeystoreSha256 = $ksHash; All5FilesVerified = $true; KeystoreBakRestored = $hasBak }
 }
 
 function Backup-DevicePairingSessions {
@@ -2403,7 +2640,7 @@ function Assert-BackupSessionNoPlaintextSecrets {
     $fullSession = [System.IO.Path]::GetFullPath($SessionDir)
 
     $forbiddenPlainNames = @(
-        "server_keystore.p12", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der",
+        "server_keystore.p12", "server_keystore.p12.bak", "server_keystore.pass", "ca.pem", "ca.crt", "ca_key.der",
         "akai_remote_sessions.xml", "akai_ai_security_prefs.xml", "akai_ai_secure_prefs.xml",
         "jarvis_free_voice_v1.xml", "jarvis_ota_result.xml", ".vault_master.key"
     )
@@ -2445,7 +2682,7 @@ function Assert-BackupSessionNoPlaintextSecrets {
                     throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: File sensibile in chiaro rilevato su disco: $($item.FullName)"
                 }
             }
-            if ($n -match "(?i)\.(p12|jks|keystore|key|der|pass|pem)$" -and $n -notmatch "\.enc$") {
+            if ($n -match "(?i)\.(p12|jks|keystore|key|der|pass|pem|bak)$" -and $n -notmatch "\.enc$") {
                 if ($isWin -or $n -ne ".vault_master.key") {
                     throw "ERRORE FAIL-CLOSED [CREDENZIALI FUORI VAULT]: Materiale crittografico non cifrato rilevato: $($item.FullName)"
                 }
@@ -3108,6 +3345,10 @@ switch ($Action) {
         if ($upgradeGate.CandidateVersionCode) {
             Write-Host "      Gate pacchetto verificato (target=$PackageName, installedVC=$($upgradeGate.InstalledVersionCode), candidateVC=$($upgradeGate.CandidateVersionCode))." -ForegroundColor Green
         }
+        if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) {
+            $rescueCompat = Test-RescueApkCompatibility -RescueApkPath $RescueApkPath -PackageName $PackageName -MustExceedVersionCode $upgradeGate.CandidateVersionCode -ExpectedSignerSha256 $(if ($hasPrevious) { $backupFp } else { $null })
+            Write-Host "      Gate A2 Rescue verificato (rescueVC=$($rescueCompat.VersionCode) > candidateVC=$($upgradeGate.CandidateVersionCode), zero-uninstall pronto)." -ForegroundColor Green
+        }
         Write-Host "[4/6] Installazione nuovo APK (adb install -r)..."
         $installRes = & $adb -s $TargetAdb install -r $ApkPath
         Write-Host "      Esito adb: $installRes"
@@ -3238,12 +3479,11 @@ switch ($Action) {
                     throw "ERRORE FAIL-CLOSED FATALE: Hash SHA-256 del backup SQLite v5 assente. Impossibile garantire integrita' bit-for-bit del ripristino."
                 }
 
-                Write-Host "[ROLLBACK 1/4] Reinstallazione APK precedente (adb install -r -d)..."
-                $rbRes = & $adb -s $TargetAdb install -r -d $backupApk
-                Write-Host "      Esito adb install rollback: $rbRes"
-                if ($LASTEXITCODE -ne 0 -or (($rbRes -join "`n") -notmatch "Success")) {
-                    throw "FATALE: Reinstallazione rollback APK fallita!"
-                }
+                $expectedRescueSigner = if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) { $backupFp } else { $null }
+                $expectedMinRescueVc = if ($upgradeGate -and $upgradeGate.CandidateVersionCode) { [long]$upgradeGate.CandidateVersionCode } else { 0 }
+                Write-Host "[ROLLBACK 1/4] Reinstallazione APK precedente (modalita' conservativa zero-uninstall)..."
+                $rbApkResult = Invoke-ConservativeRollbackApkInstall -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -BackupApkPath $backupApk -RescueApkPath $RescueApkPath -MustExceedVersionCode $expectedMinRescueVc -ExpectedSignerSha256 $expectedRescueSigner
+                Write-Host "      Esito rollback APK ($($rbApkResult.Mode)): OK"
 
                 Write-Host "[ROLLBACK 2/4] Ripristino database SQLite originale..."
                 # 1. Arresto forzato dell'app per rilasciare lock sul file
@@ -3353,6 +3593,9 @@ $chownTarget = "${appUid}:${appUid}"
                 }
 
                 if ($rbHealthy) {
+                    if (-not [string]::IsNullOrWhiteSpace($AuthToken)) {
+                        Test-DeviceKeystoreCredentialHealth -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken | Out-Null
+                    }
                     Write-Host "ROLLBACK RIUSCITO E VERIFICATO: Sistema TV tornato operativo al 100% sulla versione precedente." -ForegroundColor Green
                 } else {
                     Write-Host "ALLARME POST-ROLLBACK: Health check post-rollback fallito - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red
@@ -3390,12 +3633,10 @@ $chownTarget = "${appUid}:${appUid}"
         Verify-SQLiteIntegrityOffline $backupDb | Out-Null
         $backupDbHash = Get-Sha256Hex $backupDb
 
-        Write-Host "[1/4] Reinstallazione APK precedente da sessione: $($latestSession.Name)..."
-        $res = & $adb -s $TargetAdb install -r -d $backupApk
-        Write-Host "      Esito adb: $res"
-        if ($LASTEXITCODE -ne 0 -or $res -notmatch "Success") {
-            throw "ERRORE FAIL-CLOSED: Rollback fallito: adb non e' riuscito a reinstallare l'APK ($res)"
-        }
+        $expectedRollbackSigner = if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) { Get-ApkCertificateFingerprint $backupApk } else { $null }
+        Write-Host "[1/4] Reinstallazione APK precedente da sessione: $($latestSession.Name) (modalita' conservativa zero-uninstall)..."
+        $rbManualApkResult = Invoke-ConservativeRollbackApkInstall -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -BackupApkPath $backupApk -RescueApkPath $RescueApkPath -ExpectedSignerSha256 $expectedRollbackSigner
+        Write-Host "      Esito rollback APK ($($rbManualApkResult.Mode)): OK"
 
         Write-Host "[2/4] Ripristino database SQLite originale..."
         & $adb -s $TargetAdb shell "am force-stop $PackageName" | Out-Null
@@ -3501,6 +3742,9 @@ $chownTarget = "${appUid}:${appUid}"
             }
         }
         if ($rbHealthy) {
+            if (-not [string]::IsNullOrWhiteSpace($AuthToken)) {
+                Test-DeviceKeystoreCredentialHealth -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken | Out-Null
+            }
             Write-Host "Rollback manuale completato e verificato con successo: TV operativa!" -ForegroundColor Green
         } else {
             Write-Host "ALLARME POST-ROLLBACK: Endpoint status non raggiungibile o non operativo - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red
