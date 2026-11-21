@@ -68,14 +68,21 @@ jobs:
         run: |
           node --check scripts/13_create_ota_release_trust.mjs
           node --check scripts/14_sign_ota_release_manifest.mjs
+          node --check scripts/18_prepare_ota_staging.mjs
           node --check scripts/lib/ota_release_apk_proof.mjs
           node akai-remote-tests/test_ota_release_apk_proof.mjs
+          node akai-remote-tests/test_ota_staging_channel.mjs
           # Never execute owner-offline cryptographic key generation in Actions.
           grep -q 'process.env.CI' scripts/13_create_ota_release_trust.mjs
           grep -q 'process.env.CI' scripts/14_sign_ota_release_manifest.mjs
+          grep -q 'process.env.CI' scripts/18_prepare_ota_staging.mjs
           grep -q 'aes-256-cbc' scripts/13_create_ota_release_trust.mjs
+          grep -q 'aes-256-cbc' scripts/18_prepare_ota_staging.mjs
+          grep -q 'AkaiJarvisOtaStagingTrust' scripts/18_prepare_ota_staging.mjs
+          grep -q 'STAGING_ONLY_DO_NOT_PUBLISH_PUBLICLY' scripts/18_prepare_ota_staging.mjs
+          ! grep -q 'AkaiJarvisOtaReleaseTrust' scripts/18_prepare_ota_staging.mjs
           grep -q 'proveActualOwnerSignedApk' scripts/14_sign_ota_release_manifest.mjs
-          echo 'Offline key tooling parses; actual APK signature and manifest evidence parsers tested, no production key generated in CI.'
+          echo 'Offline key & isolated staging tooling parse; actual APK signature, staging isolation and manifest evidence tested, no production key generated in CI.'
 
       - name: 1b. Parse and safety-audit Windows A1 candidate build script
         shell: pwsh
@@ -181,7 +188,8 @@ jobs:
             'scripts/15_build_jarvis_a2_rescue.ps1',
             'scripts/16_export_portable_recovery_bundle.ps1',
             'scripts/17_check_ota_provisioning_readiness.ps1',
-            'akai-remote-tests/test_portable_recovery_bundle.ps1'
+            'akai-remote-tests/test_portable_recovery_bundle.ps1',
+            'akai-remote-tests/test_a2_rescue_builder_gates.ps1'
           )) {
             $path = Join-Path $PWD $rel
             $tokens = $null
@@ -587,7 +595,7 @@ jobs:
           fi
           echo "MANDATORY APK COMPONENTS VERIFIED: DEX, Android ARMv7 SO, Web, no embedded TLS secrets."
 
-      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (42 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, .p12.bak, In-Place Rescue Zero-Uninstall, Keystore Health Probe)"
+      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (43 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, .p12.bak, In-Place Rescue Zero-Uninstall, Strict Keystore Health & Dumpsys/Hash Rollback Gates)"
         shell: pwsh
         run: |
           ./akai-remote-tests/test_safe_install_mocked_adb.ps1
@@ -596,3 +604,8 @@ jobs:
         shell: pwsh
         run: |
           ./akai-remote-tests/test_portable_recovery_bundle.ps1
+
+      - name: "8c. A2 Rescue Builder Fail-Closed Provenance & Path Gates"
+        shell: pwsh
+        run: |
+          ./akai-remote-tests/test_a2_rescue_builder_gates.ps1

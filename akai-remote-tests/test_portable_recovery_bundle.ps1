@@ -267,6 +267,56 @@ c.close()
     } else {
         throw "Guardie percorso non scattate: repo='$($repoRes.Output)' cloud='$($cloudRes.Output)'"
     }
+
+    # Test 6: Real NTFS Junction (Windows) / Symlink (Linux) traversal into repo or OneDrive MUST be blocked
+    $repoExistingSub = Join-Path $repoRoot "akai-remote-tests"
+    $oneDriveRealTarget = Join-Path $workRoot "OneDrive"
+    $oneDriveExistingSub = Join-Path $oneDriveRealTarget "sub_exists"
+    New-Item -ItemType Directory -Force -Path $oneDriveExistingSub | Out-Null
+    $juncToRepoParent = Join-Path $workRoot "junc_to_repo"
+    $juncToCloudParent = Join-Path $workRoot "junc_to_cloud"
+    $createdLinks = @()
+    try {
+        if ($isWin) {
+            & cmd.exe /c mklink /J "`"$juncToRepoParent`"" "`"$repoRoot`"" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "mklink /J repo failed" }
+            $createdLinks += $juncToRepoParent
+            & cmd.exe /c mklink /J "`"$juncToCloudParent`"" "`"$oneDriveRealTarget`"" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "mklink /J cloud failed" }
+            $createdLinks += $juncToCloudParent
+        } else {
+            & ln -s $repoRoot $juncToRepoParent
+            if ($LASTEXITCODE -ne 0) { throw "ln -s repo failed" }
+            $createdLinks += $juncToRepoParent
+            & ln -s $oneDriveRealTarget $juncToCloudParent
+            if ($LASTEXITCODE -ne 0) { throw "ln -s cloud failed" }
+            $createdLinks += $juncToCloudParent
+        }
+
+        $repoViaJuncOut = Join-Path $juncToRepoParent "akai-remote-tests\forbidden_via_junction.akv.json"
+        $cloudViaJuncOut = Join-Path $juncToCloudParent "sub_exists\forbidden_via_cloud_junc.akv.json"
+        $jRepoRes = Invoke-Script16 @("-Action", "export", "-BackupSessionDir", $sessionDir, "-OutputBundlePath", $repoViaJuncOut)
+        $jCloudRes = Invoke-Script16 @("-Action", "export", "-BackupSessionDir", $sessionDir, "-OutputBundlePath", $cloudViaJuncOut)
+        $jVerifyRes = Invoke-Script16 @("-Action", "verify-restore-offline", "-BundlePath", $bundlePath, "-VerificationTempRoot", (Join-Path $juncToCloudParent "sub_exists"))
+
+        $j6Ok = ($jRepoRes.ExitCode -ne 0 -and $jRepoRes.Normalized -match "dentro il repository Git vietato") -and
+                ($jCloudRes.ExitCode -ne 0 -and ($jCloudRes.Normalized -match "cloud-sync vietato|Reparse point")) -and
+                ($jVerifyRes.ExitCode -ne 0 -and ($jVerifyRes.Normalized -match "cloud-sync vietato|Reparse point")) -and
+                (-not (Test-Path -LiteralPath (Join-Path $repoExistingSub "forbidden_via_junction.akv.json")))
+        if ($j6Ok) {
+            Write-Host "[PASS] Bundle Test 6: NTFS Junction / symlink con sottodirectory esistenti verso repo o cloud-sync bloccati" -ForegroundColor Green
+            $passed++
+        } else {
+            throw "Junction guard failed: repo='$($jRepoRes.Normalized)' cloud='$($jCloudRes.Normalized)' verify='$($jVerifyRes.Normalized)'"
+        }
+    } finally {
+        # Rimozione sicura dei link SENZA ricorsione dentro il target (repo)
+        foreach ($lnk in $createdLinks) {
+            if (Test-Path -LiteralPath $lnk) {
+                if ($isWin) { [IO.Directory]::Delete($lnk, $false) } else { Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    }
 } catch {
     Write-Host "[FAIL] Errore test portable recovery bundle: $($_.Exception.Message)" -ForegroundColor Red
     $failed++
@@ -277,5 +327,5 @@ c.close()
 }
 
 Write-Host "ESITO PORTABLE RECOVERY BUNDLE TESTS: PASS=$passed FAIL=$failed"
-if ($failed -gt 0 -or $passed -ne 5) { exit 1 }
+if ($failed -gt 0 -or $passed -ne 6) { exit 1 }
 exit 0

@@ -6190,9 +6190,25 @@ try { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $clos
 `$script:mockMode42d = 'healthy'
 function Invoke-RestMethod {
     if (`$script:mockMode42d -eq 'healthy') {
-        return [pscustomobject]@{ keystore_alias_present = `$true; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+        return [pscustomobject]@{
+            keystore_alias_present = `$true
+            deepseek_ciphertext_present = `$true
+            deepseek_decryptable = `$true
+            kimi_ciphertext_present = `$false
+            kimi_decryptable = `$false
+            undecryptable_stored_credentials = `$false
+            all_stored_credentials_decryptable = `$true
+        }
     }
-    return [pscustomobject]@{ keystore_alias_present = `$false; undecryptable_stored_credentials = `$true; all_stored_credentials_decryptable = `$false }
+    return [pscustomobject]@{
+        keystore_alias_present = `$false
+        deepseek_ciphertext_present = `$true
+        deepseek_decryptable = `$false
+        kimi_ciphertext_present = `$false
+        kimi_decryptable = `$false
+        undecryptable_stored_credentials = `$true
+        all_stored_credentials_decryptable = `$false
+    }
 }
 `$r3 = Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort42d -AuthToken 'dummy_tok'
 `$script:mockMode42d = 'undecryptable'
@@ -6223,6 +6239,322 @@ Write-Output (@{ R1 = `$r1.Status; R2 = `$r2.Status; Strict = `$strictErr; R3 = 
 } finally {
     if ($httpProc42 -and -not $httpProc42.HasExited) { Stop-Process -Id $httpProc42.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item $testDir42 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ------------------------------------------------------------------------------
+# TEST 43: FAIL-CLOSED KEYSTORE HEALTH SCHEMA/COHERENCE & ROLLBACK DUMPSYS/HASH GATES (PR #18 REVIEW)
+# ------------------------------------------------------------------------------
+Write-Host "`n--- Esecuzione Test 43: Regressione Strict Keystore Health & Fail-Closed Rollback Dumpsys/Hash ---"
+$testDir43 = Join-Path ([System.IO.Path]::GetTempPath()) "jarvis_test43_$(Get-Random)"
+New-Item -ItemType Directory -Force -Path $testDir43 | Out-Null
+try {
+    $isWin43 = ($env:OS -eq 'Windows_NT') -or (-not (Get-Variable -Name IsLinux -ErrorAction SilentlyContinue)) -or (-not $IsLinux)
+    $subPassed43 = 0
+    $closedPort43 = Get-FreeLoopbackPort
+    $scriptEsc43 = $scriptPath.Replace('\', '/')
+
+    function Invoke-SubPs43([string]$ScriptBlockText) {
+        $subPath43 = Join-Path $testDir43 ("sub43_" + [Guid]::NewGuid().ToString("N") + ".ps1")
+        [System.IO.File]::WriteAllText($subPath43, $ScriptBlockText, [System.Text.UTF8Encoding]::new($false))
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            return (& $psExe -NoProfile -ExecutionPolicy Bypass -File $subPath43 2>&1 | Out-String)
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
+    }
+
+    # 43a: Test-DeviceKeystoreCredentialHealth non deve mai restituire HEALTHY su payload v4 parziali/malformati/incoerenti/legacy
+    $cmd43a = @"
+. '$scriptEsc43' -Action plan | Out-Null
+`$script:mockCfg43a = `$null
+function Invoke-RestMethod { return `$script:mockCfg43a }
+
+function Test-MustThrow43a([string]`$Name, [string]`$ExpectedRegex, [scriptblock]`$Block) {
+    try {
+        `$res = & `$Block
+        return "`$Name`:THREW_NOTHING(Status=`$(`$res.Status))"
+    } catch {
+        `$msg = `$_.Exception.Message
+        if (`$msg -match `$ExpectedRegex) { return "OK" }
+        return "`$Name`:WRONG_MSG(`$msg)"
+    }
+}
+
+`$failures = New-Object System.Collections.Generic.List[string]
+
+# 1. Partial v4 fields (3 campi invece di 7)
+`$script:mockCfg43a = [pscustomobject]@{ keystore_alias_present = `$true; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+`$r = Test-MustThrow43a 'partialV4' 'SCHEMA INCOMPLETO' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+# 2. Non-boolean string / null booleans
+`$script:mockCfg43a = [pscustomobject]@{ keystore_alias_present = 'true'; deepseek_ciphertext_present = `$true; deepseek_decryptable = `$true; kimi_ciphertext_present = `$false; kimi_decryptable = `$false; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+`$r = Test-MustThrow43a 'stringBool' 'SCHEMA NON VALIDO' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$script:mockCfg43a = [pscustomobject]@{ keystore_alias_present = `$true; deepseek_ciphertext_present = `$true; deepseek_decryptable = `$null; kimi_ciphertext_present = `$false; kimi_decryptable = `$false; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+`$r = Test-MustThrow43a 'nullBool' 'SCHEMA NON VALIDO' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+# 3. Incoherent booleans: decryptable=true con alias=false e agg/singoli incoerenti
+`$script:mockCfg43a = [pscustomobject]@{ keystore_alias_present = `$false; deepseek_ciphertext_present = `$true; deepseek_decryptable = `$true; kimi_ciphertext_present = `$false; kimi_decryptable = `$false; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+`$r = Test-MustThrow43a 'incoherentAlias' 'SCHEMA INCOERENTE' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$script:mockCfg43a = [pscustomobject]@{ keystore_alias_present = `$true; deepseek_ciphertext_present = `$true; deepseek_decryptable = `$false; kimi_ciphertext_present = `$false; kimi_decryptable = `$false; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+`$r = Test-MustThrow43a 'incoherentAgg' 'SCHEMA INCOERENTE' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+# 4. Missing expected stored ciphertext & undecryptable v4
+`$script:mockCfg43a = [pscustomobject]@{ keystore_alias_present = `$true; deepseek_ciphertext_present = `$false; deepseek_decryptable = `$false; kimi_ciphertext_present = `$false; kimi_decryptable = `$false; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+`$r = Test-MustThrow43a 'missingStoredDs' 'CREDENZIALI MANCANTI' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' -ExpectDeepSeekStored `$true }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$script:mockCfg43a = [pscustomobject]@{ keystore_alias_present = `$true; deepseek_ciphertext_present = `$true; deepseek_decryptable = `$false; kimi_ciphertext_present = `$false; kimi_decryptable = `$false; undecryptable_stored_credentials = `$true; all_stored_credentials_decryptable = `$false }
+`$r = Test-MustThrow43a 'undecryptableV4' 'ANDROIDKEYSTORE CREDENZIALI NON DECIFRABILI' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+# 5. Empty / generic payload without v4 or legacy contract
+`$script:mockCfg43a = [pscustomobject]@{ status = 'ok' }
+`$r = Test-MustThrow43a 'emptyContract' 'SCHEMA ASSENTE' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+# 6. Legacy A2 response: mai HEALTHY, RequireVerifiedHealthy richiede AllowLegacyRescueProbe + decrypt confermata
+`$script:mockCfg43a = [pscustomobject]@{ has_deepseek_key = `$true; has_kimi_key = `$false; keystore_available = `$true }
+`$leg1 = Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok'
+if (`$leg1.Status -ne 'LEGACY_LIMITED' -or `$leg1.Schema -ne 'legacy_a2' -or `$leg1.Verified -ne `$false) {
+    `$failures.Add("legacy1Bad:`$(`$leg1.Status)/`$(`$leg1.Verified)")
+}
+`$r = Test-MustThrow43a 'legacyStrictNoRescue' 'LEGACY INSUFFICIENTE' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' -RequireVerifiedHealthy }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$legStrictOk = Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' -RequireVerifiedHealthy -AllowLegacyRescueProbe -ExpectDeepSeekStored `$true
+if (`$legStrictOk.Status -ne 'LEGACY_LIMITED' -or `$legStrictOk.Verified -ne `$true) {
+    `$failures.Add("legacyStrictOkBad:`$(`$legStrictOk.Status)/`$(`$legStrictOk.Verified)")
+}
+
+`$script:mockCfg43a = [pscustomobject]@{ has_deepseek_key = `$false; has_kimi_key = `$false; keystore_available = `$true }
+`$r = Test-MustThrow43a 'legacyDecryptFail' 'NON DECIFRABILI SU ENDPOINT LEGACY' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' -ExpectDeepSeekStored `$true }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+# 7. RequireVerifiedHealthy with empty token and unreachable endpoint
+`$r = Test-MustThrow43a 'strictNoToken' 'KEYSTORE HEALTH NON VERIFICATO' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -RequireVerifiedHealthy }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+Remove-Item Function:\Invoke-RestMethod -ErrorAction SilentlyContinue
+`$r = Test-MustThrow43a 'strictUnreach' '.' { Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' -RequireVerifiedHealthy }
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+# 8. Full 7-field coherent v4 -> HEALTHY
+function Invoke-RestMethod {
+    return [pscustomobject]@{ keystore_alias_present = `$true; deepseek_ciphertext_present = `$true; deepseek_decryptable = `$true; kimi_ciphertext_present = `$false; kimi_decryptable = `$false; undecryptable_stored_credentials = `$false; all_stored_credentials_decryptable = `$true }
+}
+`$okV4 = Test-DeviceKeystoreCredentialHealth -TargetTv '127.0.0.1' -HttpsPort $closedPort43 -AuthToken 'tok' -RequireVerifiedHealthy -ExpectDeepSeekStored `$true
+if (`$okV4.Status -ne 'HEALTHY' -or `$okV4.Schema -ne 'v4' -or `$okV4.Verified -ne `$true) {
+    `$failures.Add("fullV4Bad:`$(`$okV4.Status)/`$(`$okV4.Verified)")
+}
+
+Write-Output (@{ FailureCount = `$failures.Count; Failures = `$failures } | ConvertTo-Json -Compress)
+"@
+    $out43a = Invoke-SubPs43 $cmd43a
+    $json43aLine = ($out43a -split "\r?\n" | Where-Object { $_ -match '^\{' } | Select-Object -Last 1)
+    $res43a = if ($json43aLine) { $json43aLine | ConvertFrom-Json } else { $null }
+    if ($res43a -and $res43a.FailureCount -eq 0) {
+        $subPassed43++
+        Write-Host "   [PASS] Sotto-test 43a: Test-DeviceKeystoreCredentialHealth rifiuta schema parziali/null/incoerenti/legacy senza falsi HEALTHY" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 43a: out='$out43a'" -ForegroundColor Red
+    }
+
+    # 43b: Invoke-ConservativeRollbackApkInstall & -Action rollback fail-closed su dumpsys fallito/assente/ambiguo, hash lock e divieto -d su hardware
+    $devApk43 = Join-Path $testDir43 "device_v4.apk"
+    $rescueApk43 = Join-Path $testDir43 "rescue_v5.apk"
+    New-TestApkArchive $devApk43 @("classes.dex", "AndroidManifest.xml", "assets/www/index.html")
+    New-TestApkArchive $rescueApk43 @("classes.dex", "AndroidManifest.xml", "assets/www/index.html")
+    $rescueSha43 = (Get-FileHash -Path $rescueApk43 -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    $sdkRoot43 = Join-Path $testDir43 "sdk43"
+    $bt43 = Join-Path $sdkRoot43 "build-tools\99.0.0"
+    New-Item -ItemType Directory -Force -Path $bt43 | Out-Null
+    $mockAapt43Js = Join-Path $sdkRoot43 "mock_aapt43.js"
+    @'
+const fs = require('fs');
+const path = require('path');
+const args = process.argv.slice(2);
+if (args.length !== 3 || args[0] !== 'dump' || args[1] !== 'badging' || !fs.existsSync(args[2])) process.exit(2);
+const b = path.basename(args[2]);
+console.log(b.includes('rescue_v5')
+    ? "package: name='it.akai.customremote' versionCode='5' versionName='1.2.0-a2-rescue-v5'"
+    : "package: name='it.akai.customremote' versionCode='4' versionName='1.3.0-v4'");
+'@ | Set-Content -LiteralPath $mockAapt43Js -Encoding UTF8
+    if ($isWin43) {
+        $aapt43Cmd = Join-Path $bt43 "aapt.cmd"
+        Set-Content -LiteralPath $aapt43Cmd -Value ("@echo off`n`"{0}`" `"{1}`" %*" -f $validNode, $mockAapt43Js) -Encoding ASCII
+    } else {
+        $aapt43Cmd = Join-Path $bt43 "aapt"
+        Set-Content -LiteralPath $aapt43Cmd -Value ("#!/bin/sh`nexec `"{0}`" `"{1}`" `"`$@`"" -f $validNode, $mockAapt43Js) -Encoding UTF8
+        & chmod +x $aapt43Cmd
+    }
+
+    $mockSigner43Js = Join-Path $testDir43 "mock_signer43.js"
+    @'
+console.log('Signer #1 certificate SHA-256 digest: aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb');
+process.exit(0);
+'@ | Set-Content -LiteralPath $mockSigner43Js -Encoding UTF8
+    $mockSigner43Cmd = if ($isWin43) { Join-Path $testDir43 "apksigner.cmd" } else { Join-Path $testDir43 "apksigner" }
+    if ($isWin43) {
+        "@echo off`n`"%NODE_EXE%`" `"$mockSigner43Js`" %*" | Out-File -FilePath $mockSigner43Cmd -Encoding ascii
+    } else {
+        "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockSigner43Js`" `"`$@`"" | Out-File -FilePath $mockSigner43Cmd -Encoding ascii
+        & chmod +x $mockSigner43Cmd
+    }
+
+    $dumpsysModeFile43 = Join-Path $testDir43 "dumpsys_mode.txt"
+    $adbLog43 = Join-Path $testDir43 "adb43.log"
+    $mockAdb43Js = Join-Path $testDir43 "mock_adb43.js"
+    $modeFile43Esc = $dumpsysModeFile43.Replace('\', '/')
+    $adbLog43Esc = $adbLog43.Replace('\', '/')
+    @"
+const fs = require('fs');
+const argv = process.argv.slice(2);
+const argStr = argv.join(' ');
+fs.appendFileSync('$adbLog43Esc', argStr + '\n');
+if (argStr.includes('get-state')) { console.log('device'); process.exit(0); }
+if (argStr.includes('connect ')) { console.log('connected to 192.168.1.199:5555'); process.exit(0); }
+if (argStr.includes('dumpsys package it.akai.customremote')) {
+    const mode = fs.existsSync('$modeFile43Esc') ? fs.readFileSync('$modeFile43Esc', 'utf8').trim() : 'valid_vc4';
+    if (mode === 'exit1') { console.error('dumpsys failed'); process.exit(1); }
+    if (mode === 'missing_vc') { console.log('    userId=10088'); process.exit(0); }
+    if (mode === 'duplicate_vc') { console.log('    versionCode=4\n    versionCode=5\n    userId=10088'); process.exit(0); }
+    console.log('    versionCode=4 minSdk=21 targetSdk=28');
+    console.log('    userId=10088');
+    process.exit(0);
+}
+if (argv.includes('install')) { console.log('Success'); process.exit(0); }
+process.exit(0);
+"@ | Out-File -FilePath $mockAdb43Js -Encoding ascii
+    $mockAdb43Cmd = if ($isWin43) { Join-Path $testDir43 "adb.cmd" } else { Join-Path $testDir43 "adb" }
+    if ($isWin43) {
+        "@echo off`n`"%NODE_EXE%`" `"$mockAdb43Js`" %*" | Out-File -FilePath $mockAdb43Cmd -Encoding ascii
+    } else {
+        "#!/bin/sh`nexec `"`$NODE_EXE`" `"$mockAdb43Js`" `"`$@`"" | Out-File -FilePath $mockAdb43Cmd -Encoding ascii
+        & chmod +x $mockAdb43Cmd
+    }
+
+    # Prepara sessione backup minima per test CLI -Action rollback senza -RescueApkPath su hardware
+    $backupDir43 = Join-Path $testDir43 "backups_43"
+    $sess43 = Join-Path $backupDir43 "backup_20261121_120000"
+    New-Item -ItemType Directory -Force -Path $sess43 | Out-Null
+    Copy-Item -LiteralPath $devApk43 -Destination (Join-Path $sess43 "it.akai.customremote_backup.apk")
+    New-MockRealDatabase -FilePath (Join-Path $sess43 "akai_memory.db")
+
+    $nodeEsc43 = $validNode.Replace('\', '/')
+    $adb43Esc = $mockAdb43Cmd.Replace('\', '/')
+    $signer43Esc = $mockSigner43Cmd.Replace('\', '/')
+    $sdk43Esc = $sdkRoot43.Replace('\', '/')
+    $bt43Esc = $bt43.Replace('\', '/')
+    $devApk43Esc = $devApk43.Replace('\', '/')
+    $rescue43Esc = $rescueApk43.Replace('\', '/')
+    $backupDir43Esc = $backupDir43.Replace('\', '/')
+
+    $cmd43b = @"
+`$env:NODE_EXE = '$nodeEsc43'
+`$env:ADB_EXECUTABLE = '$adb43Esc'
+`$env:APKSIGNER_EXECUTABLE = '$signer43Esc'
+`$env:ANDROID_HOME = '$sdk43Esc'
+`$env:ANDROID_SDK_ROOT = '$sdk43Esc'
+`$env:PATH = '$bt43Esc' + [IO.Path]::PathSeparator + `$env:PATH
+. '$scriptEsc43' -Action plan | Out-Null
+
+function Test-RbThrow43b([string]`$Name, [string]`$ModeVal, [string]`$Pattern, [scriptblock]`$Block) {
+    if (`$ModeVal) { Set-Content -LiteralPath '$modeFile43Esc' -Value `$ModeVal -Encoding ascii }
+    try {
+        `$null = & `$Block
+        return "`$Name`:THREW_NOTHING"
+    } catch {
+        if (`$_.Exception.Message -match `$Pattern) { return 'OK' }
+        return "`$Name`:WRONG_MSG(`$(`$_.Exception.Message))"
+    }
+}
+
+`$failures = New-Object System.Collections.Generic.List[string]
+`$signer43 = 'aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb'
+
+`$r = Test-RbThrow43b 'dumpsysExit1' 'exit1' 'VERSIONE INSTALLATA NON DETERMINABILE' {
+    Invoke-ConservativeRollbackApkInstall -AdbExe '$adb43Esc' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -BackupApkPath '$devApk43Esc' -RescueApkPath '$rescue43Esc' -ExpectedSignerSha256 `$signer43 -ExpectedRescueSha256 '$rescueSha43' -ForbidLegacyDowngrade
+}
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$r = Test-RbThrow43b 'dumpsysMissingVc' 'missing_vc' 'AMBIGUA O ASSENTE' {
+    Invoke-ConservativeRollbackApkInstall -AdbExe '$adb43Esc' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -BackupApkPath '$devApk43Esc' -RescueApkPath '$rescue43Esc' -ExpectedSignerSha256 `$signer43 -ExpectedRescueSha256 '$rescueSha43' -ForbidLegacyDowngrade
+}
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$r = Test-RbThrow43b 'dumpsysDuplicateVc' 'duplicate_vc' 'AMBIGUA O ASSENTE' {
+    Invoke-ConservativeRollbackApkInstall -AdbExe '$adb43Esc' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -BackupApkPath '$devApk43Esc' -RescueApkPath '$rescue43Esc' -ExpectedSignerSha256 `$signer43 -ExpectedRescueSha256 '$rescueSha43' -ForbidLegacyDowngrade
+}
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$r = Test-RbThrow43b 'missingExpectedSigner' 'valid_vc4' 'Signer atteso SHA-256 obbligatorio' {
+    Invoke-ConservativeRollbackApkInstall -AdbExe '$adb43Esc' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -BackupApkPath '$devApk43Esc' -RescueApkPath '$rescue43Esc' -ExpectedRescueSha256 '$rescueSha43' -ForbidLegacyDowngrade
+}
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$badRescueSha = '0' * 64
+`$r = Test-RbThrow43b 'hashMismatch' 'valid_vc4' 'Hash SHA-256 del file Rescue alterato' {
+    Invoke-ConservativeRollbackApkInstall -AdbExe '$adb43Esc' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -BackupApkPath '$devApk43Esc' -RescueApkPath '$rescue43Esc' -ExpectedSignerSha256 `$signer43 -ExpectedRescueSha256 `$badRescueSha -ForbidLegacyDowngrade
+}
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$r = Test-RbThrow43b 'forbidLegacyDowngrade' 'valid_vc4' 'RESCUE APK OBBLIGATORIO' {
+    Invoke-ConservativeRollbackApkInstall -AdbExe '$adb43Esc' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -BackupApkPath '$devApk43Esc' -ForbidLegacyDowngrade
+}
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$r = Test-RbThrow43b 'cliManualHardwareNoRescue' 'valid_vc4' 'RESCUE APK OBBLIGATORIO' {
+    & '$scriptEsc43' -Action rollback -TargetTv '192.168.1.199' -BackupDir '$backupDir43Esc' -AllowHardwareExecution
+}
+if (`$r -ne 'OK') { `$failures.Add(`$r) }
+
+`$prePassInstallCount = if (Test-Path '$adbLog43Esc') { @(Get-Content '$adbLog43Esc' | Where-Object { `$_ -match '\b(install|uninstall)\b' }).Count } else { 0 }
+if (`$prePassInstallCount -ne 0) { `$failures.Add("unexpectedInstallsBeforeValid:`$prePassInstallCount") }
+
+Set-Content -LiteralPath '$modeFile43Esc' -Value 'valid_vc4' -Encoding ascii
+`$rbPass = Invoke-ConservativeRollbackApkInstall -AdbExe '$adb43Esc' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' -BackupApkPath '$devApk43Esc' -RescueApkPath '$rescue43Esc' -ExpectedSignerSha256 `$signer43 -ExpectedRescueSha256 '$rescueSha43' -ForbidLegacyDowngrade
+if (`$rbPass.Mode -ne 'IN_PLACE_RESCUE' -or `$rbPass.RescueSha256 -ne '$rescueSha43') {
+    `$failures.Add("validPassMismatch:`$(`$rbPass.Mode)/`$(`$rbPass.RescueSha256)")
+}
+`$postPassLog = @(Get-Content '$adbLog43Esc' | Where-Object { `$_ -match '\b(install|uninstall)\b' })
+if (`$postPassLog.Count -ne 1 -or `$postPassLog[0] -notmatch 'install -r ') {
+    `$failures.Add("postPassLogBad:`$(`$postPassLog -join ';')")
+}
+
+Write-Output (@{ FailureCount = `$failures.Count; Failures = `$failures } | ConvertTo-Json -Compress)
+"@
+    $out43b = Invoke-SubPs43 $cmd43b
+    $json43bLine = ($out43b -split "\r?\n" | Where-Object { $_ -match '^\{' } | Select-Object -Last 1)
+    $res43b = if ($json43bLine) { $json43bLine | ConvertFrom-Json } else { $null }
+    if ($res43b -and $res43b.FailureCount -eq 0) {
+        $subPassed43++
+        Write-Host "   [PASS] Sotto-test 43b: Rollback rifiuta dumpsys fallito/assente/ambiguo, hash rescue errato e downgrade -d su target owner" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 43b: out='$out43b'" -ForegroundColor Red
+    }
+
+    if ($subPassed43 -eq 2) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / STRICT KEYSTORE & ROLLBACK GATES] Test 43: Superati 2/2" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / STRICT KEYSTORE & ROLLBACK GATES] Test 43: Superati $subPassed43 / 2" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / STRICT KEYSTORE & ROLLBACK GATES] Test 43: Eccezione: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    Remove-Item $testDir43 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan

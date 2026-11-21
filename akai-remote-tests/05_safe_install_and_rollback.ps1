@@ -30,6 +30,7 @@ param(
     [string]$Action = "status",
     [string]$ApkPath = $null,
     [string]$RescueApkPath = $null,
+    [string]$ExpectedRescueSha256 = $null,
     [string]$BackupDir = ".\backup_tv",
     [string]$TargetTv = "192.168.1.8",
     [int]$HttpPort = 8088,
@@ -38,7 +39,9 @@ param(
     [string]$ExpectedCaFingerprint = $null,
     [switch]$AllowHardwareExecution = $false,
     [switch]$GreenfieldStart = $false,
-    [switch]$RequirePairing = $false
+    [switch]$RequirePairing = $false,
+    [switch]$RequireOwnerRescue = $false,
+    [switch]$RequireVerifiedKeystoreHealth = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -1100,7 +1103,9 @@ function Test-RescueApkCompatibility {
         [string]$RescueApkPath,
         [string]$PackageName,
         [long]$MustExceedVersionCode,
-        [string]$ExpectedSignerSha256 = $null
+        [string]$ExpectedSignerSha256 = $null,
+        [string]$ExpectedRescueSha256 = $null,
+        [switch]$RequireExpectedSigner = $false
     )
     if ([string]::IsNullOrWhiteSpace($RescueApkPath) -or -not (Test-Path -LiteralPath $RescueApkPath -PathType Leaf)) {
         throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: File RescueApkPath mancante o non leggibile ($RescueApkPath)."
@@ -1108,10 +1113,17 @@ function Test-RescueApkCompatibility {
     if ($RescueApkPath -match "app-ci-test-nondistributable\.apk") {
         throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: Artefatto CI non distribuibile rifiutato come rescue."
     }
+    if ($RequireExpectedSigner -and ([string]::IsNullOrWhiteSpace($ExpectedSignerSha256) -or $ExpectedSignerSha256.Trim() -notmatch "^[0-9a-fA-F]{64}$")) {
+        throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: Signer atteso SHA-256 obbligatorio e non valido."
+    }
+    $rescueFileSha256 = (Get-FileHash -LiteralPath $RescueApkPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedRescueSha256) -and $rescueFileSha256 -ne $ExpectedRescueSha256.Trim().ToLowerInvariant()) {
+        throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: Hash SHA-256 del file Rescue alterato o difforme dall'hash bloccato ($rescueFileSha256 vs $($ExpectedRescueSha256.Trim().ToLowerInvariant()))."
+    }
     Assert-CandidateApkNoForbiddenTlsAssets $RescueApkPath | Out-Null
 
     $rescueFp = Get-ApkCertificateFingerprint $RescueApkPath
-    if (-not [string]::IsNullOrWhiteSpace($ExpectedSignerSha256) -and $rescueFp -ne $ExpectedSignerSha256.ToLowerInvariant()) {
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedSignerSha256) -and $rescueFp -ne $ExpectedSignerSha256.Trim().ToLowerInvariant()) {
         throw "ERRORE FAIL-CLOSED [RESCUE APK NON VALIDO]: Firma certificato rescue ($rescueFp) diversa da app installata ($ExpectedSignerSha256)."
     }
 
@@ -1140,6 +1152,7 @@ function Test-RescueApkCompatibility {
             PackageName = $rescuePkg
             VersionCode = $rescueVc
             SignerSha256 = $rescueFp
+            FileSha256 = $rescueFileSha256
         }
     } finally {
         $ErrorActionPreference = $previousEap
@@ -1154,22 +1167,34 @@ function Invoke-ConservativeRollbackApkInstall {
         [string]$BackupApkPath,
         [string]$RescueApkPath = $null,
         [long]$MustExceedVersionCode = 0,
-        [string]$ExpectedSignerSha256 = $null
+        [string]$ExpectedSignerSha256 = $null,
+        [string]$ExpectedRescueSha256 = $null,
+        [switch]$ForbidLegacyDowngrade = $false
     )
     if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) {
-        $effectiveMin = $MustExceedVersionCode
         $prevEapDump = $ErrorActionPreference
+        $dumpsysOut = ""
+        $dumpsysExit = -1
         try {
             $ErrorActionPreference = "Continue"
             $dumpsysOut = (& $AdbExe -s $TargetAdb shell "dumpsys package $PackageName" 2>&1 | Out-String)
-            if ($LASTEXITCODE -eq 0 -and $dumpsysOut -match "(?m)^\s*versionCode=([0-9]+)\b") {
-                $curVc = [long]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture)
-                if ($curVc -gt $effectiveMin) { $effectiveMin = $curVc }
-            }
+            $dumpsysExit = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prevEapDump
         }
-        $rescueMeta = Test-RescueApkCompatibility -RescueApkPath $RescueApkPath -PackageName $PackageName -MustExceedVersionCode $effectiveMin -ExpectedSignerSha256 $ExpectedSignerSha256
+        if ($dumpsysExit -ne 0) {
+            throw "ERRORE FAIL-CLOSED [VERSIONE INSTALLATA NON DETERMINABILE]: dumpsys package fallito (exit=$dumpsysExit) su $TargetAdb."
+        }
+        $vcMatches = @([regex]::Matches($dumpsysOut, "(?m)^\s*versionCode=([0-9]+)\b"))
+        if ($vcMatches.Count -ne 1) {
+            throw "ERRORE FAIL-CLOSED [VERSIONE INSTALLATA AMBIGUA O ASSENTE]: dumpsys package ha restituito $($vcMatches.Count) valori versionCode per $PackageName."
+        }
+        $curVc = [long]::Parse($vcMatches[0].Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+        if ($curVc -le 0) {
+            throw "ERRORE FAIL-CLOSED [VERSIONE INSTALLATA AMBIGUA O ASSENTE]: versionCode installato non valido ($curVc)."
+        }
+        $effectiveMin = [Math]::Max($MustExceedVersionCode, $curVc)
+        $rescueMeta = Test-RescueApkCompatibility -RescueApkPath $RescueApkPath -PackageName $PackageName -MustExceedVersionCode $effectiveMin -ExpectedSignerSha256 $ExpectedSignerSha256 -ExpectedRescueSha256 $ExpectedRescueSha256 -RequireExpectedSigner
         Write-Host "[ROLLBACK CONSERVATIVO] Reinstallazione in-place A2 Rescue v$($rescueMeta.VersionCode) (adb install -r, zero downgrade -d, zero uninstall)..." -ForegroundColor Cyan
         $rbRes = & $AdbExe -s $TargetAdb install -r $RescueApkPath
         Write-Host "      Esito adb install rescue: $rbRes"
@@ -1179,8 +1204,13 @@ function Invoke-ConservativeRollbackApkInstall {
         return @{
             Mode = "IN_PLACE_RESCUE"
             VersionCode = $rescueMeta.VersionCode
+            RescueSha256 = $rescueMeta.FileSha256
             Output = ($rbRes -join "`n")
         }
+    }
+
+    if ($ForbidLegacyDowngrade) {
+        throw "ERRORE FAIL-CLOSED [RESCUE APK OBBLIGATORIO]: La procedura hardware owner vieta il fallback a downgrade legacy (-d) senza -RescueApkPath verificato (protezione AndroidKeyStore)."
     }
 
     Write-Host "[ROLLBACK LEGACY] Tentativo adb install -r -d su APK precedente (senza uninstall)..." -ForegroundColor Yellow
@@ -1196,17 +1226,89 @@ function Invoke-ConservativeRollbackApkInstall {
     }
 }
 
+function Test-StrictJsonBooleanProperty {
+    param($Object, [string]$PropertyName)
+    if ($null -eq $Object) { return $false }
+    $prop = $Object.PSObject.Properties[$PropertyName]
+    if ($null -eq $prop) { return $false }
+    return ($prop.Value -is [bool])
+}
+
+function Get-BackupStoredCredentialExpectations {
+    param([string]$SessionDir)
+    $result = @{ HasBackupPrefs = $false; ExpectDeepSeek = $false; ExpectKimi = $false }
+    if ([string]::IsNullOrWhiteSpace($SessionDir) -or -not (Test-Path -LiteralPath $SessionDir -PathType Container)) {
+        return $result
+    }
+    $pairingSubDir = Join-Path $SessionDir "pairing_sessions"
+    $pairingManPath = Join-Path $pairingSubDir "pairing_manifest.json"
+    if (-not (Test-Path -LiteralPath $pairingManPath -PathType Leaf)) {
+        return $result
+    }
+    $man = Get-Content -LiteralPath $pairingManPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $prefsMeta = if ($man.Files) { $man.Files."akai_ai_security_prefs.xml" } else { $null }
+    if (-not $prefsMeta) {
+        return $result
+    }
+    $vaultDir = $pairingSubDir
+    $ptrPath = Join-Path $pairingSubDir "vault_pointer.json"
+    if (Test-Path -LiteralPath $ptrPath -PathType Leaf) {
+        $ptr = Get-Content -LiteralPath $ptrPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($ptr.VaultDir -and (Test-Path -LiteralPath $ptr.VaultDir -PathType Container)) { $vaultDir = $ptr.VaultDir }
+    } elseif ($man.VaultDir -and (Test-Path -LiteralPath $man.VaultDir -PathType Container)) {
+        $vaultDir = $man.VaultDir
+    }
+    $encPath = Join-Path $vaultDir "akai_ai_security_prefs.xml.enc"
+    if (-not (Test-Path -LiteralPath $encPath -PathType Leaf)) {
+        return $result
+    }
+    $cipherBytes = [IO.File]::ReadAllBytes($encPath)
+    $plainBytes = $null
+    try {
+        $plainBytes = Unprotect-TlsData -CipherBytes $cipherBytes -Mechanism $prefsMeta.Mechanism -VaultDir $vaultDir
+        $xmlSettings = New-Object System.Xml.XmlReaderSettings
+        $xmlSettings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+        $xmlSettings.XmlResolver = $null
+        $ms = New-Object System.IO.MemoryStream -ArgumentList @(,$plainBytes)
+        try {
+            $xr = [System.Xml.XmlReader]::Create($ms, $xmlSettings)
+            $doc = New-Object System.Xml.XmlDocument
+            $doc.XmlResolver = $null
+            $doc.Load($xr)
+            $dsNode = $doc.SelectSingleNode("/map/string[@name='sec_enc_deepseek_key']")
+            $kmNode = $doc.SelectSingleNode("/map/string[@name='sec_enc_kimi_key']")
+            $result.HasBackupPrefs = $true
+            $result.ExpectDeepSeek = ($null -ne $dsNode -and -not [string]::IsNullOrWhiteSpace($dsNode.InnerText))
+            $result.ExpectKimi = ($null -ne $kmNode -and -not [string]::IsNullOrWhiteSpace($kmNode.InnerText))
+        } finally {
+            $ms.Dispose()
+        }
+    } finally {
+        if ($plainBytes) { [Array]::Clear($plainBytes, 0, $plainBytes.Length) }
+    }
+    return $result
+}
+
 function Test-DeviceKeystoreCredentialHealth {
     param(
         [string]$TargetTv,
         [int]$HttpsPort = 8443,
         [string]$AuthToken = $null,
-        [switch]$FailOnUnreachable = $false
+        [switch]$FailOnUnreachable = $false,
+        [switch]$RequireVerifiedHealthy = $false,
+        [switch]$AllowLegacyRescueProbe = $false,
+        [bool]$ExpectDeepSeekStored = $false,
+        [bool]$ExpectKimiStored = $false
     )
     if ([string]::IsNullOrWhiteSpace($AuthToken)) {
+        if ($RequireVerifiedHealthy) {
+            throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH NON VERIFICATO]: Token autenticazione assente per la verifica obbligatoria AndroidKeyStore."
+        }
         return @{
             Checked = $false
+            Verified = $false
             Status = "UNVERIFIED_NO_TOKEN"
+            Schema = "none"
         }
     }
     $cfgUrl = "https://$($TargetTv):$HttpsPort/api/ai/config"
@@ -1215,25 +1317,125 @@ function Test-DeviceKeystoreCredentialHealth {
     try {
         $cfg = Invoke-RestMethod -Uri $cfgUrl -Method Get -Headers $headers -TimeoutSec 4 -ErrorAction Stop
     } catch {
-        if ($FailOnUnreachable) {
+        if ($FailOnUnreachable -or $RequireVerifiedHealthy) {
             throw
         }
         Write-Host "      [AVVISO] Probe HTTPS Keystore /api/ai/config non raggiungibile ($($_.Exception.Message)): verifica credenziali non conclusa." -ForegroundColor Yellow
         return @{
             Checked = $false
+            Verified = $false
             Status = "UNVERIFIED_UNREACHABLE"
+            Schema = "none"
             Error = $_.Exception.Message
         }
     }
-    if ($cfg.undecryptable_stored_credentials -eq $true) {
-        throw "ERRORE FAIL-CLOSED [ANDROIDKEYSTORE CREDENZIALI NON DECIFRABILI]: L'alias AndroidKeyStore non decifra una o piu' credenziali AI salvate in SharedPreferences."
+
+    if ($null -eq $cfg -or ($cfg -is [string]) -or ($cfg -is [ValueType])) {
+        throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH SCHEMA NON VALIDO]: Risposta /api/ai/config vuota o non oggetto JSON."
+    }
+
+    $v4Fields = @(
+        "keystore_alias_present",
+        "deepseek_ciphertext_present",
+        "deepseek_decryptable",
+        "kimi_ciphertext_present",
+        "kimi_decryptable",
+        "undecryptable_stored_credentials",
+        "all_stored_credentials_decryptable"
+    )
+    $presentV4Count = @($v4Fields | Where-Object { $null -ne $cfg.PSObject.Properties[$_] }).Count
+
+    if ($presentV4Count -gt 0 -and $presentV4Count -lt $v4Fields.Count) {
+        throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH SCHEMA INCOMPLETO]: Risposta /api/ai/config contiene solo $presentV4Count/$($v4Fields.Count) campi health obbligatori."
+    }
+
+    if ($presentV4Count -eq $v4Fields.Count) {
+        foreach ($vf in $v4Fields) {
+            if (-not (Test-StrictJsonBooleanProperty -Object $cfg -PropertyName $vf)) {
+                throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH SCHEMA NON VALIDO]: Campo '$vf' assente, nullo o non booleano nella risposta /api/ai/config."
+            }
+        }
+        $alias = [bool]$cfg.keystore_alias_present
+        $dsPres = [bool]$cfg.deepseek_ciphertext_present
+        $dsDec = [bool]$cfg.deepseek_decryptable
+        $kmPres = [bool]$cfg.kimi_ciphertext_present
+        $kmDec = [bool]$cfg.kimi_decryptable
+        $undec = [bool]$cfg.undecryptable_stored_credentials
+        $allDec = [bool]$cfg.all_stored_credentials_decryptable
+
+        if (($dsDec -and (-not $dsPres -or -not $alias)) -or ($kmDec -and (-not $kmPres -or -not $alias))) {
+            throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH SCHEMA INCOERENTE]: decryptable=true con ciphertext_present=false o keystore_alias_present=false."
+        }
+        $expectedUndec = ($dsPres -and -not $dsDec) -or ($kmPres -and -not $kmDec)
+        if (($undec -ne $expectedUndec) -or ($allDec -ne (-not $expectedUndec))) {
+            throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH SCHEMA INCOERENTE]: undecryptable/all_decryptable incoerenti con lo stato delle singole chiavi."
+        }
+        if (($ExpectDeepSeekStored -and -not $dsPres) -or ($ExpectKimiStored -and -not $kmPres)) {
+            throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH CREDENZIALI MANCANTI]: Ciphertext AI atteso dal backup non trovato in SharedPreferences."
+        }
+        if ($undec -or -not $allDec) {
+            throw "ERRORE FAIL-CLOSED [ANDROIDKEYSTORE CREDENZIALI NON DECIFRABILI]: L'alias AndroidKeyStore non decifra una o piu' credenziali AI salvate in SharedPreferences."
+        }
+        return @{
+            Checked = $true
+            Verified = $true
+            Status = "HEALTHY"
+            Schema = "v4"
+            KeystoreAliasPresent = $alias
+            DeepSeekCiphertextPresent = $dsPres
+            DeepSeekDecryptable = $dsDec
+            KimiCiphertextPresent = $kmPres
+            KimiDecryptable = $kmDec
+            AllStoredCredentialsDecryptable = $allDec
+        }
+    }
+
+    # Nessun campo v4 presente: controlla esplicitamente contratto legacy A2 (mai etichettare HEALTHY)
+    $legacyFields = @("has_deepseek_key", "has_kimi_key", "keystore_available")
+    foreach ($lf in $legacyFields) {
+        if (-not (Test-StrictJsonBooleanProperty -Object $cfg -PropertyName $lf)) {
+            throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH SCHEMA ASSENTE]: Risposta /api/ai/config priva dei campi booleani Keystore v4 o legacy richiesti."
+        }
+    }
+    $hasDsLegacy = [bool]$cfg.has_deepseek_key
+    $hasKmLegacy = [bool]$cfg.has_kimi_key
+    $ksAvailLegacy = [bool]$cfg.keystore_available
+    if (($ExpectDeepSeekStored -and -not $hasDsLegacy) -or ($ExpectKimiStored -and -not $hasKmLegacy)) {
+        throw "ERRORE FAIL-CLOSED [ANDROIDKEYSTORE CREDENZIALI NON DECIFRABILI SU ENDPOINT LEGACY]: Credenziale AI attesa dal backup non decifrabile su build A2 legacy."
+    }
+    $legacyDecryptConfirmed = ($ExpectDeepSeekStored -or $ExpectKimiStored) -and ((-not $ExpectDeepSeekStored) -or $hasDsLegacy) -and ((-not $ExpectKimiStored) -or $hasKmLegacy)
+    if ($RequireVerifiedHealthy -and (-not $AllowLegacyRescueProbe -or -not $legacyDecryptConfirmed)) {
+        throw "ERRORE FAIL-CLOSED [KEYSTORE HEALTH LEGACY INSUFFICIENTE]: Endpoint A2 legacy privo dello schema health v4 completo e senza evidenza di decifratura su credenziali salvate."
     }
     return @{
         Checked = $true
-        Status = "HEALTHY"
-        KeystoreAliasPresent = [bool]$cfg.keystore_alias_present
-        AllStoredCredentialsDecryptable = [bool]$cfg.all_stored_credentials_decryptable
+        Verified = $legacyDecryptConfirmed
+        Status = "LEGACY_LIMITED"
+        Schema = "legacy_a2"
+        KeystoreAliasPresent = $null
+        LegacyKeystoreAvailable = $ksAvailLegacy
+        LegacyDecryptConfirmed = $legacyDecryptConfirmed
+        HasDeepSeekKey = $hasDsLegacy
+        HasKimiKey = $hasKmLegacy
     }
+}
+
+function Invoke-PostRollbackKeystoreVerification {
+    param(
+        [string]$SessionDir,
+        [string]$RollbackMode,
+        [string]$TargetTv,
+        [int]$HttpsPort = 8443,
+        [string]$AuthToken = $null,
+        [switch]$RequireVerifiedKeystoreHealth = $false
+    )
+    if ([string]::IsNullOrWhiteSpace($AuthToken) -and -not $RequireVerifiedKeystoreHealth) {
+        return $null
+    }
+    $backupCredExp = Get-BackupStoredCredentialExpectations -SessionDir $SessionDir
+    $ksHealth = Test-DeviceKeystoreCredentialHealth -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -AllowLegacyRescueProbe:($RollbackMode -eq 'IN_PLACE_RESCUE') -RequireVerifiedHealthy:$RequireVerifiedKeystoreHealth -ExpectDeepSeekStored:([bool]$backupCredExp.ExpectDeepSeek) -ExpectKimiStored:([bool]$backupCredExp.ExpectKimi)
+    Write-Host "      Stato verifica AndroidKeyStore/AI post-rollback: $($ksHealth.Status) (Schema=$($ksHealth.Schema), Verified=$($ksHealth.Verified), HasBackupPrefs=$($backupCredExp.HasBackupPrefs))" -ForegroundColor Cyan
+    return $ksHealth
 }
 
 function Test-PackageUpgradeGate {
@@ -3345,9 +3547,15 @@ switch ($Action) {
         if ($upgradeGate.CandidateVersionCode) {
             Write-Host "      Gate pacchetto verificato (target=$PackageName, installedVC=$($upgradeGate.InstalledVersionCode), candidateVC=$($upgradeGate.CandidateVersionCode))." -ForegroundColor Green
         }
+        $isOwnerHardwareTarget = $RequireOwnerRescue -or ($TargetTv -notin @("127.0.0.1", "localhost", "::1"))
+        if ($hasPrevious -and $isOwnerHardwareTarget -and [string]::IsNullOrWhiteSpace($RescueApkPath)) {
+            throw "ERRORE FAIL-CLOSED [RESCUE APK OBBLIGATORIO]: Su hardware reale (o -RequireOwnerRescue) e' obbligatorio fornire -RescueApkPath verificato prima di installare un aggiornamento in-place."
+        }
+        $lockedRescueSha256 = $null
         if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) {
-            $rescueCompat = Test-RescueApkCompatibility -RescueApkPath $RescueApkPath -PackageName $PackageName -MustExceedVersionCode $upgradeGate.CandidateVersionCode -ExpectedSignerSha256 $(if ($hasPrevious) { $backupFp } else { $null })
-            Write-Host "      Gate A2 Rescue verificato (rescueVC=$($rescueCompat.VersionCode) > candidateVC=$($upgradeGate.CandidateVersionCode), zero-uninstall pronto)." -ForegroundColor Green
+            $rescueCompat = Test-RescueApkCompatibility -RescueApkPath $RescueApkPath -PackageName $PackageName -MustExceedVersionCode $upgradeGate.CandidateVersionCode -ExpectedSignerSha256 $(if ($hasPrevious) { $backupFp } else { $null }) -ExpectedRescueSha256 $ExpectedRescueSha256 -RequireExpectedSigner:$hasPrevious
+            $lockedRescueSha256 = $rescueCompat.FileSha256
+            Write-Host "      Gate A2 Rescue verificato (rescueVC=$($rescueCompat.VersionCode) > candidateVC=$($upgradeGate.CandidateVersionCode), SHA256=$($lockedRescueSha256), zero-uninstall pronto)." -ForegroundColor Green
         }
         Write-Host "[4/6] Installazione nuovo APK (adb install -r)..."
         $installRes = & $adb -s $TargetAdb install -r $ApkPath
@@ -3453,6 +3661,11 @@ switch ($Action) {
         }
 
         if ($healthy) {
+            if ($RequireVerifiedKeystoreHealth) {
+                $installModeTag = if ($hasPrevious) { 'UPGRADE_V4' } else { 'CLEAN_INSTALL_V4' }
+                $installSessionDir = if ($hasPrevious) { $sessionDir } else { $null }
+                $null = Invoke-PostRollbackKeystoreVerification -SessionDir $installSessionDir -RollbackMode $installModeTag -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -RequireVerifiedKeystoreHealth
+            }
             if ($tlsRes -and $tlsRes.Status -eq "APPROVED") {
                 Write-Host "`nDEPLOYMENT VERIFICATO CON SUCCESSO AL 100%! Tutti i componenti operativi e Root CA approvata." -ForegroundColor Green
             } else {
@@ -3482,7 +3695,7 @@ switch ($Action) {
                 $expectedRescueSigner = if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) { $backupFp } else { $null }
                 $expectedMinRescueVc = if ($upgradeGate -and $upgradeGate.CandidateVersionCode) { [long]$upgradeGate.CandidateVersionCode } else { 0 }
                 Write-Host "[ROLLBACK 1/4] Reinstallazione APK precedente (modalita' conservativa zero-uninstall)..."
-                $rbApkResult = Invoke-ConservativeRollbackApkInstall -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -BackupApkPath $backupApk -RescueApkPath $RescueApkPath -MustExceedVersionCode $expectedMinRescueVc -ExpectedSignerSha256 $expectedRescueSigner
+                $rbApkResult = Invoke-ConservativeRollbackApkInstall -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -BackupApkPath $backupApk -RescueApkPath $RescueApkPath -MustExceedVersionCode $expectedMinRescueVc -ExpectedSignerSha256 $expectedRescueSigner -ExpectedRescueSha256 $lockedRescueSha256 -ForbidLegacyDowngrade:$isOwnerHardwareTarget
                 Write-Host "      Esito rollback APK ($($rbApkResult.Mode)): OK"
 
                 Write-Host "[ROLLBACK 2/4] Ripristino database SQLite originale..."
@@ -3593,9 +3806,7 @@ $chownTarget = "${appUid}:${appUid}"
                 }
 
                 if ($rbHealthy) {
-                    if (-not [string]::IsNullOrWhiteSpace($AuthToken)) {
-                        Test-DeviceKeystoreCredentialHealth -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken | Out-Null
-                    }
+                    $null = Invoke-PostRollbackKeystoreVerification -SessionDir $sessionDir -RollbackMode $rbApkResult.Mode -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -RequireVerifiedKeystoreHealth:$RequireVerifiedKeystoreHealth
                     Write-Host "ROLLBACK RIUSCITO E VERIFICATO: Sistema TV tornato operativo al 100% sulla versione precedente." -ForegroundColor Green
                 } else {
                     Write-Host "ALLARME POST-ROLLBACK: Health check post-rollback fallito - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red
@@ -3633,9 +3844,20 @@ $chownTarget = "${appUid}:${appUid}"
         Verify-SQLiteIntegrityOffline $backupDb | Out-Null
         $backupDbHash = Get-Sha256Hex $backupDb
 
+        $isOwnerManualHw = $RequireOwnerRescue -or ($TargetTv -notin @("127.0.0.1", "localhost", "::1"))
+        if ($isOwnerManualHw -and [string]::IsNullOrWhiteSpace($RescueApkPath)) {
+            throw "ERRORE FAIL-CLOSED [RESCUE APK OBBLIGATORIO]: Su target hardware/owner ($TargetTv) il rollback manuale richiede -RescueApkPath verificato (il fallback a downgrade -d e' vietato a tutela di AndroidKeyStore)."
+        }
         $expectedRollbackSigner = if (-not [string]::IsNullOrWhiteSpace($RescueApkPath)) { Get-ApkCertificateFingerprint $backupApk } else { $null }
+        $lockedManualRescueSha256 = if (-not [string]::IsNullOrWhiteSpace($ExpectedRescueSha256)) {
+            $ExpectedRescueSha256
+        } elseif (-not [string]::IsNullOrWhiteSpace($RescueApkPath) -and (Test-Path -LiteralPath $RescueApkPath -PathType Leaf)) {
+            Get-Sha256Hex $RescueApkPath
+        } else {
+            $null
+        }
         Write-Host "[1/4] Reinstallazione APK precedente da sessione: $($latestSession.Name) (modalita' conservativa zero-uninstall)..."
-        $rbManualApkResult = Invoke-ConservativeRollbackApkInstall -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -BackupApkPath $backupApk -RescueApkPath $RescueApkPath -ExpectedSignerSha256 $expectedRollbackSigner
+        $rbManualApkResult = Invoke-ConservativeRollbackApkInstall -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName -BackupApkPath $backupApk -RescueApkPath $RescueApkPath -ExpectedSignerSha256 $expectedRollbackSigner -ExpectedRescueSha256 $lockedManualRescueSha256 -ForbidLegacyDowngrade:$isOwnerManualHw
         Write-Host "      Esito rollback APK ($($rbManualApkResult.Mode)): OK"
 
         Write-Host "[2/4] Ripristino database SQLite originale..."
@@ -3742,9 +3964,7 @@ $chownTarget = "${appUid}:${appUid}"
             }
         }
         if ($rbHealthy) {
-            if (-not [string]::IsNullOrWhiteSpace($AuthToken)) {
-                Test-DeviceKeystoreCredentialHealth -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken | Out-Null
-            }
+            $null = Invoke-PostRollbackKeystoreVerification -SessionDir $latestSession.FullName -RollbackMode $rbManualApkResult.Mode -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -RequireVerifiedKeystoreHealth:$RequireVerifiedKeystoreHealth
             Write-Host "Rollback manuale completato e verificato con successo: TV operativa!" -ForegroundColor Green
         } else {
             Write-Host "ALLARME POST-ROLLBACK: Endpoint status non raggiungibile o non operativo - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red

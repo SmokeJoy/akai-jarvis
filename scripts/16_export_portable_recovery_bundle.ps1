@@ -26,6 +26,106 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyCon
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $pbkdf2Iterations = 210000
 
+function Resolve-PhysicalCanonicalPath {
+    param([string]$CandidatePath)
+    $full = [IO.Path]::GetFullPath($CandidatePath)
+    $tailParts = New-Object System.Collections.Generic.List[string]
+    $probe = $full
+    while ($probe -and -not (Test-Path -LiteralPath $probe)) {
+        $leaf = Split-Path -Leaf $probe
+        $parent = Split-Path -Parent $probe
+        if (-not $leaf -or $parent -eq $probe) { break }
+        [void]$tailParts.Add($leaf)
+        $probe = $parent
+    }
+
+    if ($probe -and (Test-Path -LiteralPath $probe)) {
+        if ([Environment]::OSVersion.Platform -match "Win") {
+            $typeDef = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class AkaiPortablePathHelper {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFileW(string lpFileName, uint dwDesiredAccess, uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(IntPtr hFile, StringBuilder lpszFilePath, uint cchFilePath, uint dwFlags);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+    public static string GetFinalPath(string path) {
+        IntPtr h = CreateFileW(path, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+        if (h == new IntPtr(-1)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        try {
+            var sb = new StringBuilder(1024);
+            uint res = GetFinalPathNameByHandleW(h, sb, (uint)sb.Capacity, 0);
+            if (res == 0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            if (res >= sb.Capacity) {
+                sb = new StringBuilder((int)res + 1);
+                res = GetFinalPathNameByHandleW(h, sb, (uint)sb.Capacity, 0);
+                if (res == 0 || res >= sb.Capacity) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+            string s = sb.ToString();
+            if (s.StartsWith("\\\\?\\UNC\\")) return "\\\\" + s.Substring(8);
+            if (s.StartsWith("\\\\?\\")) return s.Substring(4);
+            return s;
+        } finally { CloseHandle(h); }
+    }
+}
+'@
+            if (-not ("AkaiPortablePathHelper" -as [type])) {
+                Add-Type -TypeDefinition $typeDef -Language CSharp
+            }
+            $cur = $probe
+            while (-not [string]::IsNullOrWhiteSpace($cur)) {
+                $gi = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
+                if ($gi -and ($gi.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                    $repTarget = [AkaiPortablePathHelper]::GetFinalPath($cur)
+                    if ($repTarget -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") {
+                        throw "ERRORE FAIL-CLOSED [RECOVERY BUNDLE]: Reparse point verso cloud-sync vietato ($cur -> $repTarget)."
+                    }
+                }
+                $pNext = Split-Path -Parent $cur
+                if ($pNext -eq $cur) { break }
+                $cur = $pNext
+            }
+            $probe = [AkaiPortablePathHelper]::GetFinalPath($probe)
+        } else {
+            $cur = $probe
+            while (-not [string]::IsNullOrWhiteSpace($cur)) {
+                $gi = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
+                if ($gi -and ($gi.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                    $rt = $gi.ResolveLinkTarget($true)
+                    if ($rt -and $rt.FullName -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") {
+                        throw "ERRORE FAIL-CLOSED [RECOVERY BUNDLE]: Reparse point verso cloud-sync vietato ($cur -> $($rt.FullName))."
+                    }
+                }
+                $pNext = Split-Path -Parent $cur
+                if ($pNext -eq $cur) { break }
+                $cur = $pNext
+            }
+            $rpCmd = Get-Command realpath -ErrorAction SilentlyContinue
+            if ($rpCmd) {
+                $rpOut = (& $rpCmd.Source $probe 2>&1 | Out-String).Trim()
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($rpOut)) {
+                    $probe = $rpOut
+                }
+            } else {
+                $giTop = Get-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+                if ($giTop) {
+                    $rtTop = $giTop.ResolveLinkTarget($true)
+                    if ($rtTop) { $probe = $rtTop.FullName }
+                }
+            }
+        }
+    }
+
+    $phys = $probe
+    for ($i = $tailParts.Count - 1; $i -ge 0; $i--) {
+        $phys = Join-Path $phys $tailParts[$i]
+    }
+    return [IO.Path]::GetFullPath($phys)
+}
+
 function Assert-SafeExternalPath {
     param(
         [string]$CandidatePath,
@@ -37,35 +137,20 @@ function Assert-SafeExternalPath {
         throw "ERRORE FAIL-CLOSED [RECOVERY BUNDLE]: Percorso $Label mancante."
     }
     $full = [IO.Path]::GetFullPath($CandidatePath)
+    $physFull = Resolve-PhysicalCanonicalPath -CandidatePath $full
     $normRepo = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
-    $normFull = $full.TrimEnd('\', '/')
-    if ($normFull -eq $normRepo -or $normFull.StartsWith($normRepo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "ERRORE FAIL-CLOSED [RECOVERY BUNDLE]: Percorso $Label dentro il repository Git vietato ($full)."
-    }
-    if ($full -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") {
-        throw "ERRORE FAIL-CLOSED [RECOVERY BUNDLE]: Percorso $Label in cartella cloud-sync vietato ($full)."
-    }
+    $physRepo = (Resolve-PhysicalCanonicalPath -CandidatePath $normRepo).TrimEnd('\', '/')
 
-    # Controlla eventuali directory reparse/junction lungo gli antenati esistenti
-    $probe = $full
-    while (-not [string]::IsNullOrWhiteSpace($probe)) {
-        if (Test-Path -LiteralPath $probe) {
-            $item = Get-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
-            if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                $targetProp = $item.PSObject.Properties["LinkTarget"]
-                if ($targetProp -and $targetProp.Value) {
-                    $resolvedTarget = [IO.Path]::GetFullPath($targetProp.Value)
-                    $normTarget = $resolvedTarget.TrimEnd('\', '/')
-                    if ($normTarget -eq $normRepo -or $normTarget.StartsWith($normRepo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or $resolvedTarget -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") {
-                        throw "ERRORE FAIL-CLOSED [RECOVERY BUNDLE]: Reparse point verso repo/cloud vietato ($probe -> $resolvedTarget)."
-                    }
-                }
+    foreach ($p in @($full, $physFull)) {
+        $normP = $p.TrimEnd('\', '/')
+        foreach ($r in @($normRepo, $physRepo)) {
+            if ($normP -eq $r -or $normP.StartsWith($r + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "ERRORE FAIL-CLOSED [RECOVERY BUNDLE]: Percorso $Label dentro il repository Git vietato ($full -> $physFull)."
             }
-            break
         }
-        $parent = Split-Path -Parent $probe
-        if ($parent -eq $probe) { break }
-        $probe = $parent
+        if ($p -match "(?i)(OneDrive|Dropbox|Google Drive|iCloud|Nextcloud)") {
+            throw "ERRORE FAIL-CLOSED [RECOVERY BUNDLE]: Percorso $Label in cartella cloud-sync vietato ($full -> $physFull)."
+        }
     }
 
     if (-not $AllowExisting -and (Test-Path -LiteralPath $full)) {
@@ -690,6 +775,7 @@ try {
                 sqliteTableCount = $tableCount
                 pkcs12HasPrivateKey = $true
                 keystoreBakVerified = $bakVerified
+                keystoreBakStatus = $(if ($bakVerified) { "VERIFIED_PRESENT" } else { "ABSENT_IN_SOURCE_BACKUP" })
                 caSha256 = $caSha
                 xmlFilesVerified = $xmlCount
                 verifiedEntries = $written.Count

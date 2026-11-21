@@ -42,14 +42,97 @@ if (-not $env:JARVIS_SIGNING_STOREPASS -or -not $env:JARVIS_SIGNING_KEYPASS) {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $ExpectedA2SourceSha = $ExpectedA2SourceSha.ToLowerInvariant()
+$approvedA2SourceAllowlist = @('6a6dd5d975518f422ba4aa947cd6063660d87729')
 $expectedSigner = '21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed'
+$expectedRootTreeSha = '80eac7b51f2542b01b7fee3e83abc8de5a38cb3a'
+$expectedTvTreeSha = '481ced00c95accc2c43dc73c2baff7ff6865058a'
+$expectedWebTreeSha = '88f148692da79edbc754de741b98640fd83e54be'
+$expectedManifestBlob = 'fdbfb4cb9f3ed8688161c3bcda7821019055c488'
 $expectedJniBlob = 'ffe04f6b6861cf1e253bbfbf113cbb8364c22f9b'
 $expectedNativeJavaBlob = '6f7c5b28e9cd4f087592cdaed1a0a57c3121fccd'
 
+function Resolve-PhysicalPathSafe([string]$CandidatePath) {
+    $full = [IO.Path]::GetFullPath($CandidatePath)
+    $parts = New-Object System.Collections.Generic.List[string]
+    $probe = $full
+    while ($probe -and -not (Test-Path -LiteralPath $probe)) {
+        $leaf = Split-Path -Leaf $probe
+        $parent = Split-Path -Parent $probe
+        if (-not $leaf -or $parent -eq $probe) { break }
+        [void]$parts.Add($leaf)
+        $probe = $parent
+    }
+    $resolvedBase = $probe
+    if ($probe -and (Test-Path -LiteralPath $probe)) {
+        $resolvedTarget = $null
+        if ([Environment]::OSVersion.Platform -match 'Win') {
+            $typeCode = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class AkaiRescuePathHelper {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFileW(string lpFileName, uint dwDesiredAccess, uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(IntPtr hFile, StringBuilder lpszFilePath, uint cchFilePath, uint dwFlags);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+    public static string GetFinalPath(string path) {
+        IntPtr h = CreateFileW(path, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+        if (h == new IntPtr(-1)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        try {
+            var sb = new StringBuilder(1024);
+            uint res = GetFinalPathNameByHandleW(h, sb, (uint)sb.Capacity, 0);
+            if (res == 0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            if (res >= sb.Capacity) {
+                sb = new StringBuilder((int)res + 1);
+                res = GetFinalPathNameByHandleW(h, sb, (uint)sb.Capacity, 0);
+                if (res == 0 || res >= sb.Capacity) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+            string s = sb.ToString();
+            if (s.StartsWith("\\\\?\\UNC\\")) return "\\\\" + s.Substring(8);
+            if (s.StartsWith("\\\\?\\")) return s.Substring(4);
+            return s;
+        } finally { CloseHandle(h); }
+    }
+}
+'@
+            if (-not ('AkaiRescuePathHelper' -as [type])) {
+                Add-Type -TypeDefinition $typeCode -Language CSharp
+            }
+            $resolvedTarget = [AkaiRescuePathHelper]::GetFinalPath($probe)
+        } else {
+            $rpCmd = Get-Command realpath -ErrorAction SilentlyContinue
+            if ($rpCmd) {
+                $rpOut = (& $rpCmd.Source $probe 2>&1 | Out-String).Trim()
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($rpOut)) { $resolvedTarget = $rpOut }
+            }
+            if (-not $resolvedTarget) {
+                $gi = Get-Item -LiteralPath $probe -Force
+                $rt = $gi.ResolveLinkTarget($true)
+                $resolvedTarget = if ($rt) { $rt.FullName } else { $probe }
+            }
+        }
+        $resolvedBase = $resolvedTarget
+    }
+    for ($i = $parts.Count - 1; $i -ge 0; $i--) {
+        $resolvedBase = Join-Path $resolvedBase $parts[$i]
+    }
+    return [IO.Path]::GetFullPath($resolvedBase)
+}
+
 function Test-PathInsideRepo([string]$CandidatePath, [string]$RepositoryRoot) {
     $normRepo = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
-    $normCand = [IO.Path]::GetFullPath($CandidatePath).TrimEnd('\', '/')
-    return ($normCand -eq $normRepo) -or $normCand.StartsWith($normRepo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+    $physRepo = (Resolve-PhysicalPathSafe $normRepo).TrimEnd('\', '/')
+    foreach ($cand in @([IO.Path]::GetFullPath($CandidatePath), (Resolve-PhysicalPathSafe $CandidatePath))) {
+        $normCand = $cand.TrimEnd('\', '/')
+        foreach ($r in @($normRepo, $physRepo)) {
+            if (($normCand -eq $r) -or $normCand.StartsWith($r + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        }
+    }
+    return $false
 }
 
 $SigningKeystorePath = [IO.Path]::GetFullPath($SigningKeystorePath)
@@ -57,13 +140,33 @@ if (-not (Test-Path -LiteralPath $SigningKeystorePath -PathType Leaf)) {
     throw "FAIL-CLOSED: Keystore di firma non trovato: $SigningKeystorePath"
 }
 if (Test-PathInsideRepo -CandidatePath $SigningKeystorePath -RepositoryRoot $repoRoot) {
-    throw 'FAIL-CLOSED: Il keystore non puo risiedere dentro il repository Git.'
+    throw 'FAIL-CLOSED: Il keystore non puo risiedere dentro il repository Git (inclusi symlink/junction).'
 }
 
-# Verifica presenza immutabile del sorgente A2 nello store Git locale
+# Verifica vincolante dell'esatto commit storico A2 approvato (allowlist immutabile + tree provenance)
+if ($approvedA2SourceAllowlist -notcontains $ExpectedA2SourceSha) {
+    throw "FAIL-CLOSED: ExpectedA2SourceSha ($ExpectedA2SourceSha) non presente nell'allowlist immutabile A2 approvata ($($approvedA2SourceAllowlist -join ', '))."
+}
 $commitType = (& git -C $repoRoot cat-file -t $ExpectedA2SourceSha 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $commitType -ne 'commit') {
     throw "FAIL-CLOSED: Commit storico A2 ($ExpectedA2SourceSha) non presente nello store Git locale."
+}
+$rootTreeSpec = '{0}^{{tree}}' -f $ExpectedA2SourceSha
+$rootTreeSha = (& git -C $repoRoot rev-parse $rootTreeSpec 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $rootTreeSha -ne $expectedRootTreeSha) {
+    throw "FAIL-CLOSED: Root tree Git A2 inatteso ($rootTreeSha vs atteso $expectedRootTreeSha)."
+}
+$tvTreeSha = (& git -C $repoRoot rev-parse ('{0}:akai-remote-tv' -f $ExpectedA2SourceSha) 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $tvTreeSha -ne $expectedTvTreeSha) {
+    throw "FAIL-CLOSED: Tree akai-remote-tv A2 inatteso ($tvTreeSha vs atteso $expectedTvTreeSha)."
+}
+$webTreeSha = (& git -C $repoRoot rev-parse ('{0}:akai-remote-web' -f $ExpectedA2SourceSha) 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $webTreeSha -ne $expectedWebTreeSha) {
+    throw "FAIL-CLOSED: Tree akai-remote-web A2 inatteso ($webTreeSha vs atteso $expectedWebTreeSha)."
+}
+$manifestBlob = (& git -C $repoRoot rev-parse ('{0}:akai-remote-tv/app/src/main/AndroidManifest.xml' -f $ExpectedA2SourceSha) 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $manifestBlob -ne $expectedManifestBlob) {
+    throw "FAIL-CLOSED: Blob AndroidManifest.xml A2 inatteso ($manifestBlob vs atteso $expectedManifestBlob)."
 }
 $jniSpec = '{0}:{1}' -f $ExpectedA2SourceSha, 'akai-remote-tv/app/src/main/jni/uinput_jni.c'
 $javaNativeSpec = '{0}:{1}' -f $ExpectedA2SourceSha, 'akai-remote-tv/app/src/main/java/it/akai/customremote/UInputDriver.java'
@@ -332,12 +435,21 @@ try {
     }
 
     $apkSha256 = (Get-FileHash -LiteralPath $releaseApk -Algorithm SHA256).Hash.ToLowerInvariant()
+    $buildToolsVersion = Split-Path -Leaf $buildToolsDir
     $manifestObj = [ordered]@{
         packageName = 'it.akai.customremote'
         versionCode = $RescueVersionCode
         targetToRecoverVersionCode = $TargetToRecoverVersionCode
         versionName = $RescueVersionName
         a2SourceCommit = $ExpectedA2SourceSha
+        a2RootTreeSha = $rootTreeSha
+        a2TvTreeSha = $tvTreeSha
+        a2WebTreeSha = $webTreeSha
+        a2ManifestBlobSha = $manifestBlob
+        a2JniBlobSha = $jniBlob
+        a2UInputJavaBlobSha = $javaNativeBlob
+        buildToolsVersion = $buildToolsVersion
+        buildUtc = ([DateTime]::UtcNow.ToString('o'))
         apkFilename = $apkFileName
         apkSha256 = $apkSha256
         signerSha256 = $actualSigner
