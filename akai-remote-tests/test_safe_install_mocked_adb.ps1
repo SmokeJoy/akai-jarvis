@@ -6543,11 +6543,42 @@ Write-Output (@{ FailureCount = `$failures.Count; Failures = `$failures } | Conv
         Write-Host "   [FAIL] Sotto-test 43b: out='$out43b'" -ForegroundColor Red
     }
 
-    if ($subPassed43 -eq 2) {
-        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / STRICT KEYSTORE & ROLLBACK GATES] Test 43: Superati 2/2" -ForegroundColor Green
+    # 43c: Get-ApkSignerJar e Get-ResolvedAaptExecutable devono preferire build-tools 34.0.0 su 28.0.3 e 9.0.0
+    $sdk43c = Join-Path $testDir43 "sdk43c"
+    foreach ($ver43c in @("9.0.0", "28.0.3", "34.0.0")) {
+        $btDir43c = Join-Path $sdk43c "build-tools\$ver43c"
+        $libDir43c = Join-Path $btDir43c "lib"
+        New-Item -ItemType Directory -Force -Path $libDir43c | Out-Null
+        [IO.File]::WriteAllText((Join-Path $libDir43c "apksigner.jar"), "dummy-$ver43c")
+        $aaptName43c = if ($isWin43) { "aapt.exe" } else { "aapt" }
+        [IO.File]::WriteAllText((Join-Path $btDir43c $aaptName43c), "dummy-$ver43c")
+    }
+    $sdk43cEsc = $sdk43c.Replace('\', '/')
+    $cmd43c = @"
+`$env:ANDROID_HOME = '$sdk43cEsc'
+`$env:ANDROID_SDK_ROOT = '$sdk43cEsc'
+`$env:APKSIGNER_JAR = ''
+`$env:APKSIGNER_EXECUTABLE = ''
+. '$scriptEsc43' -Action plan | Out-Null
+`$selJar = Get-ApkSignerJar
+`$selAapt = Get-ResolvedAaptExecutable
+Write-Output (@{ Jar = `$selJar; Aapt = `$selAapt } | ConvertTo-Json -Compress)
+"@
+    $out43c = Invoke-SubPs43 $cmd43c
+    $json43cLine = ($out43c -split "\r?\n" | Where-Object { $_ -match '^\{' } | Select-Object -Last 1)
+    $res43c = if ($json43cLine) { $json43cLine | ConvertFrom-Json } else { $null }
+    if ($res43c -and ($res43c.Jar -match '[\\/]34\.0\.0[\\/]lib[\\/]apksigner\.jar$') -and ($res43c.Aapt -match '[\\/]34\.0\.0[\\/]aapt(\.exe)?$')) {
+        $subPassed43++
+        Write-Host "   [PASS] Sotto-test 43c: Get-ApkSignerJar e Get-ResolvedAaptExecutable selezionano 34.0.0 sopra 28.0.3 e 9.0.0" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 43c: out='$out43c'" -ForegroundColor Red
+    }
+
+    if ($subPassed43 -eq 3) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / STRICT KEYSTORE & ROLLBACK GATES] Test 43: Superati 3/3" -ForegroundColor Green
         $passed++
     } else {
-        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / STRICT KEYSTORE & ROLLBACK GATES] Test 43: Superati $subPassed43 / 2" -ForegroundColor Red
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / STRICT KEYSTORE & ROLLBACK GATES] Test 43: Superati $subPassed43 / 3" -ForegroundColor Red
         $failed++
     }
 } catch {

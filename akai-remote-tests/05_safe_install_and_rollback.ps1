@@ -92,20 +92,53 @@ function Get-AdbExecutable {
     return $adb
 }
 
+function Get-OrderedAndroidSdkRoots {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($raw in @(
+        $env:ANDROID_HOME,
+        $env:ANDROID_SDK_ROOT,
+        (Join-Path (Split-Path -Parent $PSScriptRoot) "tools\android-sdk"),
+        $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "Android\Sdk" } else { $null }),
+        "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\android-sdk"
+    )) {
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        if (Test-Path -LiteralPath $raw -PathType Container) {
+            $norm = [IO.Path]::GetFullPath($raw).TrimEnd('\', '/')
+            if ($candidates -notcontains $norm) {
+                [void]$candidates.Add($norm)
+            }
+        }
+    }
+    return @($candidates)
+}
+
+function Get-OrderedBuildToolsDirs([string]$SdkRoot) {
+    $toolsRoot = Join-Path $SdkRoot "build-tools"
+    if (-not (Test-Path -LiteralPath $toolsRoot -PathType Container)) { return @() }
+    $items = @(Get-ChildItem -LiteralPath $toolsRoot -Directory -ErrorAction SilentlyContinue)
+    return @($items | Sort-Object {
+        $v = $null
+        if ($_.Name -match '^(\d+(?:\.\d+){1,3})' -and [version]::TryParse($matches[1], [ref]$v)) {
+            $v
+        } else {
+            [version]::new(0, 0)
+        }
+    } -Descending)
+}
+
 function Get-ApkSignerJar {
-    if ($env:APKSIGNER_JAR -and (Test-Path $env:APKSIGNER_JAR)) {
+    if ($env:APKSIGNER_JAR -and (Test-Path -LiteralPath $env:APKSIGNER_JAR -PathType Leaf)) {
         return $env:APKSIGNER_JAR
     }
-    $sdkDir = "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\android-sdk"
-    $apksignerJar = Join-Path $sdkDir "build-tools\28.0.3\lib\apksigner.jar"
-    if (Test-Path $apksignerJar) {
-        return $apksignerJar
+    foreach ($sdkRoot in (Get-OrderedAndroidSdkRoots)) {
+        foreach ($btDir in (Get-OrderedBuildToolsDirs $sdkRoot)) {
+            $candidate = Join-Path $btDir.FullName "lib\apksigner.jar"
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                return $candidate
+            }
+        }
     }
-    if ($env:ANDROID_HOME) {
-        $found = Get-ChildItem -Path "$env:ANDROID_HOME/build-tools" -Filter "apksigner.jar" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-        if ($found) { return $found }
-    }
-    return $apksignerJar
+    return $null
 }
 
 function Get-Sha256Hex($filePath) {
@@ -1074,19 +1107,15 @@ function Restore-TargetApplicationService {
 
 function Get-ResolvedAaptExecutable {
     $aaptPath = $null
-    $sdkRoot = $env:ANDROID_HOME
-    if (-not $sdkRoot) { $sdkRoot = $env:ANDROID_SDK_ROOT }
-    if ($sdkRoot) {
-        $toolsRoot = Join-Path $sdkRoot "build-tools"
-        if (Test-Path $toolsRoot) {
-            foreach ($dir in @(Get-ChildItem $toolsRoot -Directory | Sort-Object Name -Descending)) {
-                foreach ($name in @("aapt.exe", "aapt.cmd", "aapt")) {
-                    $candidate = Join-Path $dir.FullName $name
-                    if (Test-Path $candidate) { $aaptPath = $candidate; break }
-                }
-                if ($aaptPath) { break }
+    foreach ($sdkRoot in (Get-OrderedAndroidSdkRoots)) {
+        foreach ($dir in (Get-OrderedBuildToolsDirs $sdkRoot)) {
+            foreach ($name in @("aapt.exe", "aapt.cmd", "aapt")) {
+                $candidate = Join-Path $dir.FullName $name
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) { $aaptPath = $candidate; break }
             }
+            if ($aaptPath) { break }
         }
+        if ($aaptPath) { break }
     }
     if (-not $aaptPath) {
         $cmd = Get-Command aapt -ErrorAction SilentlyContinue
@@ -1611,18 +1640,21 @@ function Get-ApkCertificateFingerprint($apkFile) {
             $out = & $apksignerCli.Source verify --print-certs $apkFile 2>&1
         } else {
             $signerJar = Get-ApkSignerJar
-            if (-not (Test-Path $signerJar)) {
+            if (-not $signerJar -or -not (Test-Path -LiteralPath $signerJar -PathType Leaf)) {
                 throw "ERRORE FAIL-CLOSED: Tool apksigner.jar non trovato in: $signerJar"
             }
 
-            $jdkDir = "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\jdk-17"
-            $java = Join-Path $jdkDir "bin\java.exe"
-            if (-not (Test-Path $java)) {
-                $javaCmd = Get-Command java -ErrorAction SilentlyContinue
-                if ($javaCmd) { $java = $javaCmd.Source }
-            }
-            if (-not (Test-Path $java) -and -not (Get-Command $java -ErrorAction SilentlyContinue)) {
-                throw "ERRORE FAIL-CLOSED: Eseguibile java non trovato in: $java"
+            $repoRootTool = Split-Path -Parent $PSScriptRoot
+            $javaCandidates = @(
+                $(if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME "bin\java.exe" } else { $null }),
+                $(if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME "bin\java" } else { $null }),
+                (Join-Path $repoRootTool "tools\jdk-17\bin\java.exe"),
+                (Get-Command java -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+                "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\jdk-17\bin\java.exe"
+            )
+            $java = $javaCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+            if (-not $java) {
+                throw "ERRORE FAIL-CLOSED: Eseguibile java non trovato."
             }
 
             $out = & $java -jar $signerJar verify --print-certs $apkFile 2>&1
@@ -1706,8 +1738,9 @@ function Verify-SQLiteIntegrityOffline($dbFile) {
     if (-not $env:FORCE_SQLITE3_CLI) {
         $nodePaths = @(
             $env:NODE_EXE,
-            "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\nodejs\node.exe",
-            (Get-Command node -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+            (Join-Path (Split-Path -Parent $PSScriptRoot) "tools\nodejs\node.exe"),
+            (Get-Command node -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+            "c:\Users\danie\OneDrive\Documenti\Antygravity\Akay\tools\nodejs\node.exe"
         )
         $validNode = $nodePaths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
