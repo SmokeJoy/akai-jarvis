@@ -193,7 +193,9 @@ c.close()
         try {
             $psCallArgs = if ($isWin) { @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script16) } else { @("-NoProfile", "-File", $script16) }
             $out = (& $psExe @psCallArgs @ScriptArgs 2>&1 | Out-String)
-            $norm = ($out -replace '\s+', ' ').Trim()
+            $clean = $out -replace '\x1b\[[0-9;]*m', ''
+            $clean = $clean -replace '(?m)^\s*\|\s*', ' '
+            $norm = ($clean -replace '\s+', ' ').Trim()
             return @{ ExitCode = $LASTEXITCODE; Output = $out; Normalized = $norm }
         } finally {
             $ErrorActionPreference = $prevEap
