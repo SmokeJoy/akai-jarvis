@@ -10,7 +10,11 @@ param(
     [string]$ApkPath = $null,
     [string]$BuildManifestPath = $null,
     [string]$OtaReleasePublicKeyPath = $null,
-    [string]$OtaReleaseManifestUrl = $null
+    [string]$OtaReleaseManifestUrl = $null,
+    [ValidateSet('Release', 'Staging')]
+    [string]$ChannelProfile = 'Release',
+    [ValidateRange(0, 2147483646)]
+    [int]$RescueVersionCode = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,13 +31,35 @@ function Get-Sha256Lower {
     }
 }
 
+function Test-StrictOtaManifestUrl {
+    param([string]$CandidateUrl)
+    $uri = $null
+    if ([string]::IsNullOrWhiteSpace($CandidateUrl)) { return $null }
+    $trimmed = $CandidateUrl.Trim()
+    if (-not [Uri]::TryCreate($trimmed, [UriKind]::Absolute, [ref]$uri)) { return $null }
+    if ($uri.Scheme -ne "https" -or -not $uri.IsDefaultPort) { return $null }
+    if (-not [string]::IsNullOrEmpty($uri.UserInfo) -or -not [string]::IsNullOrEmpty($uri.Query) -or -not [string]::IsNullOrEmpty($uri.Fragment)) { return $null }
+    if (-not $uri.AbsolutePath.EndsWith(".manifest", [StringComparison]::Ordinal)) { return $null }
+    if ([string]::IsNullOrWhiteSpace($uri.DnsSafeHost)) { return $null }
+    $h = $uri.DnsSafeHost.ToLowerInvariant()
+    $ipObj = $null
+    if ($h -eq "localhost" -or $h.EndsWith(".localhost") -or $h.EndsWith(".local") -or $h.EndsWith(".lan") -or $h.EndsWith(".internal") -or $h.EndsWith(".home")) {
+        return $null
+    }
+    if ([System.Net.IPAddress]::TryParse($h.Trim('[', ']'), [ref]$ipObj)) { return $null }
+    if (-not $h.Contains(".") -or $h.EndsWith(".")) { return $null }
+    return $uri
+}
+
 $reasons = [System.Collections.Generic.List[string]]::new()
 
-$defaultTrustDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "AkaiJarvisOtaReleaseTrust" } else { $null }
+$trustSubdir = if ($ChannelProfile -eq 'Staging') { "AkaiJarvisOtaStagingTrust" } else { "AkaiJarvisOtaReleaseTrust" }
+$trustKeyFile = if ($ChannelProfile -eq 'Staging') { "ota-staging-public.der" } else { "ota-release-public.der" }
+$defaultTrustDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA $trustSubdir } else { $null }
 $resolvedKeyPath = if (-not [string]::IsNullOrWhiteSpace($OtaReleasePublicKeyPath)) {
     [IO.Path]::GetFullPath($OtaReleasePublicKeyPath)
 } elseif ($defaultTrustDir) {
-    Join-Path $defaultTrustDir "ota-release-public.der"
+    Join-Path $defaultTrustDir $trustKeyFile
 } else {
     $null
 }
@@ -62,6 +88,7 @@ $manifestVersionCode = $null
 $manifestOtaProvisioned = $null
 $nextRecommendedReleaseVersionCode = 6
 
+$manFloor = 0
 if (-not [string]::IsNullOrWhiteSpace($BuildManifestPath)) {
     if (-not (Test-Path -LiteralPath $BuildManifestPath -PathType Leaf)) {
         [void]$reasons.Add("MISSING_BUILD_MANIFEST")
@@ -69,7 +96,7 @@ if (-not [string]::IsNullOrWhiteSpace($BuildManifestPath)) {
         $man = Get-Content -LiteralPath $BuildManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($man.versionCode) {
             $manifestVersionCode = [int]$man.versionCode
-            $nextRecommendedReleaseVersionCode = [Math]::Max(6, $manifestVersionCode + 1)
+            $manFloor = $manifestVersionCode + 1
         }
         if ($null -ne $man.otaProvisioned) {
             $manifestOtaProvisioned = [bool]$man.otaProvisioned
@@ -85,15 +112,17 @@ if (-not [string]::IsNullOrWhiteSpace($BuildManifestPath)) {
         }
     }
 }
+$rescueFloor = if ($RescueVersionCode -gt 0) { $RescueVersionCode + 1 } else { 0 }
+$nextRecommendedReleaseVersionCode = [Math]::Max(6, [Math]::Max($manFloor, $rescueFloor))
 
 $channelConfigured = $false
 if (-not [string]::IsNullOrWhiteSpace($effectiveUrl)) {
-    $uri = $null
-    if ([Uri]::TryCreate($effectiveUrl.Trim(), [UriKind]::Absolute, [ref]$uri) -and $uri.Scheme -eq "https" -and -not [string]::IsNullOrWhiteSpace($uri.Host)) {
+    $uri = Test-StrictOtaManifestUrl -CandidateUrl $effectiveUrl
+    if ($null -ne $uri) {
         $channelConfigured = $true
         $effectiveUrl = $uri.AbsoluteUri
     } else {
-        [void]$reasons.Add("INVALID_OTA_MANIFEST_URL_REQUIRES_HTTPS")
+        [void]$reasons.Add("INVALID_OTA_MANIFEST_URL_REQUIRES_PUBLIC_HTTPS")
     }
 } else {
     [void]$reasons.Add("MISSING_OTA_MANIFEST_URL")
@@ -138,8 +167,8 @@ if (-not [string]::IsNullOrWhiteSpace($ApkPath)) {
                     $sr.Dispose()
                 }
                 $firstLine = ($chText -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
-                $chUri = $null
-                if ($firstLine -and [Uri]::TryCreate($firstLine.Trim(), [UriKind]::Absolute, [ref]$chUri) -and $chUri.Scheme -eq "https") {
+                $chUri = Test-StrictOtaManifestUrl -CandidateUrl $firstLine
+                if ($null -ne $chUri) {
                     $apkBundledChannelPresent = $true
                     $apkBundledChannelUrl = $chUri.AbsoluteUri
                 } else {

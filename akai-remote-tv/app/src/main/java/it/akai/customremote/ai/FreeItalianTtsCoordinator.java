@@ -185,6 +185,7 @@ public final class FreeItalianTtsCoordinator {
                             context, text, voice, apiKey, cancelled);
                     if (!main.post(new Runnable() {
                         @Override public void run() {
+                            boolean doFallback = false;
                             synchronized (FreeItalianTtsCoordinator.this) {
                                 if (request != generation) {
                                     if (mp3 != null) mp3.delete();
@@ -192,10 +193,13 @@ public final class FreeItalianTtsCoordinator {
                                 }
                                 if (mp3 == null) {
                                     busy = false;
-                                    events.onFallback(text);
+                                    doFallback = true;
                                 } else {
-                                    playOnMain(mp3, text, request, events);
+                                    doFallback = !playOnMainLocked(mp3, text, request, events);
                                 }
+                            }
+                            if (doFallback) {
+                                events.onFallback(text);
                             }
                         }
                     })) {
@@ -213,8 +217,8 @@ public final class FreeItalianTtsCoordinator {
         return true;
     }
 
-    private void playOnMain(final File file, final String text,
-                            final long request, final Events events) {
+    private boolean playOnMainLocked(final File file, final String text,
+                                     final long request, final Events events) {
         releasePlayer();
         playingFile = file;
         try {
@@ -226,34 +230,65 @@ public final class FreeItalianTtsCoordinator {
             }
             current.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override public void onPrepared(MediaPlayer mp) {
+                    boolean notifyPlaying = false;
+                    boolean doFallback = false;
                     synchronized (FreeItalianTtsCoordinator.this) {
                         if (request != generation || current != player) return;
                         try {
                             audioStarted = true;
-                            events.onPlaying();
                             mp.start();
+                            notifyPlaying = true;
+                            main.postDelayed(new Runnable() {
+                                @Override public void run() {
+                                    boolean notifyCompleted = false;
+                                    synchronized (FreeItalianTtsCoordinator.this) {
+                                        if (request == generation && current == player) {
+                                            Log.w(TAG, "Playback watchdog released stalled MediaPlayer.");
+                                            releasePlayer();
+                                            busy = false;
+                                            notifyCompleted = true;
+                                        }
+                                    }
+                                    if (notifyCompleted) {
+                                        events.onCompleted();
+                                    }
+                                }
+                            }, 60000);
                         } catch (Exception e) {
-                            failedPlayback(current, request, text, events);
+                            doFallback = failPlaybackLocked(current, request);
                         }
+                    }
+                    if (notifyPlaying) {
+                        events.onPlaying();
+                    } else if (doFallback) {
+                        events.onFallback(text);
                     }
                 }
             });
             current.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override public void onCompletion(MediaPlayer mp) {
+                    boolean notifyCompleted = false;
                     synchronized (FreeItalianTtsCoordinator.this) {
                         if (request != generation || current != player) return;
                         releasePlayer();
                         busy = false;
+                        notifyCompleted = true;
+                    }
+                    if (notifyCompleted) {
                         events.onCompleted();
                     }
                 }
             });
             current.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                 @Override public boolean onError(MediaPlayer mp, int what, int extra) {
+                    boolean doFallback = false;
                     synchronized (FreeItalianTtsCoordinator.this) {
                         if (request == generation && current == player) {
-                            failedPlayback(current, request, text, events);
+                            doFallback = failPlaybackLocked(current, request);
                         }
+                    }
+                    if (doFallback) {
+                        events.onFallback(text);
                     }
                     return true;
                 }
@@ -261,25 +296,30 @@ public final class FreeItalianTtsCoordinator {
             current.prepareAsync();
             main.postDelayed(new Runnable() {
                 @Override public void run() {
+                    boolean doFallback = false;
                     synchronized (FreeItalianTtsCoordinator.this) {
                         if (request == generation && current == player && !audioStarted) {
-                            failedPlayback(current, request, text, events);
+                            doFallback = failPlaybackLocked(current, request);
                         }
+                    }
+                    if (doFallback) {
+                        events.onFallback(text);
                     }
                 }
             }, 12000);
+            return true;
         } catch (Exception e) {
             Log.w(TAG, "Local playback failed: " + e.getClass().getSimpleName());
-            failedPlayback(player, request, text, events);
+            failPlaybackLocked(player, request);
+            return false;
         }
     }
 
-    private void failedPlayback(MediaPlayer expected, long request,
-                                String text, Events events) {
-        if (request != generation || expected != player) return;
+    private boolean failPlaybackLocked(MediaPlayer expected, long request) {
+        if (request != generation || expected != player) return false;
         releasePlayer();
         busy = false;
-        events.onFallback(text);
+        return true;
     }
 
     public synchronized void stop() {

@@ -341,5 +341,31 @@
             android:textColor="#CBD5E1"
             android:textSize="12sp" />
 
+        <Button
+            android:id="@+id/btn_ota_permission"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:layout_marginTop="8dp"
+            android:text="Abilita permesso installazione Android (Impostazioni)"
+            android:textColor="#0A0D14"
+            android:textStyle="bold"
+            android:background="#FBBF24"
+            android:focusable="true"
+            android:enabled="false"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/btn_ota_install_confirmed"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:text="Installa aggiornamento verificato (conferma proprietario)"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:background="#059669"
+            android:focusable="true"
+            android:enabled="false"
+            android:visibility="gone" />
+
     </LinearLayout>
 </ScrollView>

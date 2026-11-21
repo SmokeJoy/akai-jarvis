@@ -64,6 +64,9 @@ jobs:
       - name: 1a2. Optional local Italian Web Remote voice (no cloud TTS)
         run: node akai-remote-tests/test_web_local_italian_voice.js
 
+      - name: 1a2b. Web Remote conversation lifecycle recovery & turnId race guard
+        run: node akai-remote-tests/test_web_convo_lifecycle.js
+
       - name: 1a3. Owner-offline OTA release key and manifest tools syntax and actual APK evidence audit
         run: |
           node --check scripts/13_create_ota_release_trust.mjs
@@ -327,6 +330,9 @@ jobs:
 
       - name: 4b2. Signed OTA Provisioning E2E (RSA-3072 trust, channel & A2 rescue v5->v6 upgrade + Script 17 readiness)
         run: node akai-remote-tests/test_ota_provisioning_e2e.mjs
+
+      - name: 4b3. On-TV owner-confirmed OTA UI & PackageInstaller wiring checks
+        run: python3 akai-remote-tests/test_ota_owner_ui_wiring.py
 
       - name: 4c. DeepSeek/Kimi-only provider guard (no local AI models)
         run: |

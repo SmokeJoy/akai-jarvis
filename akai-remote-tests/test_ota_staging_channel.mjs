@@ -85,14 +85,15 @@ function writeStoredZip(outPath, entries) {
 
 let testCount = 0;
 
-// 1. Monotonic version ordering
+// 1. Monotonic 7-step version ordering (includes higher rescue recovery step for staging)
 const validPlan = {
   installedA2: 3,
   v4Diagnostic: 4,
   a2Rescue: 5,
   otaStageBase: 6,
   otaStageTarget: 7,
-  v5Release: 8,
+  a2RescueForStaging: 8,
+  v5Release: 9,
 };
 assert.equal(validateMonotonicVersionPlan(validPlan).ok, true);
 testCount++;
@@ -100,9 +101,11 @@ testCount++;
 for (const [label, bad] of [
   ['collision', { ...validPlan, otaStageBase: 5 }],
   ['inversion', { ...validPlan, v4Diagnostic: 6, a2Rescue: 5 }],
+  ['rescueForStaging<=stageTarget', { ...validPlan, a2RescueForStaging: 7 }],
+  ['v5<=rescueForStaging', { ...validPlan, v5Release: 8 }],
   ['zero', { ...validPlan, installedA2: 0 }],
   ['non-integer', { ...validPlan, otaStageTarget: 7.5 }],
-  ['string', { ...validPlan, v5Release: '8' }],
+  ['string', { ...validPlan, v5Release: '9' }],
 ]) {
   assert.throws(
     () => validateMonotonicVersionPlan(bad),
@@ -164,12 +167,22 @@ for (const [label, bad] of [
   testCount++;
 }
 
-// 3. URL & manifest text guards
+// 3. URL & manifest text guards (public/DNS HTTPS only; no localhost, .local, .lan, or IP literals)
 assert.throws(() => validateHttpsStagingUrl('http://staging.example/a.manifest', '.manifest'), /STAGING_URL_REJECTED_/);
 assert.throws(() => validateHttpsStagingUrl('https://staging.example:8443/a.manifest', '.manifest'), /STAGING_URL_REJECTED_/);
 assert.throws(() => validateHttpsStagingUrl('https://staging.example/a.manifest?x=1', '.manifest'), /STAGING_URL_REJECTED_/);
 assert.throws(() => validateHttpsStagingUrl('https://staging.example/a.txt', '.manifest'), /STAGING_URL_REJECTED_/);
-testCount += 4;
+for (const badHost of [
+  'https://localhost/a.manifest',
+  'https://127.0.0.1/a.manifest',
+  'https://192.168.1.50/a.manifest',
+  'https://[::1]/a.manifest',
+  'https://jarvis.local/a.manifest',
+  'https://router.lan/a.manifest',
+]) {
+  assert.throws(() => validateHttpsStagingUrl(badHost, '.manifest'), /STAGING_URL_REJECTED_PRIVATE_OR_LOCAL_HOST/, badHost);
+}
+testCount += 10;
 
 // 4. Java OtaSignedReleaseManifest + OtaCandidateGate E2E using ephemeral in-memory staging RSA-3072 keys
 const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'akai_ota_staging_test_'));

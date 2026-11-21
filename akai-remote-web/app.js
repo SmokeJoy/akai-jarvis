@@ -46,7 +46,8 @@
         silenceTimeoutMs: 1400,
         lastTranscript: '',
         aiAbortController: null,
-        lastQuery: ''
+        lastQuery: '',
+        lastTurnContinuation: null
     };
 
     // DOM Elements Cache
@@ -450,10 +451,14 @@
             return;
         }
 
+        clearTimeout(convoSession.vadTimer);
+        clearTimeout(convoSession.inactivityTimer);
+        convoSession.currentTurnId++;
         convoSession.active = true;
         convoSession.turnCount = 0;
         convoSession.turnLocked = false;
         convoSession.lastTranscript = '';
+        convoSession.lastTurnContinuation = null;
 
         if (elements.jarvisConvoControls) {
             elements.jarvisConvoControls.classList.remove('hidden');
@@ -510,8 +515,10 @@
         const shouldCancelTv = Boolean(convoSession.aiAbortController) ||
             convoSession.state === JarvisConvoState.THINKING ||
             convoSession.state === JarvisConvoState.SPEAKING;
+        convoSession.currentTurnId++;
         convoSession.active = false;
         convoSession.turnLocked = false;
+        convoSession.lastTurnContinuation = null;
         clearTimeout(convoSession.vadTimer);
         clearTimeout(convoSession.inactivityTimer);
 
@@ -547,13 +554,17 @@
     // Submit a recognized vocal turn to the TV
     async function commitTurn(recognizedPhrase, turnId) {
         const query = (recognizedPhrase || '').trim();
-        if (!query) {
-            convoSession.turnLocked = false;
+        if (!query || !convoSession.active || (typeof turnId === 'number' && turnId !== convoSession.currentTurnId)) {
+            if (typeof turnId !== 'number' || turnId === convoSession.currentTurnId) {
+                convoSession.turnLocked = false;
+            }
             return;
         }
 
+        const effectiveTurnId = (typeof turnId === 'number') ? turnId : convoSession.currentTurnId;
         convoSession.lastTranscript = '';
         convoSession.lastQuery = query;
+        convoSession.lastTurnContinuation = null;
         clearTimeout(convoSession.vadTimer);
         clearTimeout(convoSession.inactivityTimer);
 
@@ -571,20 +582,39 @@
         triggerHaptic(25);
 
         // Execute request on the TV (force spoken TTS reply)
-        const ok = await askAi(query, true);
+        const ok = await askAi(query, true, effectiveTurnId);
 
-        // If conversation is still active, poll until TV finished speaking, then reopen microphone
-        if (convoSession.active && ok !== false) {
+        if (!convoSession.active || effectiveTurnId !== convoSession.currentTurnId) {
+            return;
+        }
+
+        const continuation = convoSession.lastTurnContinuation || (ok ? 'SPEAK_AND_RESUME' : 'TERMINAL_RECOVERABLE');
+        if (continuation === 'SPEAK_AND_RESUME') {
             const phoneSpeechTurn = convoSession.phoneSpeechPromise;
             if (phoneSpeechTurn) await phoneSpeechTurn;
-            if (convoSession.active) await handleTvSpeechTurn(Boolean(phoneSpeechTurn));
+            if (!convoSession.active || effectiveTurnId !== convoSession.currentTurnId) {
+                return;
+            }
+            await handleTvSpeechTurn(Boolean(phoneSpeechTurn), effectiveTurnId);
+        } else if (continuation === 'SESSION_EXPIRED') {
+            stopConversation();
         } else {
             convoSession.turnLocked = false;
+            const readyLabel = continuation === 'CANCELLED'
+                ? 'Operazione annullata — tocca per parlare'
+                : 'Pronto — tocca per riprovare';
+            setJarvisState(JarvisConvoState.READY, readyLabel, 'ready');
+            if (elements.btnConvoTalkAgain) {
+                elements.btnConvoTalkAgain.classList.remove('hidden');
+            }
+            resetInactivityTimer();
         }
     }
 
     // P1-03: Robust speech status polling
-    async function handleTvSpeechTurn(phoneAlreadySpoken = false) {
+    async function handleTvSpeechTurn(phoneAlreadySpoken = false, turnId = convoSession.currentTurnId) {
+        if (!convoSession.active || turnId !== convoSession.currentTurnId) return;
+
         setJarvisState(JarvisConvoState.SPEAKING,
             phoneAlreadySpoken ? 'Risposta vocale locale completata' : 'La TV sta rispondendo...',
             'speaking');
@@ -593,14 +623,15 @@
         let speechSeen = false;
 
         // Poll TV speech status until finished
-        while (!phoneAlreadySpoken && pollCount < 40 && convoSession.active) {
+        while (!phoneAlreadySpoken && pollCount < 40 && convoSession.active && turnId === convoSession.currentTurnId) {
             await new Promise(r => setTimeout(r, 400));
-            if (!convoSession.active) return;
+            if (!convoSession.active || turnId !== convoSession.currentTurnId) return;
 
             try {
                 const res = await fetch(getApiUrl('/api/ai/speech_status'), {
                     headers: { 'Authorization': `Bearer ${state.token}` }
                 });
+                if (!convoSession.active || turnId !== convoSession.currentTurnId) return;
                 if (res.ok) {
                     const data = await res.json();
                     const sState = data.speech_state || (data.speaking ? 'PLAYING' : 'IDLE');
@@ -618,10 +649,12 @@
             if (pollCount >= 10 && !speechSeen) break;
         }
 
-        if (!convoSession.active) return;
+        if (!convoSession.active || turnId !== convoSession.currentTurnId) return;
 
         // Acoustic buffer before reopening mic
         await new Promise(r => setTimeout(r, 400));
+        if (!convoSession.active || turnId !== convoSession.currentTurnId) return;
+
         convoSession.turnLocked = false;
 
         // Reopen mic for next multi-turn question
@@ -764,15 +797,55 @@
             && data.execution_outcome === 'STATE_VERIFIED';
     }
 
-    async function askAi(userQuery, forceSpeak = true) {
+    // Separate conversation lifecycle continuation from hardware verification:
+    // COMPLETED_UNVERIFIED / COMMAND_SENT or handled ERROR with a reply must still
+    // advance through speech polling and reopen the microphone cleanly without
+    // claiming action verification.
+    function classifyTurnContinuation(httpStatus, data, requestError, userCancelRequested = false) {
+        if (userCancelRequested || (data && data.status === 'CANCELLED')) {
+            return 'CANCELLED';
+        }
+        if (httpStatus === 401) {
+            return 'SESSION_EXPIRED';
+        }
+        if (requestError || httpStatus === 426) {
+            return 'TERMINAL_RECOVERABLE';
+        }
+        if (!data || typeof data !== 'object') {
+            return 'TERMINAL_RECOVERABLE';
+        }
+        if (data.status === 'PRIVACY_BLOCKED' || data.status === 'BUDGET_EXCEEDED') {
+            return 'TERMINAL_RECOVERABLE';
+        }
+        const hasReply = typeof data.reply === 'string' && data.reply.trim().length > 0;
+        const okRange = httpStatus >= 200 && httpStatus < 300;
+        if ((okRange || isHandledAiReply(httpStatus, data)) && hasReply) {
+            return 'SPEAK_AND_RESUME';
+        }
+        if (isVerifiedAiReply(data) || (data.status === 'MEMORY_HANDLED' && data.success === true)) {
+            return 'SPEAK_AND_RESUME';
+        }
+        return 'TERMINAL_RECOVERABLE';
+    }
+
+    async function askAi(userQuery, forceSpeak = true, expectedTurnId = null) {
         const query = (userQuery || elements.aiTextInput.value).trim();
-        if (!query) return false;
+        const isStaleTurn = () => expectedTurnId !== null && expectedTurnId !== convoSession.currentTurnId;
+        if (!query) {
+            if (!isStaleTurn() && typeof classifyTurnContinuation === 'function') {
+                convoSession.lastTurnContinuation = 'TERMINAL_RECOVERABLE';
+            }
+            return false;
+        }
 
         triggerHaptic(20);
         elements.aiActiveLabel.textContent = 'Elaborazione assistente AI...';
         elements.aiActiveState.classList.remove('hidden');
 
         if (!state.token) {
+            if (!isStaleTurn() && typeof classifyTurnContinuation === 'function') {
+                convoSession.lastTurnContinuation = 'TERMINAL_RECOVERABLE';
+            }
             showToast('Associa il telecomando con il PIN prima di usare JARVIS', true);
             elements.aiActiveState.classList.add('hidden');
             openPairingModal();
@@ -785,9 +858,10 @@
 
         // Allow the bounded 2-minute autonomous visual task to finish, plus response grace.
         convoSession.userCancelRequested = false;
-        convoSession.aiAbortController = new AbortController();
+        const localAbortController = new AbortController();
+        convoSession.aiAbortController = localAbortController;
         const timeoutId = setTimeout(() => {
-            if (convoSession.aiAbortController) convoSession.aiAbortController.abort();
+            localAbortController.abort();
         }, 135000);
 
         try {
@@ -798,11 +872,15 @@
                     'Authorization': `Bearer ${state.token}`
                 },
                 body: JSON.stringify({ query, speak: forceSpeak && !usePhoneSpeech, source: 'web_remote' }),
-                signal: convoSession.aiAbortController.signal
+                signal: localAbortController.signal
             });
             clearTimeout(timeoutId);
 
             const data = await res.json().catch(() => ({}));
+            if (isStaleTurn()) return false;
+            if (typeof classifyTurnContinuation === 'function') {
+                convoSession.lastTurnContinuation = classifyTurnContinuation(res.status, data, null, convoSession.userCancelRequested);
+            }
 
             if (res.ok || isHandledAiReply(res.status, data)) {
                 displayAiResponse(data, query);
@@ -852,7 +930,11 @@
             }
         } catch (e) {
             clearTimeout(timeoutId);
+            if (isStaleTurn()) return false;
             if (e.name === 'AbortError' && convoSession.userCancelRequested) {
+                if (typeof classifyTurnContinuation === 'function') {
+                    convoSession.lastTurnContinuation = 'CANCELLED';
+                }
                 convoSession.userCancelRequested = false;
                 displayAiResponse({
                     success: false,
@@ -862,6 +944,9 @@
                     verified: false
                 }, query);
                 return false;
+            }
+            if (typeof classifyTurnContinuation === 'function') {
+                convoSession.lastTurnContinuation = 'TERMINAL_RECOVERABLE';
             }
             if (e.name === 'AbortError') {
                 showToast('Richiesta annullata o timeout.', true);
@@ -876,8 +961,10 @@
             }, query);
             return false;
         } finally {
-            convoSession.aiAbortController = null;
-            elements.aiActiveState.classList.add('hidden');
+            if (convoSession.aiAbortController === localAbortController) {
+                convoSession.aiAbortController = null;
+                elements.aiActiveState.classList.add('hidden');
+            }
         }
     }
 

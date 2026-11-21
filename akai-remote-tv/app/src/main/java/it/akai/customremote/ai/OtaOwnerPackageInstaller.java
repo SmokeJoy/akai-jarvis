@@ -48,8 +48,8 @@ public final class OtaOwnerPackageInstaller {
      * actual backup+restoration evidence. Do NOT pass guessed true booleans.
      * It must be called on a short-lived background worker, never at boot.
      *
-     * No caller in the current app invokes this method: TV integration needs
-     * an owner-reviewed recovery evidence source and separate on-screen UI.
+     * Only MainActivity's physical two-checkbox owner confirmation dialog after
+     * preflight may invoke this method; never wire it to Web API, AI or boot.
      */
     public static Outcome submitAfterPhysicalOwnerApproval(
             Context context,

@@ -60,6 +60,7 @@ export function validateMonotonicVersionPlan(plan) {
     'a2Rescue',
     'otaStageBase',
     'otaStageTarget',
+    'a2RescueForStaging',
     'v5Release',
   ];
   const values = [];
@@ -94,6 +95,22 @@ export function validateHttpsStagingUrl(raw, extension) {
     !url.pathname.endsWith(extension)
   ) {
     throw new Error('STAGING_URL_REJECTED_HTTPS_PIN_' + extension);
+  }
+  const host = url.hostname.toLowerCase();
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.lan') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.home') ||
+    host.startsWith('[') ||
+    host.includes(':') ||
+    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ||
+    !host.includes('.') ||
+    host.endsWith('.')
+  ) {
+    throw new Error('STAGING_URL_REJECTED_PRIVATE_OR_LOCAL_HOST');
   }
   return url;
 }

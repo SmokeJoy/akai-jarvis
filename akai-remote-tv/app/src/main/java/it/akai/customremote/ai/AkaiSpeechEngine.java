@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     private static final String TAG = "AKAI_SpeechEngine";
     private static final String PREFERRED_OFFLINE_ENGINE = "com.reecedunn.espeak";
+    private static final long OFFLINE_UTTERANCE_WATCHDOG_MS = 25000L;
 
     public enum SpeechState {
         IDLE, FETCHING, PLAYING
@@ -41,6 +42,8 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     private final CloudSpeechAdapter mCloudAdapter;
     private final AkaiMemoryEngine mMemoryEngine;
     private final FreeItalianTtsCoordinator mFreeVoice;
+    private final Handler mWatchdogHandler = new Handler(Looper.getMainLooper());
+    private Runnable mOfflineWatchdog = null;
 
     private TextToSpeech mTts;
     private final AtomicBoolean mIsInitialized = new AtomicBoolean(false);
@@ -89,8 +92,9 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
     }
 
     @Override
-    public void onInit(int status) {
+    public synchronized void onInit(int status) {
         if (status == TextToSpeech.SUCCESS) {
+            if (mTts == null) return;
             Log.i(TAG, "Offline TTS Engine successfully connected.");
             try {
                 int langResult = mTts.setLanguage(Locale.ITALIAN);
@@ -120,6 +124,12 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                     public void onError(String utteranceId) {
                         if (!finishOfflineUtterance(utteranceId)) return;
                         Log.e(TAG, "Offline TTS error: " + utteranceId);
+                    }
+
+                    @Override
+                    public void onStop(String utteranceId, boolean interrupted) {
+                        if (!finishOfflineUtterance(utteranceId)) return;
+                        Log.d(TAG, "Offline TTS speaking stopped: " + utteranceId + " (interrupted=" + interrupted + ")");
                     }
                 });
 
@@ -159,14 +169,18 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
         if (!mMemoryEngine.isGuestMode() && mFreeVoice.speak(text,
                 new FreeItalianTtsCoordinator.Events() {
                     @Override public void onPlaying() {
-                        if (mSpeechId.get() != requestedId) return;
-                        requestAudioFocus();
-                        mSpeechState = SpeechState.PLAYING;
+                        synchronized (AkaiSpeechEngine.this) {
+                            if (mSpeechId.get() != requestedId) return;
+                            requestAudioFocus();
+                            mSpeechState = SpeechState.PLAYING;
+                        }
                     }
                     @Override public void onCompleted() {
-                        if (mSpeechId.get() != requestedId) return;
-                        mSpeechState = SpeechState.IDLE;
-                        abandonAudioFocus();
+                        synchronized (AkaiSpeechEngine.this) {
+                            if (mSpeechId.get() != requestedId) return;
+                            mSpeechState = SpeechState.IDLE;
+                            abandonAudioFocus();
+                        }
                     }
                     @Override public void onFallback(final String originalText) {
                         // Exit the coordinator monitor before acquiring speech lock.
@@ -226,8 +240,10 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                 int res = mTts.speak(text, queueMode, params, utteranceId);
                 if (res != TextToSpeech.SUCCESS) {
                     finishOfflineUtterance(utteranceId);
+                    reinitOfflineTtsLocked();
                     return false;
                 }
+                scheduleOfflineWatchdogLocked(utteranceId, text.length());
                 return true;
             } else {
                 HashMap<String, String> params = new HashMap<>();
@@ -236,18 +252,62 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
                 int res = mTts.speak(text, queueMode, params);
                 if (res != TextToSpeech.SUCCESS) {
                     finishOfflineUtterance(utteranceId);
+                    reinitOfflineTtsLocked();
                     return false;
                 }
+                scheduleOfflineWatchdogLocked(utteranceId, text.length());
                 return true;
             }
         } catch (Exception e) {
             Log.e(TAG, "Error in speakOfflineTts: " + e.getMessage());
             finishOfflineUtterance(utteranceId);
+            reinitOfflineTtsLocked();
             return false;
         }
     }
 
+    private void cancelOfflineWatchdogLocked() {
+        if (mOfflineWatchdog != null) {
+            mWatchdogHandler.removeCallbacks(mOfflineWatchdog);
+            mOfflineWatchdog = null;
+        }
+    }
+
+    private void scheduleOfflineWatchdogLocked(final String utteranceId, int textLength) {
+        cancelOfflineWatchdogLocked();
+        // Bounded completion guard: Android 9 OEM eSpeak can omit onDone after
+        // AudioTrack stops or crash mid-utterance, stranding PLAYING + AudioFocus.
+        long timeoutMs = Math.min(OFFLINE_UTTERANCE_WATCHDOG_MS, Math.max(3000L, (long) textLength * 85L + 1500L));
+        mOfflineWatchdog = new Runnable() {
+            @Override
+            public void run() {
+                synchronized (AkaiSpeechEngine.this) {
+                    boolean startObserved = mIsOfflineSpeaking.get();
+                    if (finishOfflineUtterance(utteranceId)) {
+                        Log.w(TAG, "Offline TTS completion watchdog released idle state: " + utteranceId);
+                        if (!startObserved) {
+                            Log.w(TAG, "Offline TTS never reached onStart before timeout; reinitializing engine.");
+                            reinitOfflineTtsLocked();
+                        }
+                    }
+                }
+            }
+        };
+        mWatchdogHandler.postDelayed(mOfflineWatchdog, timeoutMs);
+    }
+
+    private void reinitOfflineTtsLocked() {
+        TextToSpeech stale = mTts;
+        mTts = null;
+        mIsInitialized.set(false);
+        if (stale != null) {
+            try { stale.shutdown(); } catch (Exception ignored) {}
+        }
+        initOfflineTts();
+    }
+
     public synchronized void stop() {
+        cancelOfflineWatchdogLocked();
         // Invalidate any in-flight free cloud result before its audio is started.
         mSpeechId.incrementAndGet();
         mFreeVoice.stop();
@@ -275,6 +335,7 @@ public class AkaiSpeechEngine implements TextToSpeech.OnInitListener {
 
     private synchronized boolean finishOfflineUtterance(String utteranceId) {
         if (!mOfflineGate.finish(utteranceId)) return false;
+        cancelOfflineWatchdogLocked();
         mIsOfflineSpeaking.set(false);
         mSpeechState = SpeechState.IDLE;
         abandonAudioFocus();

@@ -389,7 +389,46 @@ public class OtaProvisioningE2ERunner {
     throw new Error('Script 17 failed to reject unprovisioned APK with exit 1');
   }
 
-  console.log('PASS: OTA Provisioning E2E (Java trust/channel/manifest/downgrade + Script 17 readiness) OK');
+  // 4. Verifica ChannelProfile Staging + RescueVersionCode=8 => nextRecommendedReleaseVersionCode=9
+  const stagingOut = execFileSync(ps, [
+    ...psExecArgs, script17,
+    '-ApkPath', provisionedApk,
+    '-BuildManifestPath', readyBuildManifest,
+    '-OtaReleasePublicKeyPath', pubDerPath,
+    '-OtaReleaseManifestUrl', manifestUrl,
+    '-ChannelProfile', 'Staging',
+    '-RescueVersionCode', '8'
+  ], { encoding: 'utf8' });
+  const stagingJson = JSON.parse(stagingOut);
+  if (stagingJson.otaReady !== true || stagingJson.nextRecommendedReleaseVersionCode !== 9) {
+    throw new Error('Script 17 did not compute nextRecommendedReleaseVersionCode=9 for RescueVersionCode=8: ' + stagingOut);
+  }
+
+  // 5. Verifica rifiuto URL locali/IP privati su Script 17
+  for (const badUrl of [
+    'https://localhost/releases/jarvis.manifest',
+    'https://192.168.50.10/releases/jarvis.manifest',
+    'https://akai-tv.local/releases/jarvis.manifest'
+  ]) {
+    let rejectedBadUrl = false;
+    try {
+      execFileSync(ps, [
+        ...psExecArgs, script17,
+        '-OtaReleasePublicKeyPath', pubDerPath,
+        '-OtaReleaseManifestUrl', badUrl
+      ], { encoding: 'utf8', stdio: 'pipe' });
+    } catch (err) {
+      const parsedBad = JSON.parse((err.stdout || '').toString());
+      if (err.status === 1 && parsedBad.otaReady === false && parsedBad.reasons.includes('INVALID_OTA_MANIFEST_URL_REQUIRES_PUBLIC_HTTPS')) {
+        rejectedBadUrl = true;
+      }
+    }
+    if (!rejectedBadUrl) {
+      throw new Error('Script 17 failed to reject non-persistent/local OTA URL: ' + badUrl);
+    }
+  }
+
+  console.log('PASS: OTA Provisioning E2E (Java trust/channel/manifest/downgrade + Script 17 readiness & Staging URL guards) OK');
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true });
 }

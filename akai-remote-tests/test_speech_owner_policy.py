@@ -75,6 +75,16 @@ class SpeechOwnerPolicyTests(unittest.TestCase):
         stop = self.engine.split("public synchronized void stop() {", 1)[1]
         self.assertLess(stop.index("mOfflineGate.stop();"), stop.index("mTts.stop()"))
 
+    def test_offline_watchdog_and_recovery_present(self):
+        self.assertIn("OFFLINE_UTTERANCE_WATCHDOG_MS", self.engine)
+        self.assertIn("public synchronized void onInit(int status)", self.engine)
+        self.assertIn("public void onStop(String utteranceId, boolean interrupted)", self.engine)
+        self.assertIn("scheduleOfflineWatchdogLocked(utteranceId, text.length())", self.engine)
+        self.assertIn("cancelOfflineWatchdogLocked()", self.engine)
+        self.assertIn("reinitOfflineTtsLocked()", self.engine)
+        coordinator = (AI / "FreeItalianTtsCoordinator.java").read_text(encoding="utf-8")
+        self.assertIn("Playback watchdog released stalled MediaPlayer.", coordinator)
+
 
 if __name__ == "__main__":
     unittest.main()
