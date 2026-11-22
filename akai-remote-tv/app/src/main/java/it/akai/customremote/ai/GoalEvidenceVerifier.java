@@ -1,5 +1,7 @@
 package it.akai.customremote.ai;
 
+import it.akai.customremote.TvInputIntentPolicy;
+
 import java.text.Normalizer;
 import java.util.Locale;
 
@@ -133,6 +135,11 @@ public final class GoalEvidenceVerifier {
         String q = normalize(goal);
         String pkg = snapshot.foregroundPackage != null ? snapshot.foregroundPackage : "";
 
+        String oemAnomaly = TvInputIntentPolicy.detectOemDialogAnomaly(pkg, snapshot.visibleTexts);
+        if (oemAnomaly != null) {
+            return denied("oem_dialog", "Dialogo errore/ANR OEM rilevato (" + oemAnomaly + "): stato non verificato");
+        }
+
         if (mentionsPlayback(q)) {
             // Opening the app / seeing a SurfaceView is NEVER playback proof.
             // Require active media audio AND a player view in the foreground.
@@ -175,6 +182,44 @@ public final class GoalEvidenceVerifier {
             return audioSection
                     ? allowed("settings_section", "Dettaglio sezione Audio presente")
                     : denied("settings_section", "La sola voce Audio non dimostra che la sezione sia aperta");
+        }
+
+        // Physical TV inputs (DTV / HDMI 1-3 / Source Panel) verified independently
+        // via tvcenter foreground package and non-stale OSD cues; a sent intent alone never proves switch.
+        int requestedHdmiPort = -1;
+        if (has(q, "hdmi 1") || has(q, "hdmi1")) requestedHdmiPort = 1;
+        else if (has(q, "hdmi 2") || has(q, "hdmi2")) requestedHdmiPort = 2;
+        else if (has(q, "hdmi 3") || has(q, "hdmi3")) requestedHdmiPort = 3;
+        if (requestedHdmiPort > 0) {
+            if (!TvInputIntentPolicy.isTvCenterPackage(pkg)) {
+                return denied("tv_input", "LiveTV (tvcenter) non e' in primo piano per HDMI " + requestedHdmiPort);
+            }
+            if (hasVisibleChannelLabel(snapshot, "hdmi " + requestedHdmiPort, "hdmi" + requestedHdmiPort)) {
+                return allowed("tv_input", "LiveTV in primo piano con conferma OSD HDMI " + requestedHdmiPort);
+            }
+            return denied("tv_input", "LiveTV in primo piano ma etichetta HDMI " + requestedHdmiPort + " non confermabile dai nodi UI");
+        }
+        if (has(q, "digitale terrestre") || has(q, "dtv") || has(q, "antenna")
+                || has(q, "canali tv") || "tv".equals(q)) {
+            if (!TvInputIntentPolicy.isTvCenterPackage(pkg)) {
+                return denied("tv_input", "LiveTV (tvcenter) non e' in primo piano per Digitale Terrestre");
+            }
+            boolean hdmiBannerVisible = hasVisibleChannelLabel(snapshot, "hdmi 1", "hdmi1")
+                    || hasVisibleChannelLabel(snapshot, "hdmi 2", "hdmi2")
+                    || hasVisibleChannelLabel(snapshot, "hdmi 3", "hdmi3");
+            boolean dtvHintVisible = hasVisibleChannelLabel(snapshot, "dtv", "dtv")
+                    || hasVisibleChannelLabel(snapshot, "digitale", "digitale")
+                    || hasVisibleChannelLabel(snapshot, "tuner", "tuner")
+                    || hasVisibleChannelLabel(snapshot, "canale", "canale");
+            if (hdmiBannerVisible && !dtvHintVisible) {
+                return denied("tv_input", "LiveTV mostra un ingresso HDMI anziche' Digitale Terrestre");
+            }
+            return allowed("tv_input", "LiveTV (tvcenter) osservata in primo piano senza dialoghi errore/ANR OEM");
+        }
+        if (has(q, "ingressi") || has(q, "sorgenti") || has(q, "cambia ingresso")) {
+            return TvInputIntentPolicy.isTvCenterPackage(pkg)
+                    ? allowed("tv_input", "Pannello ingressi LiveTV in primo piano")
+                    : denied("tv_input", "Pannello ingressi LiveTV non e' in primo piano");
         }
 
         // For clear app-opening goals, a model-provided different pkg_is

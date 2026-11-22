@@ -148,29 +148,39 @@ public class LocalIntentParser {
             return new ParsedIntent(true, "power", "Spegnimento / Standby", acts, "Invio segnale Standby...", "local_fast_path", null);
         }
 
-        // Ingressi fisici hardware
-        if (clean.equals("digitale terrestre") || clean.equals("antenna") || clean.equals("tv") || clean.equals("dtv") || clean.equals("canali tv")) {
+        // Ingressi fisici hardware (verifica indipendente pkg_is tvcenter + GoalEvidenceVerifier OSD/TIF)
+        String tvCenterCond = "{\"type\":\"pkg_is\",\"value\":\"com.mediatek.wwtv.tvcenter\"}";
+        if (clean.equals("digitale terrestre") || clean.equals("passa al digitale terrestre")
+                || clean.equals("antenna") || clean.equals("tv")
+                || clean.equals("dtv") || clean.equals("canali tv")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "input_tv")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "input_tv", "Passa a Digitale Terrestre", acts, "Passaggio a TV Digitale Terrestre...", "local_fast_path", null);
+            return new ParsedIntent(true, "input_tv", "Passa a Digitale Terrestre", acts, "Passaggio a TV Digitale Terrestre...", "local_fast_path", tvCenterCond);
         }
 
-        if (clean.equals("hdmi 1") || clean.equals("hdmi1") || clean.equals("passa a hdmi 1")) {
+        if (clean.equals("hdmi 1") || clean.equals("hdmi1") || clean.equals("passa a hdmi 1") || clean.equals("metti hdmi 1")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "input_hdmi1")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "input_hdmi1", "Passa a HDMI 1", acts, "Passaggio a sorgente HDMI 1...", "local_fast_path", null);
+            return new ParsedIntent(true, "input_hdmi1", "Passa a HDMI 1", acts, "Passaggio a sorgente HDMI 1...", "local_fast_path", tvCenterCond);
         }
 
-        if (clean.equals("hdmi 2") || clean.equals("hdmi2") || clean.equals("passa a hdmi 2")) {
+        if (clean.equals("hdmi 2") || clean.equals("hdmi2") || clean.equals("passa a hdmi 2") || clean.equals("metti hdmi 2")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "input_hdmi2")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "input_hdmi2", "Passa a HDMI 2", acts, "Passaggio a sorgente HDMI 2...", "local_fast_path", null);
+            return new ParsedIntent(true, "input_hdmi2", "Passa a HDMI 2", acts, "Passaggio a sorgente HDMI 2...", "local_fast_path", tvCenterCond);
         }
 
-        if (clean.equals("hdmi 3") || clean.equals("hdmi3") || clean.equals("passa a hdmi 3")) {
+        if (clean.equals("hdmi 3") || clean.equals("hdmi3") || clean.equals("passa a hdmi 3") || clean.equals("metti hdmi 3")) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "command").put("action", "input_hdmi3")); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "input_hdmi3", "Passa a HDMI 3", acts, "Passaggio a sorgente HDMI 3...", "local_fast_path", null);
+            return new ParsedIntent(true, "input_hdmi3", "Passa a HDMI 3", acts, "Passaggio a sorgente HDMI 3...", "local_fast_path", tvCenterCond);
+        }
+
+        if (clean.equals("ingressi") || clean.equals("sorgenti") || clean.equals("selezione ingressi")
+                || clean.equals("cambia ingresso") || clean.equals("apri ingressi")) {
+            JSONArray acts = new JSONArray();
+            try { acts.put(new JSONObject().put("type", "command").put("action", "input_source")); } catch (Exception ignored) {}
+            return new ParsedIntent(true, "input_source", "Apri selezione ingressi TV", acts, "Apertura pannello ingressi TV...", "local_fast_path", tvCenterCond);
         }
 
         // Cambio canale relativo (avanti / indietro)
@@ -464,6 +474,7 @@ public class LocalIntentParser {
         arr.put("input_hdmi1");
         arr.put("input_hdmi2");
         arr.put("input_hdmi3");
+        arr.put("input_source");
         arr.put("dpad_up");
         arr.put("dpad_down");
         arr.put("dpad_left");

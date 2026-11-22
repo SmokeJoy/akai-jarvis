@@ -127,6 +127,7 @@ public class RemoteServerService extends Service {
                 @Override public CommandResult executeCommand(String action) { return tvController.executeCommand(action); }
                 @Override public CommandResult injectText(String text) { return tvController.injectText(text); }
                 @Override public boolean isUInputReady() { return tvController.isUInputReady(); }
+                @Override public boolean isAccessibilityActive() { return AkaiAccessibilityService.getInstance() != null; }
             },
             new RestApiRouter.MemoryHandler() {
                 @Override public JSONArray getAllProcedures() { return AkaiMemoryEngine.getInstance(RemoteServerService.this).getAllProcedures(); }

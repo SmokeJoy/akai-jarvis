@@ -262,6 +262,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/UInputDriver.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/CommandResult.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/TvAppPackages.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/TvInputIntentPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/TlsCertificateManager.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/RestApiRouter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/LocalIntentParser.java \
@@ -287,13 +288,15 @@ jobs:
             akai-remote-tests/UnitTests.java \
             akai-remote-tests/AgentSkillGateTest.java \
             akai-remote-tests/AgentFactMemoryTest.java \
-            akai-remote-tests/KeystoreCredentialHealthTest.java
+            akai-remote-tests/KeystoreCredentialHealthTest.java \
+            akai-remote-tests/TvInputGoalVerificationTest.java
 
           java -cp test_bin it.akai.customremote.UnitTests
           java -cp test_bin it.akai.customremote.AgentSkillGateTest
           java -cp test_bin it.akai.customremote.AgentFactMemoryTest
           java -cp test_bin it.akai.customremote.KeystoreCredentialHealthTest
-          echo "All 40 Java unit tests + Keystore health probe tests passed with 100% success."
+          java -cp test_bin it.akai.customremote.TvInputGoalVerificationTest
+          echo "All 40 Java unit tests + Keystore + TvInputGoalVerificationTest passed with 100% success."
 
       - name: 4b. V4 OTA archive/manifest signature and exact upgrade policy gates (JDK 8)
         run: |
@@ -428,6 +431,15 @@ jobs:
             akai-remote-tests/FreeItalianTtsPolicyTest.java
           java -cp test_free_voice it.akai.customremote.FreeItalianTtsPolicyTest
           python3 akai-remote-tests/test_free_italian_voice_source.py -v
+
+      - name: 4l. TV Input Framework (DTV/HDMI/Sources) policy and Accessibility UI telemetry contract
+        run: |
+          mkdir -p test_tif_policy
+          javac -encoding UTF-8 -source 8 -target 8 -d test_tif_policy \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/TvInputIntentPolicy.java \
+            akai-remote-tests/TvInputIntentPolicyTest.java
+          java -cp test_tif_policy it.akai.customremote.TvInputIntentPolicyTest
+          python3 akai-remote-tests/test_tv_input_tif_contract.py -v
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |
@@ -601,7 +613,7 @@ jobs:
           fi
           echo "MANDATORY APK COMPONENTS VERIFIED: DEX, Android ARMv7 SO, Web, no embedded TLS secrets."
 
-      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (44 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, .p12.bak, In-Place Rescue Zero-Uninstall, Strict Keystore Health, Watchdog Keystore Rescue Rollback & Candidate Hash Lock)"
+      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (45 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, .p12.bak, In-Place Rescue Zero-Uninstall, Strict Keystore Health, Watchdog Keystore Rescue Rollback, Candidate Hash Lock & Read-Only Accessibility Advisory)"
         shell: pwsh
         run: |
           ./akai-remote-tests/test_safe_install_mocked_adb.ps1

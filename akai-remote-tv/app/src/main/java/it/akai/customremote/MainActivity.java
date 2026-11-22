@@ -497,9 +497,11 @@ public class MainActivity extends Activity {
         }
 
         boolean uinputOk = (s != null && s.getTvController() != null && s.getTvController().isUInputReady());
+        boolean accOk = (AkaiAccessibilityService.getInstance() != null);
         if (tvUinputStatus != null) {
-            tvUinputStatus.setText("Driver Linux /dev/uinput: " + (uinputOk ? "ATTIVO" : "In attesa..."));
-            tvUinputStatus.setTextColor(uinputOk ? 0xFF34D399 : 0xFFF59E0B);
+            tvUinputStatus.setText("Driver /dev/uinput: " + (uinputOk ? "ATTIVO" : "In attesa...")
+                    + " · Accessibilità: " + (accOk ? "ATTIVA" : "DISATTIVA (riattiva in Impostazioni TV)"));
+            tvUinputStatus.setTextColor((uinputOk && accOk) ? 0xFF34D399 : 0xFFF59E0B);
         }
 
         int activeSessions = (s != null && s.getSecurityManager() != null) ? s.getSecurityManager().getActiveSessionCount() : 0;

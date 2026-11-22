@@ -4,11 +4,18 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.media.AudioManager;
+import android.media.tv.TvInputInfo;
+import android.media.tv.TvInputManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.accessibility.AccessibilityNodeInfo;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class TvController {
     private static final String TAG = "AKAI_TvController";
@@ -151,22 +158,21 @@ public class TvController {
                 }
                 return new CommandResult(false, "Canale Precedente non disponibile senza driver UInput");
 
-            // Direct Inputs (DTV, HDMI 1, HDMI 2, Source)
+            // Direct Inputs (DTV, HDMI 1/2/3, Source) via Android TV Input Framework (Home v8 aligned)
             case "input_tv":
-                sendMediaTekBroadcast("com.mediatek.select.DTV", "Digitale Terrestre");
-                return launchIntent("com.mediatek.wwtv.tvcenter", "com.mediatek.wwtv.tvcenter.nav.TurnkeyUiMainActivity", "Digitale Terrestre");
+                return executeTvInputAction("input_tv", "Digitale Terrestre");
 
             case "input_hdmi1":
-                return sendMediaTekBroadcast("com.mediatek.select.HDMI1", "HDMI 1");
+                return executeTvInputAction("input_hdmi1", "HDMI 1");
 
             case "input_hdmi2":
-                return sendMediaTekBroadcast("com.mediatek.select.HDMI2", "HDMI 2");
+                return executeTvInputAction("input_hdmi2", "HDMI 2");
 
             case "input_hdmi3":
-                return sendMediaTekBroadcast("com.mediatek.select.HDMI3", "HDMI 3");
+                return executeTvInputAction("input_hdmi3", "HDMI 3");
 
             case "input_source":
-                return sendMediaTekBroadcast("com.mediatek.select.source", "Selezione Ingressi");
+                return executeTvInputAction("input_source", "Selezione Ingressi");
 
             // App Launch Shortcuts (allineati a censimento hardware TV)
             case "app_youtube":
@@ -240,41 +246,97 @@ public class TvController {
         return new CommandResult(false, "D-Pad " + label + " non disponibile su Android 9 senza UInput o Accessibilità");
     }
 
-    private CommandResult launchIntent(String pkg, String cls, String name) {
-        try {
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setComponent(new ComponentName(pkg, cls));
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            context.startActivity(intent);
-            return new CommandResult(true, "Apertura " + name);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to launch intent: " + e.getMessage());
-            return new CommandResult(false, "Impossibile aprire " + name + ": " + e.getMessage());
+    private List<TvInputIntentPolicy.TifInputRecord> discoverTifInputs() {
+        List<TvInputIntentPolicy.TifInputRecord> records = new ArrayList<>();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            return records;
         }
+        try {
+            TvInputManager mgr = (TvInputManager) context.getSystemService(Context.TV_INPUT_SERVICE);
+            if (mgr == null) return records;
+            List<TvInputInfo> infos = mgr.getTvInputList();
+            if (infos == null) return records;
+            for (TvInputInfo info : infos) {
+                if (info == null) continue;
+                String id = info.getId();
+                if (id == null || id.trim().isEmpty()) continue;
+                CharSequence lblCs = info.loadLabel(context);
+                int hdmiPort = TvInputIntentPolicy.parseHdmiPortFromLabel(lblCs != null ? lblCs.toString() : null);
+                if (hdmiPort < 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    CharSequence customLbl = info.loadCustomLabel(context);
+                    hdmiPort = TvInputIntentPolicy.parseHdmiPortFromLabel(customLbl != null ? customLbl.toString() : null);
+                }
+                int state = 0;
+                try {
+                    state = mgr.getInputState(id);
+                } catch (Exception ignored) {}
+                records.add(new TvInputIntentPolicy.TifInputRecord(
+                        id,
+                        info.getType(),
+                        hdmiPort,
+                        state,
+                        info.isPassthroughInput()));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "TIF discovery fallback (TvInputManager unavailable): " + e.getMessage());
+        }
+        return records;
     }
 
-    private CommandResult sendMediaTekBroadcast(String action, String inputName) {
-        try {
-            Intent intent = new Intent(action);
-            context.sendBroadcast(intent);
-            return new CommandResult(true, "Passaggio a " + inputName);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to send MTK broadcast: " + e.getMessage());
-            return new CommandResult(false, "Errore passaggio " + inputName + ": " + e.getMessage());
+    private Intent buildIntentForSpec(TvInputIntentPolicy.LaunchSpec spec, boolean forceChannelMime) {
+        Intent intent = (spec.intentAction != null) ? new Intent(spec.intentAction) : new Intent();
+        if (spec.category != null) {
+            intent.addCategory(spec.category);
         }
+        if (spec.dataUri != null) {
+            Uri uri = Uri.parse(spec.dataUri);
+            if (forceChannelMime) {
+                intent.setDataAndType(uri, TvInputIntentPolicy.TIF_CHANNEL_MIME_TYPE);
+            } else {
+                intent.setData(uri);
+            }
+        }
+        if (spec.packageName != null && spec.componentClass != null) {
+            intent.setComponent(new ComponentName(spec.packageName, spec.componentClass));
+        } else if (spec.packageName != null) {
+            intent.setPackage(spec.packageName);
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        return intent;
     }
 
-    private CommandResult launchTvInputUri(String uriString, String inputName) {
-        try {
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriString));
-            intent.setComponent(new ComponentName("com.mediatek.wwtv.tvcenter", "com.mediatek.wwtv.tvcenter.nav.TurnkeyUiMainActivity"));
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            context.startActivity(intent);
-            return new CommandResult(true, "Sintonizzazione su " + inputName);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to switch TV input: " + e.getMessage());
-            return new CommandResult(false, "Impossibile sintonizzare " + inputName + ": " + e.getMessage());
+    private CommandResult executeTvInputAction(String action, String label) {
+        PackageManager pm = context.getPackageManager();
+        if (pm == null) {
+            return new CommandResult(false, "PackageManager non disponibile per " + label);
         }
+        List<TvInputIntentPolicy.LaunchSpec> specs = TvInputIntentPolicy.planCandidatesForAction(action, discoverTifInputs());
+        for (TvInputIntentPolicy.LaunchSpec spec : specs) {
+            try {
+                Intent chosen = buildIntentForSpec(spec, false);
+                ResolveInfo resolved = pm.resolveActivity(chosen, 0);
+                if (resolved == null && spec.dataUri != null) {
+                    Intent mimeIntent = buildIntentForSpec(spec, true);
+                    resolved = pm.resolveActivity(mimeIntent, 0);
+                    if (resolved != null) {
+                        chosen = mimeIntent;
+                    }
+                }
+                if (resolved == null) {
+                    Log.d(TAG, "TIF candidate unresolved [" + spec.kind + "] for " + action);
+                    continue;
+                }
+                String resolvedName = (resolved.activityInfo != null)
+                        ? (resolved.activityInfo.packageName + "/" + resolved.activityInfo.name)
+                        : "resolved";
+                Log.i(TAG, "Launching TV input [" + label + "] via " + spec.kind + " -> " + resolvedName);
+                context.startActivity(chosen);
+                return new CommandResult(true, "Richiesta ingresso " + label + " inviata via " + spec.kind);
+            } catch (Exception e) {
+                Log.w(TAG, "TIF candidate failed [" + spec.kind + "]: " + e.getMessage());
+            }
+        }
+        return new CommandResult(false, "Nessun gestore TV Input Framework disponibile per " + label);
     }
 
     public CommandResult launchAppPackage(String pkg, String appName) {
@@ -310,7 +372,10 @@ public class TvController {
             if (!uinputDriver.isAvailable()) {
                 return new CommandResult(false, "Driver UInput non disponibile per sintonizzare canale");
             }
-            sendMediaTekBroadcast("com.mediatek.select.DTV", "Digitale Terrestre");
+            CommandResult dtvRes = executeTvInputAction("input_tv", "Digitale Terrestre");
+            if (!dtvRes.success) {
+                return dtvRes;
+            }
             try { Thread.sleep(600); } catch (InterruptedException ignored) {}
 
             String chStr = String.valueOf(channel);

@@ -3049,6 +3049,54 @@ function Assert-BackupSessionNoPlaintextSecrets {
     return $true
 }
 
+function Get-DeviceAccessibilityServiceStatus {
+    param(
+        [string]$AdbExe,
+        [string]$TargetAdb,
+        [string]$PackageName = "it.akai.customremote"
+    )
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $raw = (& $AdbExe -s $TargetAdb shell "settings get secure enabled_accessibility_services" 2>&1 | Out-String).Trim()
+        $exit = $LASTEXITCODE
+        if ($exit -ne 0 -or [string]::IsNullOrWhiteSpace($raw) -or $raw -match "(?i)(error:|exception|permission denial)") {
+            return @{ Checked = $false; Active = $false; RawValue = $raw; Status = "UNAVAILABLE" }
+        }
+        $pkgPattern = [regex]::Escape($PackageName) + "/(?:[A-Za-z0-9_.]+\.)?AkaiAccessibilityService\b"
+        $isActive = ($raw -match $pkgPattern)
+        return @{
+            Checked  = $true
+            Active   = $isActive
+            RawValue = $raw
+            Status   = $(if ($isActive) { "ACTIVE" } else { "DISABLED" })
+        }
+    } catch {
+        return @{ Checked = $false; Active = $false; RawValue = $_.Exception.Message; Status = "ERROR" }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Write-PostUpgradeAccessibilityAdvisory {
+    param(
+        [hashtable]$StatusInfo,
+        [string]$ContextLabel = "Operazione"
+    )
+    if (-not $StatusInfo) { return }
+    if ($StatusInfo.Checked) {
+        if ($StatusInfo.Active) {
+            Write-Host "      - Accessibilita'  : ATTIVO (AKAI Custom Remote abilitato)" -ForegroundColor Green
+        } else {
+            Write-Host "      [AVVISO POST-UPGRADE ACCESSIBILITY] Dopo $ContextLabel su Android 9, AKAI Custom Remote risulta DISATTIVATO." -ForegroundColor Yellow
+            Write-Host "      Su Android 9 force-stop o aggiornamento pacchetto possono revocare il servizio: non forzarlo da ADB." -ForegroundColor Yellow
+            Write-Host "      Riabilita manualmente dalla TV: Impostazioni -> Preferenze del dispositivo -> Accessibilita' -> AKAI Custom Remote -> Attiva e conferma." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "      - Accessibilita'  : NON VERIFICABILE in sola lettura ($($StatusInfo.Status))" -ForegroundColor Yellow
+    }
+}
+
 switch ($Action) {
     "plan" {
         Write-Host "=== PIANO SICURO DI DEPLOYMENT, VERIFICA E ROLLBACK ATOMICO (Rev 9 - Strict Greenfield & TLS SAN) ===" -ForegroundColor Cyan
@@ -3195,6 +3243,9 @@ switch ($Action) {
 
         $uinputLs = (& $adb -s $TargetAdb shell "ls -la /dev/uinput 2>&1" | Out-String).Trim()
         Write-Host "      Permessi /dev/uinput  : $(if ($uinputLs) { $uinputLs } else { "NON RILEVABILE" })"
+
+        $accPreflight = Get-DeviceAccessibilityServiceStatus -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
+        Write-PostUpgradeAccessibilityAdvisory -StatusInfo $accPreflight -ContextLabel "Preflight TV"
 
         # 5. Verifica porte aperte su TV (8088 / 8443)
         Write-Host "`n[5/6] Verifica porte di rete su TV..." -ForegroundColor Cyan
@@ -3483,6 +3534,8 @@ switch ($Action) {
             throw $backupException
         }
         Write-Host "Sessione di backup completata in: $sessionDir" -ForegroundColor Green
+        $accBackup = Get-DeviceAccessibilityServiceStatus -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
+        Write-PostUpgradeAccessibilityAdvisory -StatusInfo $accBackup -ContextLabel "backup con arresto app"
     }
 
     "install" {
@@ -3851,6 +3904,8 @@ switch ($Action) {
                 Write-Host "  powershell -File .\akai-remote-tests\05_safe_install_and_rollback.ps1 -Action verify-tls -TargetTv $TargetTv -HttpsPort $HttpsPort -ExpectedCaFingerprint <IMPRONTA_LETTA_SULLO_SCHERMO_TV>" -ForegroundColor Cyan
                 Write-Host "AVVERTENZA CRITICA: Inserire esclusivamente l'impronta letta VISIVAMENTE sullo schermo TV, MAI copiare l'impronta di rete!" -ForegroundColor Yellow
             }
+            $accInstall = Get-DeviceAccessibilityServiceStatus -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
+            Write-PostUpgradeAccessibilityAdvisory -StatusInfo $accInstall -ContextLabel "installazione in-place"
         } else {
             Write-Host "`nALLARME: Health check fallito entro 30s! Avvio ROLLBACK..." -ForegroundColor Red
             Write-Host "      Motivo fallimento watchdog/gate: $watchdogFailureReason" -ForegroundColor Red
@@ -3990,6 +4045,8 @@ $chownTarget = "${appUid}:${appUid}"
                 if ($rbHealthy) {
                     $null = Invoke-PostRollbackKeystoreVerification -SessionDir $sessionDir -RollbackMode $rbApkResult.Mode -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -ExpectedCaFingerprint $ExpectedCaFingerprint -RequireVerifiedKeystoreHealth:$RequireVerifiedKeystoreHealth
                     Write-Host "ROLLBACK RIUSCITO E VERIFICATO: Sistema TV tornato operativo al 100% sulla versione precedente." -ForegroundColor Green
+                    $accRb = Get-DeviceAccessibilityServiceStatus -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
+                    Write-PostUpgradeAccessibilityAdvisory -StatusInfo $accRb -ContextLabel "rollback conservativo"
                 } else {
                     Write-Host "ALLARME POST-ROLLBACK: Health check post-rollback fallito - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red
                     throw "ERRORE FAIL-CLOSED: Watchdog post-rollback non superato. Il servizio non risponde con status=ok."
@@ -4155,6 +4212,8 @@ $chownTarget = "${appUid}:${appUid}"
         if ($rbHealthy) {
             $null = Invoke-PostRollbackKeystoreVerification -SessionDir $latestSession.FullName -RollbackMode $rbManualApkResult.Mode -TargetTv $TargetTv -HttpsPort $HttpsPort -AuthToken $AuthToken -ExpectedCaFingerprint $ExpectedCaFingerprint -RequireVerifiedKeystoreHealth:$RequireVerifiedKeystoreHealth
             Write-Host "Rollback manuale completato e verificato con successo: TV operativa!" -ForegroundColor Green
+            $accManualRb = Get-DeviceAccessibilityServiceStatus -AdbExe $adb -TargetAdb $TargetAdb -PackageName $PackageName
+            Write-PostUpgradeAccessibilityAdvisory -StatusInfo $accManualRb -ContextLabel "rollback manuale"
         } else {
             Write-Host "ALLARME POST-ROLLBACK: Endpoint status non raggiungibile o non operativo - STATO CRITICO FAIL/UNKNOWN." -ForegroundColor Red
             throw "ERRORE FAIL-CLOSED: Watchdog post-rollback non superato. Il servizio non risponde con status=ok."

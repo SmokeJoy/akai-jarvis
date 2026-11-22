@@ -13,6 +13,7 @@ public class RestApiRouter {
         CommandResult executeCommand(String action);
         CommandResult injectText(String text);
         boolean isUInputReady();
+        default boolean isAccessibilityActive() { return false; }
     }
 
     public interface MemoryHandler {
@@ -261,6 +262,7 @@ public class RestApiRouter {
             json.put("model", "AKTV5037N");
             json.put("active_sessions", securityManager.getActiveSessionCount());
             json.put("uinput_ready", commandHandler != null && commandHandler.isUInputReady());
+            json.put("accessibility_active", commandHandler != null && commandHandler.isAccessibilityActive());
             sendJsonResponse(os, 200, json);
             return true;
         }

@@ -6966,6 +6966,284 @@ exit `$LASTEXITCODE
     Remove-Item $testDir44 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ==============================================================================
+# TEST 45: READ-ONLY POST-UPGRADE ACCESSIBILITY CHECK & NO SETTINGS PUT (PR #18)
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 45: Controllo Read-Only Accessibilita' Post-Upgrade (Zero ADB Put) ---"
+$testDir45 = Join-Path ([System.IO.Path]::GetTempPath()) ("akai_test45_" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $testDir45 | Out-Null
+$httpProc45 = $null
+$httpsProc45 = $null
+try {
+    $isWin45 = ($env:OS -eq 'Windows_NT') -or (-not (Get-Variable -Name IsLinux -ErrorAction SilentlyContinue)) -or (-not $IsLinux)
+    $subPassed45 = 0
+
+    $realDb45 = Join-Path $testDir45 "device_db45.sqlite"
+    New-MockRealDatabase -FilePath $realDb45
+    $devApk45 = Join-Path $testDir45 "device_v3.apk"
+    $candApk45 = Join-Path $testDir45 "candidate_v4.apk"
+    $rescueApk45 = Join-Path $testDir45 "rescue_v5.apk"
+    foreach ($p45 in @($devApk45, $candApk45, $rescueApk45)) {
+        New-TestApkArchive $p45 @("classes.dex", "AndroidManifest.xml", "assets/www/index.html")
+    }
+    $candSha45 = (Get-FileHash -LiteralPath $candApk45 -Algorithm SHA256).Hash.ToLowerInvariant()
+    $rescueSha45 = (Get-FileHash -LiteralPath $rescueApk45 -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    $devPrefs45 = Join-Path $testDir45 "dev_prefs45"
+    New-Item -ItemType Directory -Force -Path $devPrefs45 | Out-Null
+    [IO.File]::WriteAllText((Join-Path $devPrefs45 "akai_remote_sessions.xml"), "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>`n<map>`n  <string name=`"session_1`">tok45</string>`n</map>", [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText((Join-Path $devPrefs45 "akai_ai_security_prefs.xml"), "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>`n<map>`n  <string name=`"sec_enc_deepseek_key`">enc_ds_blob_45</string>`n</map>", [Text.Encoding]::UTF8)
+
+    $sdkRoot45 = Join-Path $testDir45 "sdk45"
+    $bt45 = Join-Path $sdkRoot45 "build-tools/99.0.0"
+    New-Item -ItemType Directory -Force -Path $bt45 | Out-Null
+    $mockAapt45Js = Join-Path $sdkRoot45 "mock_aapt45.js"
+    @'
+const fs = require('fs');
+const path = require('path');
+const args = process.argv.slice(2);
+if (args.length !== 3 || args[0] !== 'dump' || args[1] !== 'badging' || !fs.existsSync(args[2])) process.exit(2);
+const b = path.basename(args[2]);
+if (b.includes('rescue_v5')) console.log("package: name='it.akai.customremote' versionCode='5' versionName='1.2.0-a2-rescue-v5'");
+else if (b.includes('candidate_v4')) console.log("package: name='it.akai.customremote' versionCode='4' versionName='1.3.0-diagnostic-rc1'");
+else console.log("package: name='it.akai.customremote' versionCode='3' versionName='1.2.0'");
+'@ | Set-Content -LiteralPath $mockAapt45Js -Encoding UTF8
+    $aapt45Cmd = if ($isWin45) { Join-Path $bt45 "aapt.cmd" } else { Join-Path $bt45 "aapt" }
+    if ($isWin45) {
+        Set-Content -LiteralPath $aapt45Cmd -Value ("@echo off`n`"{0}`" `"{1}`" %*" -f $validNode, $mockAapt45Js) -Encoding ASCII
+    } else {
+        Set-Content -LiteralPath $aapt45Cmd -Value ("#!/bin/sh`nexec `"{0}`" `"{1}`" `"`$@`"" -f $validNode, $mockAapt45Js) -Encoding UTF8
+        & chmod +x $aapt45Cmd
+    }
+    $mockSigner45Js = Join-Path $testDir45 "mock_signer45.js"
+    "console.log('Signer #1 certificate SHA-256 digest: aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb'); process.exit(0);" | Set-Content -LiteralPath $mockSigner45Js -Encoding UTF8
+    $mockSigner45Cmd = if ($isWin45) { Join-Path $testDir45 "apksigner.cmd" } else { Join-Path $testDir45 "apksigner" }
+    if ($isWin45) {
+        Set-Content -LiteralPath $mockSigner45Cmd -Value ("@echo off`n`"{0}`" `"{1}`" %*" -f $validNode, $mockSigner45Js) -Encoding ASCII
+    } else {
+        Set-Content -LiteralPath $mockSigner45Cmd -Value ("#!/bin/sh`nexec `"{0}`" `"{1}`" `"`$@`"" -f $validNode, $mockSigner45Js) -Encoding UTF8
+        & chmod +x $mockSigner45Cmd
+    }
+
+    $pfx45 = Join-Path $testDir45 "cert45.pfx"
+    $shaCa45 = New-MockTlsPfx -FilePath $pfx45 -SanIp "127.0.0.1"
+    $adbStateFile45 = Join-Path $testDir45 "adb_state45.txt"
+    $procStateFile45 = Join-Path $testDir45 "proc_state45.txt"
+    $adbLog45 = Join-Path $testDir45 "adb45.log"
+    [IO.File]::WriteAllText($adbStateFile45, "shell")
+    [IO.File]::WriteAllText($procStateFile45, "running")
+
+    $httpPort45 = Get-FreeLoopbackPort
+    $httpsPort45 = Get-FreeLoopbackPort
+    $httpReady45 = Join-Path $testDir45 "http45.ready"
+    $httpsReady45 = Join-Path $testDir45 "https45.ready"
+    $httpJs45 = Join-Path $testDir45 "mock_http45.js"
+    $httpsJs45 = Join-Path $testDir45 "mock_https45.js"
+    $httpReadyEsc45 = $httpReady45.Replace('\', '/')
+    $httpsReadyEsc45 = $httpsReady45.Replace('\', '/')
+    $pfxEsc45 = $pfx45.Replace('\', '/')
+
+    @"
+const http = require('http');
+const fs = require('fs');
+const srv = http.createServer((req, res) => {
+    if (req.url === '/index.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body>Mock TV Remote</body></html>');
+        return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
+});
+srv.on('error', () => {});
+srv.listen($httpPort45, '127.0.0.1', () => fs.writeFileSync('$httpReadyEsc45', '1'));
+setInterval(() => {}, 1000);
+"@ | Out-File -FilePath $httpJs45 -Encoding ascii
+
+    @"
+const https = require('https');
+const fs = require('fs');
+const srv = https.createServer({ pfx: fs.readFileSync('$pfxEsc45'), passphrase: 'pass123' }, (req, res) => {
+    if (req.url === '/api/ai/config') {
+        if (req.headers.authorization !== 'Bearer tok45') {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'unauthorized' }));
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            keystore_alias_present: true,
+            deepseek_ciphertext_present: true,
+            deepseek_decryptable: true,
+            kimi_ciphertext_present: false,
+            kimi_decryptable: false,
+            undecryptable_stored_credentials: false,
+            all_stored_credentials_decryptable: true
+        }));
+        return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
+});
+srv.on('error', () => {});
+srv.on('tlsClientError', () => {});
+srv.listen($httpsPort45, '127.0.0.1', () => fs.writeFileSync('$httpsReadyEsc45', '1'));
+setInterval(() => {}, 1000);
+"@ | Out-File -FilePath $httpsJs45 -Encoding ascii
+
+    $httpProc45 = Start-Process -FilePath $validNode -ArgumentList "`"$httpJs45`"" -PassThru -NoNewWindow
+    $httpsProc45 = Start-Process -FilePath $validNode -ArgumentList "`"$httpsJs45`"" -PassThru -NoNewWindow
+    $w45 = 0
+    while ((-not (Test-Path $httpReady45) -or -not (Test-Path $httpsReady45)) -and $w45 -lt 50) { Start-Sleep -Milliseconds 100; $w45++ }
+
+    $mockAdb45Js = Join-Path $testDir45 "mock_adb45.js"
+    $adbStateEsc45 = $adbStateFile45.Replace('\', '/')
+    $procStateEsc45 = $procStateFile45.Replace('\', '/')
+    $adbLogEsc45 = $adbLog45.Replace('\', '/')
+    $realDbEsc45 = $realDb45.Replace('\', '/')
+    $devApkEsc45 = $devApk45.Replace('\', '/')
+    $devPrefsEsc45 = $devPrefs45.Replace('\', '/')
+
+    @"
+const fs = require('fs');
+const path = require('path');
+const argv = process.argv.slice(2);
+const argStr = argv.join(' ');
+fs.appendFileSync('$adbLogEsc45', argStr + '\n');
+function st() { try { return fs.readFileSync('$adbStateEsc45', 'utf8').trim(); } catch (e) { return 'shell'; } }
+function procSt() { try { return fs.readFileSync('$procStateEsc45', 'utf8').trim(); } catch (e) { return 'running'; } }
+
+if (argStr.includes('get-state')) { console.log('device'); process.exit(0); }
+if (argv.includes('root')) { fs.writeFileSync('$adbStateEsc45', 'root'); console.log('restarting adbd as root'); process.exit(0); }
+if (argv.includes('unroot')) { fs.writeFileSync('$adbStateEsc45', 'shell'); console.log('restarting adbd as non root'); process.exit(0); }
+if (argStr.includes('am get-config')) { console.log('it.akai.customremote'); process.exit(0); }
+if (argStr.includes('pm list packages')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (argStr.includes('pm path')) { console.log('package:/data/app/it.akai.customremote/base.apk'); process.exit(0); }
+if (argStr.includes('dumpsys package it.akai.customremote')) { console.log('    versionCode=3 minSdk=21 targetSdk=28'); console.log('    userId=10088'); process.exit(0); }
+if (argStr.includes('settings get secure enabled_accessibility_services')) {
+    console.log(process.env.TEST45_ACC_VAL || 'null');
+    process.exit(0);
+}
+if (argStr.includes('am force-stop')) { fs.writeFileSync('$procStateEsc45', 'stopped'); process.exit(0); }
+if (argStr.includes('ACTION_BACKUP_DB')) { process.exit(0); }
+if (argStr.includes('am startservice') || argStr.includes('am start -n')) { fs.writeFileSync('$procStateEsc45', 'running'); process.exit(0); }
+if (argStr.includes('PIDOF_CHECK')) {
+    console.log(procSt() === 'running' ? 'PIDOF_CHECK:pids=[4545]:exit=[0]' : 'PIDOF_CHECK:pids=[]:exit=[1]');
+    process.exit(0);
+}
+if (argStr.includes('pidof it.akai.customremote')) { console.log(procSt() === 'running' ? '4545' : ''); process.exit(procSt() === 'running' ? 0 : 1); }
+if (argStr.includes('ADB_ALIVE')) { console.log('ADB_ALIVE'); process.exit(0); }
+if (argStr.includes('shell id')) { console.log(st() === 'root' ? 'uid=0(root) gid=0(root)' : 'uid=2000(shell) gid=2000(shell)'); process.exit(0); }
+if (argStr.includes('run-as') || argStr.includes('su -c')) { process.exit(1); }
+if (argStr.includes('FILE_PROBE_RESULT')) {
+    if (st() !== 'root') { console.log('FILE_PROBE_RESULT:ACCESS_DENIED'); process.exit(13); }
+    const m = argStr.match(/shared_prefs\/([A-Za-z0-9_.\-]+\.xml)/);
+    console.log((m && fs.existsSync(path.join('$devPrefsEsc45', m[1]))) ? 'FILE_PROBE_RESULT:EXISTS' : 'FILE_PROBE_RESULT:NOT_FOUND');
+    process.exit(0);
+}
+if (argv.includes('pull')) { fs.copyFileSync('$devApkEsc45', argv[argv.length - 1]); console.log('1 file pulled'); process.exit(0); }
+if (argv.includes('exec-out')) {
+    if (st() !== 'root') process.exit(1);
+    const m = argStr.match(/shared_prefs\/([A-Za-z0-9_.\-]+\.xml)/);
+    if (m) {
+        const src = path.join('$devPrefsEsc45', m[1]);
+        if (!fs.existsSync(src)) process.exit(1);
+        process.stdout.write(fs.readFileSync(src), () => process.exit(0));
+        return;
+    }
+    if (argStr.includes('akai_memory.db-wal')) { process.exit(1); }
+    if (argStr.includes('akai_memory.db')) {
+        process.stdout.write(fs.readFileSync('$realDbEsc45'), () => process.exit(0));
+        return;
+    }
+    process.exit(1);
+}
+if (argv.includes('install')) { console.log('Success'); process.exit(0); }
+process.exit(0);
+"@ | Out-File -FilePath $mockAdb45Js -Encoding ascii
+
+    $mockAdb45Cmd = if ($isWin45) { Join-Path $testDir45 "adb.cmd" } else { Join-Path $testDir45 "adb" }
+    if ($isWin45) {
+        Set-Content -LiteralPath $mockAdb45Cmd -Value ("@echo off`n`"{0}`" `"{1}`" %*" -f $validNode, $mockAdb45Js) -Encoding ASCII
+    } else {
+        Set-Content -LiteralPath $mockAdb45Cmd -Value ("#!/bin/sh`nexec `"{0}`" `"{1}`" `"`$@`"" -f $validNode, $mockAdb45Js) -Encoding UTF8
+        & chmod +x $mockAdb45Cmd
+    }
+
+    $scriptEsc45 = $scriptPath.Replace('\', '/')
+    $candEsc45 = $candApk45.Replace('\', '/')
+    $rescueEsc45 = $rescueApk45.Replace('\', '/')
+    $adb45Esc = $mockAdb45Cmd.Replace('\', '/')
+    $signer45Esc = $mockSigner45Cmd.Replace('\', '/')
+    $sdk45Esc = $sdkRoot45.Replace('\', '/')
+    $bt45Esc = $bt45.Replace('\', '/')
+    $nodeEsc45 = $validNode.Replace('\', '/')
+
+    foreach ($case45 in @(
+        @{ Name = '45a'; BackupName = 'b45a'; AccVal = 'com.leanbitlab.ltvL/.LauncherAccessibilityService:it.akai.customhome.v8/it.akai.customhome.AkaiMenuHomeService'; ExpectWarn = $true },
+        @{ Name = '45b'; BackupName = 'b45b'; AccVal = 'com.leanbitlab.ltvL/.LauncherAccessibilityService:it.akai.customhome.v8/it.akai.customhome.AkaiMenuHomeService:it.akai.customremote/it.akai.customremote.AkaiAccessibilityService'; ExpectWarn = $false }
+    )) {
+        [IO.File]::WriteAllText($procStateFile45, "running")
+        [IO.File]::WriteAllText($adbStateFile45, "shell")
+        if (Test-Path $adbLog45) { Remove-Item $adbLog45 -Force }
+        $bDir45 = (Join-Path $testDir45 $case45.BackupName).Replace('\', '/')
+        New-Item -ItemType Directory -Force -Path $bDir45 | Out-Null
+
+        $sub45Path = Join-Path $testDir45 ("sub45_" + $case45.Name + ".ps1")
+        $sub45Txt = @"
+`$env:NODE_EXE = '$nodeEsc45'
+`$env:ADB_EXECUTABLE = '$adb45Esc'
+`$env:APKSIGNER_EXECUTABLE = '$signer45Esc'
+`$env:ANDROID_HOME = '$sdk45Esc'
+`$env:ANDROID_SDK_ROOT = '$sdk45Esc'
+`$env:PATH = '$bt45Esc' + [IO.Path]::PathSeparator + `$env:PATH
+`$env:WATCHDOG_ATTEMPTS = '2'
+`$env:WATCHDOG_SLEEP_SEC = '1'
+`$env:TEST45_ACC_VAL = '$($case45.AccVal)'
+& '$scriptEsc45' -Action install -ApkPath '$candEsc45' -ExpectedCandidateSha256 '$candSha45' -RescueApkPath '$rescueEsc45' -ExpectedRescueSha256 '$rescueSha45' -TargetTv '127.0.0.1' -HttpPort $httpPort45 -HttpsPort $httpsPort45 -AuthToken 'tok45' -ExpectedCaFingerprint '$shaCa45' -BackupDir '$bDir45' -RequireOwnerRescue -RequireVerifiedKeystoreHealth -AllowHardwareExecution
+exit `$LASTEXITCODE
+"@
+        [IO.File]::WriteAllText($sub45Path, $sub45Txt, [Text.UTF8Encoding]::new($false))
+        $prevEap45 = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $out45 = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $sub45Path 2>&1 | Out-String)
+            $ec45 = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prevEap45
+        }
+        $log45 = if (Test-Path $adbLog45) { Get-Content $adbLog45 -Raw } else { "" }
+        $noPut = ($log45 -notmatch "settings\s+put") -and ($log45 -match "settings get secure enabled_accessibility_services")
+        $ok45 = ($ec45 -eq 0) -and ($out45 -match "DEPLOYMENT VERIFICATO CON SUCCESSO") -and $noPut
+        if ($case45.ExpectWarn) {
+            $ok45 = $ok45 -and ($out45 -match "AVVISO POST-UPGRADE ACCESSIBILITY") -and ($out45 -match "DISATTIVATO")
+        } else {
+            $ok45 = $ok45 -and ($out45 -match "Accessibilita'\s*:\s*ATTIVO") -and ($out45 -notmatch "AVVISO POST-UPGRADE ACCESSIBILITY")
+        }
+        if ($ok45) {
+            $subPassed45++
+            Write-Host "   [PASS] Sotto-test $($case45.Name): controllo read-only Accessibility OK (warn=$($case45.ExpectWarn), zero settings put)" -ForegroundColor Green
+        } else {
+            Write-Host "   [FAIL] Sotto-test $($case45.Name): exit=$ec45 out='$out45' log='$log45'" -ForegroundColor Red
+        }
+    }
+
+    if ($subPassed45 -eq 2) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / READ-ONLY ACCESSIBILITY ADVISORY] Test 45: Superati 2/2" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / READ-ONLY ACCESSIBILITY ADVISORY] Test 45: Superati $subPassed45 / 2" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / READ-ONLY ACCESSIBILITY ADVISORY] Test 45: Eccezione: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($httpProc45 -and -not $httpProc45.HasExited) { Stop-Process -Id $httpProc45.Id -Force -ErrorAction SilentlyContinue }
+    if ($httpsProc45 -and -not $httpsProc45.HasExited) { Stop-Process -Id $httpsProc45.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir45 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 
