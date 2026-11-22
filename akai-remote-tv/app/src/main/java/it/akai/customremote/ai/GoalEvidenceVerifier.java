@@ -3,6 +3,7 @@ package it.akai.customremote.ai;
 import it.akai.customremote.TvInputIntentPolicy;
 
 import java.text.Normalizer;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -22,11 +23,17 @@ public final class GoalEvidenceVerifier {
         public final boolean satisfied;
         public final String goalKind;
         public final String reason;
+        public final boolean observedFinalStateOnly;
 
         Verdict(boolean satisfied, String goalKind, String reason) {
+            this(satisfied, goalKind, reason, false);
+        }
+
+        Verdict(boolean satisfied, String goalKind, String reason, boolean observedFinalStateOnly) {
             this.satisfied = satisfied;
             this.goalKind = goalKind;
             this.reason = reason;
+            this.observedFinalStateOnly = observedFinalStateOnly;
         }
     }
 
@@ -71,11 +78,35 @@ public final class GoalEvidenceVerifier {
     }
 
     private static Verdict denied(String kind, String reason) {
-        return new Verdict(false, kind, reason);
+        return new Verdict(false, kind, reason, false);
+    }
+
+    private static Verdict deniedObservedOnly(String kind, String reason) {
+        return new Verdict(false, kind, reason, true);
     }
 
     private static Verdict allowed(String kind, String reason) {
-        return new Verdict(true, kind, reason);
+        return new Verdict(true, kind, reason, false);
+    }
+
+    private static boolean safeStrEq(String a, String b) {
+        String sa = a != null ? a.trim() : "";
+        String sb = b != null ? b.trim() : "";
+        return sa.equals(sb);
+    }
+
+    private static boolean safeTextsEq(List<String> a, List<String> b) {
+        int sizeA = a != null ? a.size() : 0;
+        int sizeB = b != null ? b.size() : 0;
+        if (sizeA != sizeB) {
+            return false;
+        }
+        for (int i = 0; i < sizeA; i++) {
+            if (!safeStrEq(a.get(i), b.get(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -137,6 +168,27 @@ public final class GoalEvidenceVerifier {
         return observed;
     }
 
+    public static Verdict verify(String goal, String successCondition,
+                                 ScreenPerceptionEngine.PerceptionSnapshot preSnapshot,
+                                 ScreenPerceptionEngine.PerceptionSnapshot postSnapshot,
+                                 long nowMs, long minTimestampMs) {
+        Verdict v = verify(goal, successCondition, postSnapshot, nowMs, minTimestampMs);
+        if (!v.satisfied || !"tv_input".equals(v.goalKind) || preSnapshot == null) {
+            return v;
+        }
+        boolean pkgChanged = !safeStrEq(preSnapshot.foregroundPackage, postSnapshot.foregroundPackage);
+        boolean actChanged = !safeStrEq(preSnapshot.foregroundActivity, postSnapshot.foregroundActivity);
+        boolean freshActEvent = postSnapshot.foregroundActivityTimestamp > 0L
+                && postSnapshot.foregroundActivityTimestamp > preSnapshot.foregroundActivityTimestamp
+                && (minTimestampMs <= 0L || postSnapshot.foregroundActivityTimestamp >= minTimestampMs);
+        boolean textsChanged = !safeTextsEq(preSnapshot.visibleTexts, postSnapshot.visibleTexts);
+        if (!(pkgChanged || actChanged || freshActEvent || textsChanged)) {
+            return deniedObservedOnly("tv_input",
+                    "Stato finale TV gia' presente e invariato rispetto a prima del comando (nessuna transizione Activity/UI attribuibile al comando): conferma visiva richiesta");
+        }
+        return v;
+    }
+
     private static Verdict checkTvInputFreshness(ScreenPerceptionEngine.PerceptionSnapshot snapshot,
                                                  long nowMs, long minTimestampMs) {
         if (snapshot.timestamp <= 0L) {
@@ -148,6 +200,23 @@ public final class GoalEvidenceVerifier {
         if ((nowMs - snapshot.timestamp) > MAX_TV_INPUT_EVIDENCE_AGE_MS
                 || (snapshot.timestamp - nowMs) > MAX_CLOCK_SKEW_MS) {
             return denied("tv_input", "Evidenza OSD/Accessibilita' TV scaduta: conferma visiva richiesta al proprietario");
+        }
+        return null;
+    }
+
+    private static Verdict checkActivityEventFreshness(long activityTs, long nowMs, long minTimestampMs) {
+        if (activityTs <= 0L) {
+            return deniedObservedOnly("tv_input",
+                    "Activity InputsPanelActivity osservata ma senza timestamp TYPE_WINDOW_STATE_CHANGED valido: transizione non attribuibile al comando");
+        }
+        if (minTimestampMs > 0L && activityTs < minTimestampMs) {
+            return deniedObservedOnly("tv_input",
+                    "Activity InputsPanelActivity registrata prima del comando (evento intra-package stantio): stato osservato non attribuibile al comando");
+        }
+        if ((nowMs - activityTs) > MAX_TV_INPUT_EVIDENCE_AGE_MS
+                || (activityTs - nowMs) > MAX_CLOCK_SKEW_MS) {
+            return deniedObservedOnly("tv_input",
+                    "Evento InputsPanelActivity scaduto oltre la finestra di freschezza: conferma visiva richiesta");
         }
         return null;
     }
@@ -260,7 +329,9 @@ public final class GoalEvidenceVerifier {
             Verdict stale = checkTvInputFreshness(snapshot, nowMs, minTimestampMs);
             if (stale != null) return stale;
             if (TvInputIntentPolicy.isInputsPanelActivity(snapshot.foregroundActivity)) {
-                return allowed("tv_input", "Activity InputsPanelActivity confermata in primo piano");
+                Verdict staleAct = checkActivityEventFreshness(snapshot.foregroundActivityTimestamp, nowMs, minTimestampMs);
+                if (staleAct != null) return staleAct;
+                return allowed("tv_input", "Activity InputsPanelActivity fresca confermata dopo il comando");
             }
             if (snapshot.foregroundActivity != null && !snapshot.foregroundActivity.trim().isEmpty()) {
                 return denied("tv_input", "LiveTV in primo piano su activity diversa da InputsPanelActivity (" + snapshot.foregroundActivity + "): pannello ingressi non verificato");

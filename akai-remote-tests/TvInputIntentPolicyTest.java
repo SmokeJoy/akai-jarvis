@@ -165,9 +165,17 @@ public class TvInputIntentPolicyTest {
                 "Ports without panel header insufficient");
 
         assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Rai 1 HD", "DTV")), "DTV + Rai 1 positive");
-        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("CH 001")), "CH 001 positive");
-        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Canale 5")), "Canale 5 positive");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Canale 5", "DVB-T2")), "Canale 5 + DVB-T2 positive");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Guida TV", "Rai 1")), "Guida TV + Rai 1 positive");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("EPG", "Canale 5")), "EPG + Canale 5 positive");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("DTV 001")), "DTV 001 positive");
         assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("DVB-T2")), "DVB-T2 positive");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Collections.singletonList("Rai 1 HD")),
+                "Bare Rai 1 HD without DTV/tuner/EPG MUST fail closed");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Collections.singletonList("Canale 5")),
+                "Bare Canale 5 without DTV/tuner/EPG MUST fail closed");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Collections.singletonList("CH 001")),
+                "Bare CH 001 without DTV/tuner/EPG MUST fail closed");
         assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Collections.<String>emptyList()), "Empty DTV denied");
         assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Nessun segnale")), "Nessun segnale denied");
         assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("No signal")), "No signal denied");

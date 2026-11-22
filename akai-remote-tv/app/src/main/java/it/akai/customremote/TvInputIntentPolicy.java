@@ -33,7 +33,7 @@ public final class TvInputIntentPolicy {
     public static final String DEFAULT_HDMI3_INPUT_ID = "com.mediatek.tvinput/.hdmi.HDMIInputService/HW8";
 
     private static final Pattern DTV_CHANNEL_NUM_PATTERN =
-            Pattern.compile("(?:^| )(?:ch|canale|dtv) [0-9]{1,3}(?: |$)");
+            Pattern.compile("(?:^| )(?:dtv|dvbt|dvbt2) [0-9]{1,3}(?: |$)");
 
     private TvInputIntentPolicy() {}
 
@@ -343,6 +343,12 @@ public final class TvInputIntentPolicy {
         return hasHeader && distinctSources >= 2;
     }
 
+    /**
+     * Requires explicit DTV/tuner/EPG origin evidence (never bare channel names such as "Rai 1 HD"
+     * or "Canale 5" alone). On Android 9 public API 28, TvInputManager cannot read LiveTV's active
+     * input, so a bare channel label without DTV/tuner/EPG corroboration must fail closed and fall
+     * back to COMMAND_SENT + owner visual confirmation.
+     */
     public static boolean hasPositiveDtvEvidence(List<String> visibleTexts) {
         if (visibleTexts == null || visibleTexts.isEmpty()) {
             return false;
@@ -357,13 +363,6 @@ public final class TvInputIntentPolicy {
                     "dtv", "dvb", "dvb t", "dvbt", "dvb t2", "dvbt2",
                     "digitale terrestre", "tuner", "tv digitale", "antenna tv",
                     "lcn", "guida tv", "epg", "televideo")) {
-                return true;
-            }
-            if (hasAnyWholePhrase(norm,
-                    "rai 1", "rai1", "rai 2", "rai2", "rai 3", "rai3",
-                    "rete 4", "rete4", "canale 5", "canale5",
-                    "italia 1", "italia1", "la 7", "la7",
-                    "tv8", "rai news", "tgcom24")) {
                 return true;
             }
             if (DTV_CHANNEL_NUM_PATTERN.matcher(norm).find()) {

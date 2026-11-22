@@ -13,4 +13,5 @@ public class AkaiAccessibilityService {
     public String getLastWindowPackage() { return null; }
     public String getLastWindowClass() { return null; }
     public long getLastWindowEventAtMs() { return 0L; }
+    public long getLastContentEventAtMs() { return 0L; }
 }

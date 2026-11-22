@@ -49,7 +49,12 @@ class TvInputTifContractTests(unittest.TestCase):
         self.assertIn("getLastWindowClass", self.acc_service)
         self.assertIn("getLastWindowPackage", self.acc_service)
         self.assertIn("foregroundActivity", self.perception)
+        self.assertIn("foregroundActivityTimestamp", self.perception)
+        self.assertIn("getLastWindowEventAtMs", self.acc_service)
+        self.assertIn("observedFinalStateOnly", self.verifier)
+        self.assertIn("checkActivityEventFreshness", self.verifier)
         self.assertIn("needs_visual_confirmation", self.ai_ctrl)
+        self.assertIn("observed_final_state_only", self.ai_ctrl)
         self.assertIn('"tv_input"', self.verifier)
         self.assertIn('"oem_dialog"', self.verifier)
 

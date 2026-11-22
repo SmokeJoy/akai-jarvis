@@ -54,6 +54,21 @@ public class TvInputGoalVerificationTest {
                 ts);
     }
 
+    private static ScreenPerceptionEngine.PerceptionSnapshot snapFull(
+            String pkg, String activity, long activityTs, List<String> texts, long captureTs) {
+        return new ScreenPerceptionEngine.PerceptionSnapshot(
+                pkg,
+                activity,
+                activityTs,
+                texts,
+                Collections.<ScreenPerceptionEngine.ClickableElement>emptyList(),
+                null,
+                false,
+                false,
+                false,
+                captureTs);
+    }
+
     public static void main(String[] args) throws Exception {
         // 1. LocalIntentParser must attach pkg_is com.mediatek.wwtv.tvcenter to all TV inputs + catalog
         for (String q : Arrays.asList("digitale terrestre", "hdmi 1", "passa a hdmi 2", "metti hdmi 3", "ingressi")) {
@@ -236,6 +251,82 @@ public class TvInputGoalVerificationTest {
                         Arrays.asList("Ingressi", "TV", "HDMI 1", "HDMI 2"), nowMs), nowMs, nowMs - 10L).satisfied,
                 "input_source ALLOWED on null activity + fresh multi-source UI panel cues");
 
+        // 3b-bis. ChatGPT PR #18 residual edge-cases (#issuecomment-7078866992):
+        //   (1) Bare channel labels without DTV/tuner/EPG origin fail closed
+        for (String bareChannel : Arrays.asList("Rai 1 HD", "Canale 5", "CH 001")) {
+            ScreenPerceptionEngine.PerceptionSnapshot bareSnap =
+                    snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                            nowMs, Collections.singletonList(bareChannel), nowMs);
+            GoalEvidenceVerifier.Verdict bareV = GoalEvidenceVerifier.verify(
+                    "digitale terrestre", tvCond, bareSnap, nowMs, nowMs - 10L);
+            assertTrue(!bareV.satisfied && "tv_input".equals(bareV.goalKind),
+                    "DTV DENIED on bare channel label without DTV/tuner/EPG origin: " + bareChannel);
+        }
+        for (List<String> corroborated : Arrays.asList(
+                Arrays.asList("Rai 1 HD", "DTV"),
+                Arrays.asList("Canale 5", "DVB-T2"),
+                Arrays.asList("Guida TV", "Rai 1"))) {
+            ScreenPerceptionEngine.PerceptionSnapshot corrSnap =
+                    snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                            nowMs, corroborated, nowMs);
+            assertTrue(GoalEvidenceVerifier.verify("digitale terrestre", tvCond, corrSnap, nowMs, nowMs - 10L).satisfied,
+                    "DTV ALLOWED with corroborated DTV/tuner/EPG origin: " + corroborated);
+        }
+
+        //   (2a) Stale intra-package Activity event vs fresh snapshot capture timestamp
+        ScreenPerceptionEngine.PerceptionSnapshot staleActBeyondWindow =
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_INPUTS_ACTIVITY,
+                        nowMs - 20_000L, Collections.<String>emptyList(), nowMs);
+        GoalEvidenceVerifier.Verdict staleActV1 = GoalEvidenceVerifier.verify(
+                "ingressi", tvCond, staleActBeyondWindow, nowMs, 0L);
+        assertTrue(!staleActV1.satisfied && staleActV1.observedFinalStateOnly,
+                "input_source DENIED when capture is fresh but activityTs > 15s old (observedFinalStateOnly=true)");
+
+        ScreenPerceptionEngine.PerceptionSnapshot staleActBeforeCmd =
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_INPUTS_ACTIVITY,
+                        nowMs - 50L, Collections.<String>emptyList(), nowMs);
+        GoalEvidenceVerifier.Verdict staleActV2 = GoalEvidenceVerifier.verify(
+                "ingressi", tvCond, staleActBeforeCmd, nowMs, nowMs);
+        assertTrue(!staleActV2.satisfied && staleActV2.observedFinalStateOnly,
+                "input_source DENIED when capture >= cmdTs but intra-package activityTs < cmdTs");
+
+        ScreenPerceptionEngine.PerceptionSnapshot freshActOk =
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_INPUTS_ACTIVITY,
+                        nowMs, Collections.<String>emptyList(), nowMs);
+        assertTrue(GoalEvidenceVerifier.verify("ingressi", tvCond, freshActOk, nowMs, nowMs).satisfied,
+                "input_source ALLOWED when both activityTs and captureTs >= cmdTs");
+
+        //   (2b) Observed unchanged final state vs command-attributed transition
+        ScreenPerceptionEngine.PerceptionSnapshot preDtvIdentical =
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        nowMs - 200L, Arrays.asList("Rai 1 HD", "DTV"), nowMs - 200L);
+        ScreenPerceptionEngine.PerceptionSnapshot postDtvIdentical =
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        nowMs - 200L, Arrays.asList("Rai 1 HD", "DTV"), nowMs);
+        GoalEvidenceVerifier.Verdict unchangedDtvV = GoalEvidenceVerifier.verify(
+                "digitale terrestre", tvCond, preDtvIdentical, postDtvIdentical, nowMs, nowMs - 10L);
+        assertTrue(!unchangedDtvV.satisfied && unchangedDtvV.observedFinalStateOnly,
+                "Identical pre/post DTV snapshot denied as observedFinalStateOnly=true");
+
+        ScreenPerceptionEngine.PerceptionSnapshot preHome =
+                snapFull("it.akai.customhome.v8", "it.akai.customhome.MainActivity",
+                        nowMs - 200L, Collections.singletonList("Home"), nowMs - 200L);
+        GoalEvidenceVerifier.Verdict changedDtvV = GoalEvidenceVerifier.verify(
+                "digitale terrestre", tvCond, preHome, postDtvIdentical, nowMs, nowMs - 10L);
+        assertTrue(changedDtvV.satisfied && !changedDtvV.observedFinalStateOnly,
+                "Pre Home -> Post DTV transition verified (observedFinalStateOnly=false)");
+
+        ScreenPerceptionEngine.PerceptionSnapshot preHdmiIdentical =
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        nowMs - 200L, Arrays.asList("HDMI 1", "1920x1080"), nowMs - 200L);
+        ScreenPerceptionEngine.PerceptionSnapshot postHdmiIdentical =
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        nowMs - 200L, Arrays.asList("HDMI 1", "1920x1080"), nowMs);
+        GoalEvidenceVerifier.Verdict unchangedHdmiV = GoalEvidenceVerifier.verify(
+                "hdmi 1", tvCond, preHdmiIdentical, postHdmiIdentical, nowMs, nowMs - 10L);
+        assertTrue(!unchangedHdmiV.satisfied && unchangedHdmiV.observedFinalStateOnly,
+                "Identical pre/post HDMI 1 snapshot denied as observedFinalStateOnly=true");
+
         // 3c. End-to-end AkaiAiController.createForTest verification (fast-path & autonomous planner)
         boolean prevStrictLocal = AkaiAiController.isStrictLocalOnly();
         android.content.Context testCtx = new android.content.Context() {};
@@ -246,21 +337,29 @@ public class TvInputGoalVerificationTest {
             final List<ScreenPerceptionEngine.PerceptionSnapshot> nextPostSnaps = new ArrayList<>();
             final AtomicInteger postIndex = new AtomicInteger(0);
             final boolean[] captureAtCallTime = new boolean[] { true };
+            final ScreenPerceptionEngine.PerceptionSnapshot[] fixedPre = new ScreenPerceptionEngine.PerceptionSnapshot[1];
             final ScreenPerceptionEngine.PerceptionSnapshot[] fixedPost = new ScreenPerceptionEngine.PerceptionSnapshot[1];
 
             AkaiAiController.PerceptionAndExecutionBridge mockBridge = new AkaiAiController.PerceptionAndExecutionBridge() {
                 @Override
                 public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
+                    int idx = postIndex.getAndIncrement();
+                    if (idx == 0) {
+                        if (fixedPre[0] != null) {
+                            return fixedPre[0];
+                        }
+                        return snapWithActivity("it.akai.customhome.v8", null, Collections.singletonList("Home"), System.currentTimeMillis());
+                    }
                     if (fixedPost[0] != null && !captureAtCallTime[0]) {
                         return fixedPost[0];
                     }
-                    int idx = postIndex.getAndIncrement();
-                    if (idx == 0) {
-                        return snapWithActivity("it.akai.customhome.v8", null, Collections.singletonList("Home"), System.currentTimeMillis());
-                    }
                     if (!nextPostSnaps.isEmpty()) {
                         ScreenPerceptionEngine.PerceptionSnapshot tmpl = nextPostSnaps.get(0);
-                        return snapWithActivity(tmpl.foregroundPackage, tmpl.foregroundActivity, tmpl.visibleTexts, System.currentTimeMillis());
+                        long postNow = System.currentTimeMillis();
+                        long actTs = (tmpl.foregroundActivityTimestamp > 0L)
+                                ? Math.max(tmpl.foregroundActivityTimestamp, postNow)
+                                : 0L;
+                        return snapFull(tmpl.foregroundPackage, tmpl.foregroundActivity, actTs, tmpl.visibleTexts, postNow);
                     }
                     return snapWithActivity(TvInputIntentPolicy.TV_CENTER_PACKAGE, null, Collections.<String>emptyList(), System.currentTimeMillis());
                 }
@@ -394,6 +493,56 @@ public class TvInputGoalVerificationTest {
             assertEquals("COMPLETED_UNVERIFIED", autoDtvRes.optString("status"), "autonomous DTV COMPLETED_UNVERIFIED");
             assertEquals(true, autoDtvRes.optBoolean("needs_visual_confirmation"), "autonomous DTV needs_visual_confirmation=true");
             assertEquals(0, memEngine.getAllProcedures().length(), "autonomous DTV unverified saves 0 procedures");
+
+            // Edge-case #1 E2E: bare "Rai 1 HD" alone -> COMMAND_SENT / COMPLETED_UNVERIFIED / needs_visual_confirmation=true
+            memEngine.resetForTest();
+            postIndex.set(0);
+            captureAtCallTime[0] = true;
+            fixedPre[0] = null;
+            fixedPost[0] = null;
+            nextPostSnaps.clear();
+            nextPostSnaps.add(snapWithActivity(TvInputIntentPolicy.TV_CENTER_PACKAGE,
+                    TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, Collections.singletonList("Rai 1 HD"), System.currentTimeMillis()));
+            JSONObject bareDtvE2E = ctrl.processQuery("digitale terrestre", false);
+            assertEquals(false, bareDtvE2E.optBoolean("success", true), "E2E bare Rai 1 HD success=false");
+            assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, bareDtvE2E.optString("execution_outcome"), "E2E bare Rai 1 HD COMMAND_SENT");
+            assertEquals("COMPLETED_UNVERIFIED", bareDtvE2E.optString("status"), "E2E bare Rai 1 HD COMPLETED_UNVERIFIED");
+            assertEquals(true, bareDtvE2E.optBoolean("needs_visual_confirmation"), "E2E bare Rai 1 HD visual confirmation");
+            assertEquals(0, memEngine.getAllProcedures().length(), "E2E bare Rai 1 HD saves 0 procedures");
+
+            // Edge-case #2a E2E: fresh captureTs (now) + stale intra-package InputsPanelActivity (now - 5000L)
+            long t2a = System.currentTimeMillis();
+            memEngine.resetForTest();
+            postIndex.set(0);
+            captureAtCallTime[0] = false;
+            fixedPre[0] = snapFull("it.akai.customhome.v8", "it.akai.customhome.MainActivity", t2a - 6000L,
+                    Collections.singletonList("Home"), t2a);
+            fixedPost[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_INPUTS_ACTIVITY,
+                    t2a - 5000L, Collections.<String>emptyList(), t2a + 50L);
+            JSONObject staleActE2E = ctrl.processQuery("ingressi", false);
+            assertEquals(false, staleActE2E.optBoolean("success", true), "E2E stale intra-pkg InputsPanel success=false");
+            assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, staleActE2E.optString("execution_outcome"), "E2E stale intra-pkg COMMAND_SENT");
+            assertEquals("COMPLETED_UNVERIFIED", staleActE2E.optString("status"), "E2E stale intra-pkg COMPLETED_UNVERIFIED");
+            assertEquals(true, staleActE2E.optBoolean("observed_final_state_only"), "E2E stale intra-pkg observed_final_state_only=true");
+            assertEquals(true, staleActE2E.optBoolean("needs_visual_confirmation"), "E2E stale intra-pkg needs_visual_confirmation=true");
+            assertEquals(0, memEngine.getAllProcedures().length(), "E2E stale intra-pkg saves 0 procedures");
+
+            // Edge-case #2b E2E: identical preSnap & postSnap DTV -> observed_final_state_only=true / COMPLETED_UNVERIFIED
+            long t2b = System.currentTimeMillis();
+            memEngine.resetForTest();
+            postIndex.set(0);
+            captureAtCallTime[0] = false;
+            fixedPre[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                    t2b - 500L, Arrays.asList("Rai 1 HD", "DTV"), t2b);
+            fixedPost[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                    t2b - 500L, Arrays.asList("Rai 1 HD", "DTV"), t2b + 50L);
+            JSONObject unchangedE2E = ctrl.processQuery("digitale terrestre", false);
+            assertEquals(false, unchangedE2E.optBoolean("success", true), "E2E identical pre/post DTV success=false");
+            assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, unchangedE2E.optString("execution_outcome"), "E2E identical pre/post COMMAND_SENT");
+            assertEquals("COMPLETED_UNVERIFIED", unchangedE2E.optString("status"), "E2E identical pre/post COMPLETED_UNVERIFIED");
+            assertEquals(true, unchangedE2E.optBoolean("observed_final_state_only"), "E2E identical pre/post observed_final_state_only=true");
+            assertEquals(true, unchangedE2E.optBoolean("needs_visual_confirmation"), "E2E identical pre/post needs_visual_confirmation=true");
+            assertEquals(0, memEngine.getAllProcedures().length(), "E2E identical pre/post saves 0 procedures");
         } finally {
             AkaiAiController.setStrictLocalOnly(prevStrictLocal);
             AkaiAiController.setDefaultPollIntervalMsForTest(150L);

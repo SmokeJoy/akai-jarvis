@@ -18,6 +18,7 @@ public class AkaiAccessibilityService extends AccessibilityService {
     private volatile String lastWindowPackage = null;
     private volatile String lastWindowClass = null;
     private volatile long lastWindowEventAtMs = 0L;
+    private volatile long lastContentEventAtMs = 0L;
 
     public static AkaiAccessibilityService getInstance() {
         return sInstance;
@@ -33,6 +34,10 @@ public class AkaiAccessibilityService extends AccessibilityService {
 
     public long getLastWindowEventAtMs() {
         return lastWindowEventAtMs;
+    }
+
+    public long getLastContentEventAtMs() {
+        return lastContentEventAtMs;
     }
 
     // =========================================================================
@@ -178,7 +183,15 @@ public class AkaiAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event != null && event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        if (event == null) {
+            return;
+        }
+        int eventType = event.getEventType();
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            lastContentEventAtMs = System.currentTimeMillis();
+        } else if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            long now = System.currentTimeMillis();
+            lastContentEventAtMs = now;
             CharSequence pkgCs = event.getPackageName();
             CharSequence clsCs = event.getClassName();
             String pkg = pkgCs != null ? pkgCs.toString().trim() : "";
@@ -186,7 +199,7 @@ public class AkaiAccessibilityService extends AccessibilityService {
             if (!pkg.isEmpty() && !cls.isEmpty() && !cls.contains("Toast")) {
                 lastWindowPackage = pkg;
                 lastWindowClass = cls;
-                lastWindowEventAtMs = System.currentTimeMillis();
+                lastWindowEventAtMs = now;
             }
         }
     }
@@ -202,6 +215,7 @@ public class AkaiAccessibilityService extends AccessibilityService {
         lastWindowPackage = null;
         lastWindowClass = null;
         lastWindowEventAtMs = 0L;
+        lastContentEventAtMs = 0L;
         if (sInstance == this) {
             sInstance = null;
         }
