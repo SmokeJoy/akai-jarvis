@@ -351,17 +351,76 @@ public class TvInputGoalVerificationTest {
         assertTrue(GoalEvidenceVerifier.verify("metti Rai 1 in diretta", null, preHome, raiPlayOk, nowMs, nowMs - 10L, null).satisfied,
                 "Streaming app RaiPlay goal preserves playback verdict");
 
+        JSONArray tuneCh1 = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 1));
+        JSONArray tuneCh2 = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 2));
         JSONArray tuneCh5 = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 5));
         JSONArray selectCh5 = new JSONArray().put(new JSONObject().put("type", "select_channel").put("number", 5));
+        JSONArray tuneCh105 = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 105));
         JSONArray badCh0 = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 0));
         JSONArray badCh10000 = new JSONArray().put(new JSONObject().put("type", "select_channel").put("number", 10000));
         ScreenPerceptionEngine.PerceptionSnapshot ch5Ok = snapFull(
                 TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
                 nowMs, Arrays.asList("DTV", "CH 005", "Canale 5"), nowMs);
-        assertTrue(GoalEvidenceVerifier.verify("vai su Mediaset", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, tuneCh5).satisfied,
-                "Action-aware tune_channel 5 verified with fresh transitioned DTV+CH005");
-        assertTrue(GoalEvidenceVerifier.verify("vai su Mediaset", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, selectCh5).satisfied,
-                "Action-aware select_channel 5 verified with fresh transitioned DTV+CH005");
+        ScreenPerceptionEngine.PerceptionSnapshot ch1Ok = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("DTV", "CH 001", "Rai 1"), nowMs);
+        ScreenPerceptionEngine.PerceptionSnapshot ch2Ok = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("DTV", "CH 002", "Italia 2"), nowMs);
+        ScreenPerceptionEngine.PerceptionSnapshot ch105Ok = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("DTV", "CH 105"), nowMs);
+
+        // ChatGPT P1 review #7086334626: actions MUST NEVER override or bypass explicit app/playback/settings goals
+        GoalEvidenceVerifier.Verdict mediasetBypass = GoalEvidenceVerifier.verify(
+                "vai su Mediaset", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, tuneCh5);
+        assertTrue(!mediasetBypass.satisfied && "open_app".equals(mediasetBypass.goalKind),
+                "vai su Mediaset DENIED when only tvcenter CH005 is shown despite tuneCh5");
+        GoalEvidenceVerifier.Verdict mediasetSelectBypass = GoalEvidenceVerifier.verify(
+                "vai su Mediaset", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, selectCh5);
+        assertTrue(!mediasetSelectBypass.satisfied && "open_app".equals(mediasetSelectBypass.goalKind),
+                "vai su Mediaset DENIED when only tvcenter CH005 is shown despite selectCh5");
+        GoalEvidenceVerifier.Verdict youtubeBypass = GoalEvidenceVerifier.verify(
+                "apri YouTube", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, tuneCh5);
+        assertTrue(!youtubeBypass.satisfied && "open_app".equals(youtubeBypass.goalKind),
+                "apri YouTube DENIED when only tvcenter CH005 is shown despite tuneCh5");
+        GoalEvidenceVerifier.Verdict italia2MediasetBypass = GoalEvidenceVerifier.verify(
+                "metti Italia 2 da Mediaset Infinity", tvCond, preHome, ch2Ok, nowMs, nowMs - 10L, tuneCh2);
+        assertTrue(!italia2MediasetBypass.satisfied && !"tv_input".equals(italia2MediasetBypass.goalKind),
+                "metti Italia 2 da Mediaset Infinity DENIED on tvcenter CH002 despite tuneCh2");
+        GoalEvidenceVerifier.Verdict rai1RaiPlayBypass = GoalEvidenceVerifier.verify(
+                "metti Rai 1 su RaiPlay", tvCond, preHome, ch1Ok, nowMs, nowMs - 10L, tuneCh1);
+        assertTrue(!rai1RaiPlayBypass.satisfied && !"tv_input".equals(rai1RaiPlayBypass.goalKind),
+                "metti Rai 1 su RaiPlay DENIED on tvcenter CH001 despite tuneCh1");
+        GoalEvidenceVerifier.Verdict wrongNamedAntenna = GoalEvidenceVerifier.verify(
+                "metti rai 1", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, tuneCh5);
+        assertTrue(!wrongNamedAntenna.satisfied && "tv_input".equals(wrongNamedAntenna.goalKind),
+                "metti rai 1 DENIED when wrong action tuneCh5/CH005 is executed");
+        GoalEvidenceVerifier.Verdict settingsAudioBypass = GoalEvidenceVerifier.verify(
+                "apri impostazioni audio", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, tuneCh5);
+        assertTrue(!settingsAudioBypass.satisfied && "settings_section".equals(settingsAudioBypass.goalKind),
+                "apri impostazioni audio DENIED when only tvcenter CH005 is shown");
+
+        // Positive GoalEvidenceVerifier checks with coherent goal + fresh post-command transition
+        GoalEvidenceVerifier.Verdict can5TuneOk = GoalEvidenceVerifier.verify(
+                "canale 5", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, tuneCh5);
+        assertTrue(can5TuneOk.satisfied && "tv_input".equals(can5TuneOk.goalKind),
+                "canale 5 verified with fresh transitioned DTV+CH005 + tuneCh5");
+        GoalEvidenceVerifier.Verdict can5SelectOk = GoalEvidenceVerifier.verify(
+                "canale 5", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, selectCh5);
+        assertTrue(can5SelectOk.satisfied && "tv_input".equals(can5SelectOk.goalKind),
+                "canale 5 verified with fresh transitioned DTV+CH005 + selectCh5");
+        GoalEvidenceVerifier.Verdict rai1AntennaOk = GoalEvidenceVerifier.verify(
+                "metti rai 1", tvCond, preHome, ch1Ok, nowMs, nowMs - 10L, tuneCh1);
+        assertTrue(rai1AntennaOk.satisfied && "tv_input".equals(rai1AntennaOk.goalKind),
+                "metti rai 1 verified as DTV antenna with fresh transitioned DTV+CH001 + tuneCh1");
+        assertTrue(GoalEvidenceVerifier.verify(
+                "metti Rai 1 su RaiPlay", null, preHome, raiPlayOk, nowMs, nowMs - 10L, null).satisfied,
+                "metti Rai 1 su RaiPlay ALLOWED on active RaiPlay");
+        GoalEvidenceVerifier.Verdict openGoalCh105Ok = GoalEvidenceVerifier.verify(
+                "vai al centocinque", tvCond, preHome, ch105Ok, nowMs, nowMs - 10L, tuneCh105);
+        assertTrue(openGoalCh105Ok.satisfied && "tv_input".equals(openGoalCh105Ok.goalKind),
+                "Unclassified open goal vai al centocinque verified via tuneCh105 + fresh DTV+CH105");
         assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, snapFull(
                 TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
                 nowMs, Collections.<String>emptyList(), nowMs), nowMs, nowMs - 10L, tuneCh5).satisfied,
@@ -805,6 +864,47 @@ public class TvInputGoalVerificationTest {
                 assertEquals(0, memEngine.getAllProcedures().length(), "visual unchanged saves 0 procedures");
             } finally {
                 it.akai.customremote.ai.VisualObservationProvider.clear(mockVisualSession);
+            }
+
+            // 3c-bis (4). E2E misbehaving cloud planner proposing tune_channel + pkg_is tvcenter
+            //            for non-TV app/playback goals MUST fail closed and NEVER learn in SQLite (#7086334626)
+            AkaiAiController.setStrictLocalOnly(false);
+            Object[][] plannerBypassCases = new Object[][] {
+                    new Object[] { "vai su Mediaset", 5, "Canale 5", "CH 005" },
+                    new Object[] { "apri subito YouTube", 5, "Canale 5", "CH 005" },
+                    new Object[] { "metti Italia 2 da Mediaset Infinity", 2, "Italia 2", "CH 002" },
+                    new Object[] { "metti Rai 1 su RaiPlay", 1, "Rai 1", "CH 001" }
+            };
+            for (Object[] tc : plannerBypassCases) {
+                String goalQuery = (String) tc[0];
+                int chNum = ((Integer) tc[1]).intValue();
+                String chName = (String) tc[2];
+                String chLabel = (String) tc[3];
+                memEngine.resetForTest();
+                postIndex.set(0);
+                actionDispatched[0] = false;
+                captureAtCallTime[0] = true;
+                fixedPre[0] = null;
+                fixedPost[0] = null;
+                cloudPlannedCondition[0] = tvCond;
+                cloudPlannedActions[0] = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", chNum));
+                nextPostSnaps.clear();
+                nextPostSnaps.add(snapWithActivity(TvInputIntentPolicy.TV_CENTER_PACKAGE,
+                        TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        Arrays.asList("DTV", chLabel, chName), System.currentTimeMillis()));
+                JSONObject bypassE2E = ctrl.processQuery(goalQuery, false);
+                assertEquals(false, bypassE2E.optBoolean("success", true),
+                        "E2E planner bypass MUST fail for '" + goalQuery + "'");
+                assertEquals(false, bypassE2E.optBoolean("verified", true),
+                        "E2E planner bypass verified=false for '" + goalQuery + "'");
+                assertEquals(false, bypassE2E.optBoolean("learned_new_procedure", true),
+                        "E2E planner bypass never learns SQLite skill for '" + goalQuery + "'");
+                assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, bypassE2E.optString("execution_outcome"),
+                        "E2E planner bypass outcome=COMMAND_SENT for '" + goalQuery + "'");
+                assertEquals("COMPLETED_UNVERIFIED", bypassE2E.optString("status"),
+                        "E2E planner bypass status=COMPLETED_UNVERIFIED for '" + goalQuery + "'");
+                assertEquals(0, memEngine.getAllProcedures().length(),
+                        "E2E planner bypass saves 0 procedures for '" + goalQuery + "'");
             }
         } finally {
             AkaiAiController.setStrictLocalOnly(prevStrictLocal);

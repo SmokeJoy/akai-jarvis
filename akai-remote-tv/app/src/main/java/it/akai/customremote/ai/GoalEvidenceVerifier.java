@@ -250,52 +250,90 @@ public final class GoalEvidenceVerifier {
         return null;
     }
 
-    private static TvInputTarget resolveTvInputTarget(String q, org.json.JSONArray executedActions) {
-        if (executedActions != null) {
-            TvInputTarget actionTarget = null;
-            for (int i = 0; i < executedActions.length(); i++) {
-                org.json.JSONObject step = executedActions.optJSONObject(i);
-                if (step == null) continue;
-                String type = step.optString("type", "").trim().toLowerCase(Locale.US);
-                if ("tune_channel".equals(type) || "select_channel".equals(type)) {
-                    actionTarget = new TvInputTarget("DTV_CHANNEL", step.optInt("number", -1));
-                } else if ("command".equals(type) || "press_key".equals(type)) {
-                    String act = step.optString("action", step.optString("key", "")).trim().toLowerCase(Locale.US);
-                    if ("input_hdmi1".equals(act)) actionTarget = new TvInputTarget("HDMI", 1);
-                    else if ("input_hdmi2".equals(act)) actionTarget = new TvInputTarget("HDMI", 2);
-                    else if ("input_hdmi3".equals(act)) actionTarget = new TvInputTarget("HDMI", 3);
-                    else if ("input_tv".equals(act)) actionTarget = new TvInputTarget("DTV", -1);
-                    else if ("input_source".equals(act)) actionTarget = new TvInputTarget("INPUTS_PANEL", -1);
-                } else if ("launch_app".equals(type) || "open_app".equals(type)) {
-                    String targetPkg = step.optString("pkg", step.optString("package", "")).trim();
-                    if (TvInputIntentPolicy.isTvCenterPackage(targetPkg)) {
-                        actionTarget = new TvInputTarget("DTV", -1);
-                    } else if (!targetPkg.isEmpty()) {
-                        actionTarget = null;
-                    }
+    private static String resolveExplicitNonTvAppPackage(String q) {
+        if (has(q, "mediaset") || has(q, "infinity")) return "it.mediaset.infinitytv";
+        if (has(q, "youtube")) return "com.google.android.youtube.tv";
+        if (has(q, "raiplay")) return "it.rainet.androidtv";
+        if (has(q, "impostazioni") || has(q, "settings")) return "com.android.tv.settings";
+        return null;
+    }
+
+    private static int resolveNamedDtvChannelFromGoal(String q) {
+        if (has(q, "rai 1") || has(q, "rai1") || has(q, "rai uno")) return 1;
+        if (has(q, "rai 2") || has(q, "rai2") || has(q, "rai due")) return 2;
+        if (has(q, "rai 3") || has(q, "rai3") || has(q, "rai tre")) return 3;
+        if (has(q, "rete 4") || has(q, "rete4") || has(q, "rete quattro")) return 4;
+        if (has(q, "canale 5") || has(q, "canale5") || has(q, "canale cinque")) return 5;
+        if (has(q, "italia 1") || has(q, "italia1") || has(q, "italia uno")) return 6;
+        if (has(q, "la 7") || has(q, "la7") || has(q, "la sette")) return 7;
+        return -1;
+    }
+
+    private static TvInputTarget resolveTvInputTargetFromActions(org.json.JSONArray executedActions) {
+        if (executedActions == null) {
+            return null;
+        }
+        TvInputTarget actionTarget = null;
+        for (int i = 0; i < executedActions.length(); i++) {
+            org.json.JSONObject step = executedActions.optJSONObject(i);
+            if (step == null) continue;
+            String type = step.optString("type", "").trim().toLowerCase(Locale.US);
+            if ("tune_channel".equals(type) || "select_channel".equals(type)) {
+                actionTarget = new TvInputTarget("DTV_CHANNEL", step.optInt("number", -1));
+            } else if ("command".equals(type) || "press_key".equals(type)) {
+                String act = step.optString("action", step.optString("key", "")).trim().toLowerCase(Locale.US);
+                if ("input_hdmi1".equals(act)) actionTarget = new TvInputTarget("HDMI", 1);
+                else if ("input_hdmi2".equals(act)) actionTarget = new TvInputTarget("HDMI", 2);
+                else if ("input_hdmi3".equals(act)) actionTarget = new TvInputTarget("HDMI", 3);
+                else if ("input_tv".equals(act)) actionTarget = new TvInputTarget("DTV", -1);
+                else if ("input_source".equals(act)) actionTarget = new TvInputTarget("INPUTS_PANEL", -1);
+            } else if ("launch_app".equals(type) || "open_app".equals(type)) {
+                String targetPkg = step.optString("pkg", step.optString("package", "")).trim();
+                if (TvInputIntentPolicy.isTvCenterPackage(targetPkg)) {
+                    actionTarget = new TvInputTarget("DTV", -1);
+                } else if (!targetPkg.isEmpty()) {
+                    actionTarget = null;
                 }
             }
-            if (actionTarget != null) {
-                return actionTarget;
-            }
+        }
+        return actionTarget;
+    }
+
+    private static boolean hasDtvChannelAction(org.json.JSONArray executedActions) {
+        TvInputTarget t = resolveTvInputTargetFromActions(executedActions);
+        return t != null && "DTV_CHANNEL".equals(t.kind);
+    }
+
+    private static boolean hasExplicitDtvTerm(String q) {
+        return has(q, "digitale terrestre") || has(q, "dtv") || has(q, "antenna");
+    }
+
+    private static boolean hasStreamingContext(String q) {
+        return has(q, "diretta") || has(q, "live") || has(q, "streaming")
+                || has(q, "raiplay") || has(q, "mediaset") || has(q, "infinity") || has(q, "youtube");
+    }
+
+    private static TvInputTarget resolveTvInputTargetFromGoal(String q, org.json.JSONArray executedActions) {
+        if (resolveExplicitNonTvAppPackage(q) != null) {
+            return null;
         }
         if (has(q, "hdmi 1") || has(q, "hdmi1")) return new TvInputTarget("HDMI", 1);
         if (has(q, "hdmi 2") || has(q, "hdmi2")) return new TvInputTarget("HDMI", 2);
         if (has(q, "hdmi 3") || has(q, "hdmi3")) return new TvInputTarget("HDMI", 3);
         Matcher cm = NUMERIC_CHANNEL_GOAL_PATTERN.matcher(q);
-        if (cm.find()) {
-            boolean explicitDtv = has(q, "digitale terrestre") || has(q, "dtv") || has(q, "antenna");
-            boolean streamingCtx = has(q, "diretta") || has(q, "live") || has(q, "streaming")
-                    || has(q, "raiplay") || has(q, "mediaset") || has(q, "infinity") || has(q, "youtube");
-            if (!streamingCtx || explicitDtv) {
-                int ch = -1;
-                try {
-                    ch = Integer.parseInt(cm.group(1));
-                } catch (NumberFormatException ignored) {}
-                return new TvInputTarget("DTV_CHANNEL", ch);
-            }
+        if (cm.find() && (!hasStreamingContext(q) || hasExplicitDtvTerm(q))) {
+            int ch = -1;
+            try {
+                ch = Integer.parseInt(cm.group(1));
+            } catch (NumberFormatException ignored) {}
+            return new TvInputTarget("DTV_CHANNEL", ch);
         }
-        if (has(q, "digitale terrestre") || has(q, "dtv") || has(q, "antenna")
+        int namedCh = resolveNamedDtvChannelFromGoal(q);
+        if (namedCh > 0 && !hasStreamingContext(q)
+                && (hasExplicitDtvTerm(q) || hasDtvChannelAction(executedActions))) {
+            return new TvInputTarget("DTV_CHANNEL", namedCh);
+        }
+        if (hasExplicitDtvTerm(q)
                 || has(q, "canali tv") || has(q, "canale tv") || has(q, "elenco canali") || "tv".equals(q)) {
             return new TvInputTarget("DTV", -1);
         }
@@ -412,74 +450,87 @@ public final class GoalEvidenceVerifier {
             return denied("oem_dialog", "Dialogo errore/ANR OEM rilevato (" + oemAnomaly + "): stato non verificato");
         }
 
-        // Physical TV inputs & DTV channels MUST run before mentionsPlayback so queries like
-        // "guarda hdmi 1" or "guarda il digitale terrestre" cannot bypass TIF/channel verification.
-        TvInputTarget tvTarget = resolveTvInputTarget(q, executedActions);
-        if (tvTarget != null) {
-            return verifyTvInputTarget(tvTarget, snapshot, pkg, nowMs, minTimestampMs);
-        }
-
-        if (mentionsPlayback(q)) {
-            // Opening the app / seeing a SurfaceView is NEVER playback proof.
-            // Require active media audio AND a player view in the foreground.
-            if (pkg.isEmpty() || pkg.contains("customhome") || pkg.contains("launcher")) {
-                return denied("playback", "Il player non e' in primo piano");
-            }
-            if (has(q, "mediaset") && !"it.mediaset.infinitytv".equals(pkg)) {
-                return denied("playback", "Mediaset Infinity non e' in primo piano");
-            }
-            if (has(q, "youtube") && !"com.google.android.youtube.tv".equals(pkg)) {
-                return denied("playback", "YouTube non e' in primo piano");
-            }
-            if (has(q, "raiplay") && !"it.rainet.androidtv".equals(pkg)) {
-                return denied("playback", "RaiPlay non e' in primo piano");
-            }
-            if (!snapshot.isMusicActive || !snapshot.isPlayerActive) {
-                return denied("playback", "La sola schermata dell'app non prova riproduzione audio/video");
-            }
-            // Channel-specific goals require visible identification as well.
-            if ((has(q, "italia 2") || has(q, "italia2"))
-                    && !hasVisibleChannelLabel(snapshot, "italia 2", "italia2")) {
-                return denied("playback", "Il canale Italia 2 non e' identificabile");
-            }
-            if ((has(q, "rai 1") || has(q, "rai1"))
-                    && !hasVisibleChannelLabel(snapshot, "rai 1", "rai1")) {
-                return denied("playback", "Il canale Rai 1 non e' identificabile");
-            }
-            return allowed("playback", "Player, audio e identita' del contenuto richiesto osservati quando applicabile");
-        }
+        // 1. Evaluate user's semantic goal FIRST: executed actions can add constraints
+        //    but MUST NEVER redefine or bypass an explicit non-TV app/playback/settings goal.
+        final Verdict goalVerdict;
+        String explicitApp = resolveExplicitNonTvAppPackage(q);
+        TvInputTarget goalTvTarget = explicitApp == null ? resolveTvInputTargetFromGoal(q, executedActions) : null;
 
         if (has(q, "impostazioni") && (has(q, "audio") || has(q, "suono"))) {
             if (!"com.android.tv.settings".equals(pkg)) {
-                return denied("settings_section", "Impostazioni Android TV non in primo piano");
+                goalVerdict = denied("settings_section", "Impostazioni Android TV non in primo piano");
+            } else {
+                boolean audioSection = snapshot.containsText("Uscita digitale", false)
+                        || snapshot.containsText("Bilanciamento", false)
+                        || snapshot.containsText("Altoparlanti", false)
+                        || snapshot.containsText("Equalizzatore", false)
+                        || snapshot.containsText("Modalita audio", false);
+                goalVerdict = audioSection
+                        ? allowed("settings_section", "Dettaglio sezione Audio presente")
+                        : denied("settings_section", "La sola voce Audio non dimostra che la sezione sia aperta");
             }
-            boolean audioSection = snapshot.containsText("Uscita digitale", false)
-                    || snapshot.containsText("Bilanciamento", false)
-                    || snapshot.containsText("Altoparlanti", false)
-                    || snapshot.containsText("Equalizzatore", false)
-                    || snapshot.containsText("Modalita audio", false);
-            return audioSection
-                    ? allowed("settings_section", "Dettaglio sezione Audio presente")
-                    : denied("settings_section", "La sola voce Audio non dimostra che la sezione sia aperta");
-        }
-
-        // For clear app-opening goals, a model-provided different pkg_is
-        // cannot certify that the user-requested application was opened.
-        if (has(q, "apri") || has(q, "avvia") || has(q, "vai su")) {
-            String target = null;
-            if (has(q, "mediaset") || has(q, "infinity")) target = "it.mediaset.infinitytv";
-            else if (has(q, "youtube")) target = "com.google.android.youtube.tv";
-            else if (has(q, "raiplay")) target = "it.rainet.androidtv";
-            else if (has(q, "impostazioni") || has(q, "settings")) target = "com.android.tv.settings";
-            if (target != null) {
-                return target.equals(pkg)
+        } else if (explicitApp != null) {
+            if (mentionsPlayback(q)) {
+                if ("it.mediaset.infinitytv".equals(explicitApp) && !explicitApp.equals(pkg)) {
+                    goalVerdict = denied("playback", "Mediaset Infinity non e' in primo piano");
+                } else if ("com.google.android.youtube.tv".equals(explicitApp) && !explicitApp.equals(pkg)) {
+                    goalVerdict = denied("playback", "YouTube non e' in primo piano");
+                } else if ("it.rainet.androidtv".equals(explicitApp) && !explicitApp.equals(pkg)) {
+                    goalVerdict = denied("playback", "RaiPlay non e' in primo piano");
+                } else if (!explicitApp.equals(pkg)) {
+                    goalVerdict = denied("playback", "L'app richiesta non e' in primo piano");
+                } else if (!snapshot.isMusicActive || !snapshot.isPlayerActive) {
+                    goalVerdict = denied("playback", "La sola schermata dell'app non prova riproduzione audio/video");
+                } else if ((has(q, "italia 2") || has(q, "italia2"))
+                        && !hasVisibleChannelLabel(snapshot, "italia 2", "italia2")) {
+                    goalVerdict = denied("playback", "Il canale Italia 2 non e' identificabile");
+                } else if ((has(q, "rai 1") || has(q, "rai1"))
+                        && !hasVisibleChannelLabel(snapshot, "rai 1", "rai1")) {
+                    goalVerdict = denied("playback", "Il canale Rai 1 non e' identificabile");
+                } else {
+                    goalVerdict = allowed("playback", "Player, audio e identita' del contenuto richiesto osservati quando applicabile");
+                }
+            } else {
+                goalVerdict = explicitApp.equals(pkg)
                         ? allowed("open_app", "Pacchetto richiesto osservato in primo piano")
                         : denied("open_app", "L'app richiesta non e' in primo piano");
             }
+        } else if (goalTvTarget != null) {
+            goalVerdict = verifyTvInputTarget(goalTvTarget, snapshot, pkg, nowMs, minTimestampMs);
+        } else if (mentionsPlayback(q)) {
+            if (pkg.isEmpty() || pkg.contains("customhome") || pkg.contains("launcher")) {
+                goalVerdict = denied("playback", "Il player non e' in primo piano");
+            } else if (!snapshot.isMusicActive || !snapshot.isPlayerActive) {
+                goalVerdict = denied("playback", "La sola schermata dell'app non prova riproduzione audio/video");
+            } else if ((has(q, "italia 2") || has(q, "italia2"))
+                    && !hasVisibleChannelLabel(snapshot, "italia 2", "italia2")) {
+                goalVerdict = denied("playback", "Il canale Italia 2 non e' identificabile");
+            } else if ((has(q, "rai 1") || has(q, "rai1"))
+                    && !hasVisibleChannelLabel(snapshot, "rai 1", "rai1")) {
+                goalVerdict = denied("playback", "Il canale Rai 1 non e' identificabile");
+            } else {
+                goalVerdict = allowed("playback", "Player, audio e identita' del contenuto richiesto osservati quando applicabile");
+            }
+        } else {
+            goalVerdict = allowed("other", "Nessun requisito finale aggiuntivo identificato");
         }
 
-        // No reliable semantic classification: retain the planner's observable
-        // condition (which is checked independently by the caller).
-        return allowed("other", "Nessun requisito finale aggiuntivo identificato");
+        if (!goalVerdict.satisfied) {
+            return goalVerdict;
+        }
+
+        // 2. Executed actions are a strictly conjunctive constraint: they may require
+        //    fresh TIF/DTV evidence for an open-ended goal, never override a failed goal.
+        TvInputTarget actionTvTarget = resolveTvInputTargetFromActions(executedActions);
+        if (actionTvTarget != null) {
+            Verdict actionVerdict = verifyTvInputTarget(actionTvTarget, snapshot, pkg, nowMs, minTimestampMs);
+            if (!actionVerdict.satisfied) {
+                return actionVerdict;
+            }
+            if ("other".equals(goalVerdict.goalKind)) {
+                return actionVerdict;
+            }
+        }
+        return goalVerdict;
     }
 }

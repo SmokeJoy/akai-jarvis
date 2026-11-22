@@ -76,6 +76,13 @@ class TvInputTifContractTests(unittest.TestCase):
     def test_channel_evidence_and_ai_controller_wiring(self):
         self.assertIn("hasPositiveDtvChannelNumberEvidence", self.policy)
         self.assertIn("hasPositiveDtvChannelNumberEvidence", self.verifier)
+        self.assertIn("resolveExplicitNonTvAppPackage", self.verifier)
+        self.assertIn("resolveTvInputTargetFromActions", self.verifier)
+        self.assertIn("resolveTvInputTargetFromGoal", self.verifier)
+        verify_begin = self.verifier.index("public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot,\n") if "public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot,\n" in self.verifier else self.verifier.index("org.json.JSONArray executedActions) {\n        if (snapshot == null")
+        verify_body = self.verifier[verify_begin:]
+        self.assertLess(verify_body.index("resolveExplicitNonTvAppPackage("), verify_body.index("resolveTvInputTargetFromGoal("))
+        self.assertLess(verify_body.index("resolveExplicitNonTvAppPackage("), verify_body.index("resolveTvInputTargetFromActions("))
         self.assertIn('"canali tv"', self.verifier)
         self.assertIsNone(
             re.search(r"catch\s*\(\s*InterruptedException\s+ignored\s*\)", self.ai_ctrl),
