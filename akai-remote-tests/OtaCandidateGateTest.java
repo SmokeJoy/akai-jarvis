@@ -66,6 +66,23 @@ public final class OtaCandidateGateTest {
         expect("fragment rejected", false, candidate(c.packageName,4,SIGNER,HASH,"https://updates.nolimits3d.example/file.apk#x",c.abi,21,c.sizeBytes,"stable"), 3,SIGNER,TRUSTED);
         expect("not an apk", false, candidate(c.packageName,4,SIGNER,HASH,"https://updates.nolimits3d.example/file.zip",c.abi,21,c.sizeBytes,"stable"), 3,SIGNER,TRUSTED);
         expect("signed URL allowed", true, candidate(c.packageName,4,SIGNER,HASH,c.downloadUrl+"?expires=123",c.abi,21,c.sizeBytes,"stable"), 3,SIGNER,TRUSTED);
+        for (String localOrNonPublicHost : Arrays.asList(
+                "localhost", "127.0.0.1", "192.168.1.50", "[::1]", "jarvis.local", "router.lan", "intranet",
+                "updates.nolimits3d.example.")) {
+            Set<String> hostSet = Collections.singleton(localOrNonPublicHost);
+            expect("non-public host rejected: " + localOrNonPublicHost, false,
+                    candidate(c.packageName, 4, SIGNER, HASH,
+                            "https://" + localOrNonPublicHost + "/file.apk", c.abi, 21, c.sizeBytes, "stable"),
+                    3, SIGNER, hostSet);
+        }
+        expect("path traversal rejected", false,
+                candidate(c.packageName, 4, SIGNER, HASH,
+                        "https://updates.nolimits3d.example/releases/../file.apk", c.abi, 21, c.sizeBytes, "stable"),
+                3, SIGNER, TRUSTED);
+        expect("encoded traversal rejected", false,
+                candidate(c.packageName, 4, SIGNER, HASH,
+                        "https://updates.nolimits3d.example/releases/%2e%2e/file.apk", c.abi, 21, c.sizeBytes, "stable"),
+                3, SIGNER, TRUSTED);
 
         byte[] digest = new byte[32];
         for (int i=0; i<32; i++) digest[i]=(byte)i;

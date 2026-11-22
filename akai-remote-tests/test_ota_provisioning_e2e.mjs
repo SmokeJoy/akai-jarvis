@@ -130,6 +130,41 @@ try {
     ['classes.dex', Buffer.from('DUMMY_DEX')]
   ]);
 
+  const badUrlApks = [];
+  for (const [idx, badChanUrl] of [
+    'https://localhost/releases/jarvis.manifest',
+    'https://192.168.1.50/releases/jarvis.manifest',
+    'https://akai.local/releases/jarvis.manifest',
+    'https://updates.akai-jarvis.example/releases/jarvis.manifest?token=1'
+  ].entries()) {
+    const p = path.join(workDir, `bad-channel-${idx}.apk`);
+    writeStoredZip(p, [
+      ['AndroidManifest.xml', Buffer.from('DUMMY_MANIFEST')],
+      ['classes.dex', Buffer.from('DUMMY_DEX')],
+      ['assets/ota-release-public.der', pubDer],
+      ['assets/ota-release-channel.txt', Buffer.from(badChanUrl + '\n', 'utf8')]
+    ]);
+    badUrlApks.push(p);
+  }
+
+  const crlfChannelApk = path.join(workDir, 'crlf-channel-v5.apk');
+  writeStoredZip(crlfChannelApk, [
+    ['AndroidManifest.xml', Buffer.from('DUMMY_MANIFEST')],
+    ['classes.dex', Buffer.from('DUMMY_DEX')],
+    ['assets/ota-release-public.der', pubDer],
+    ['assets/ota-release-channel.txt', Buffer.from(manifestUrl + '\r\n', 'utf8')]
+  ]);
+
+  const oversizedDer = Buffer.alloc(1500, 0xaa);
+  oversizedDer[0] = 0x30;
+  const oversizedDerApk = path.join(workDir, 'oversized-der-v5.apk');
+  writeStoredZip(oversizedDerApk, [
+    ['AndroidManifest.xml', Buffer.from('DUMMY_MANIFEST')],
+    ['classes.dex', Buffer.from('DUMMY_DEX')],
+    ['assets/ota-release-public.der', oversizedDer],
+    ['assets/ota-release-channel.txt', Buffer.from(manifestUrl + '\n', 'utf8')]
+  ]);
+
   const makeManifest = ({ versionCode, signerSha256 = signerA, url = apkUrlV6 }) =>
     [
       'format=jarvis-ota-v1',
@@ -305,6 +340,12 @@ public class OtaProvisioningE2ERunner {
         check(OtaReleaseTrust.readBundledPublicKey(unprovCtx) == null, "Unprovisioned APK must return null PublicKey");
         check(OtaReleaseChannel.loadBundled(unprovCtx) == null, "Unprovisioned APK must return null Channel");
 
+        for (int idx = 14; idx < args.length; idx++) {
+            Context badChCtx = new Context(args[idx]);
+            check(OtaReleaseChannel.loadBundled(badChCtx) == null,
+                    "Unsafe OTA channel APK must be rejected by loadBundled: " + args[idx]);
+        }
+
         System.out.println("JAVA_OTA_E2E_PASS");
     }
 }
@@ -334,7 +375,9 @@ public class OtaProvisioningE2ERunner {
     filesOut.wsMan, filesOut.wsSig,
     filesOut.uhMan, filesOut.uhSig,
     filesOut.htMan, filesOut.htSig,
-    filesOut.dv4Man, filesOut.dv4Sig
+    filesOut.dv4Man, filesOut.dv4Sig,
+    ...badUrlApks,
+    crlfChannelApk
   ], { encoding: 'utf8' });
   if (!javaOut.includes('JAVA_OTA_E2E_PASS')) {
     throw new Error('Unexpected Java runner output: ' + javaOut);
@@ -428,7 +471,56 @@ public class OtaProvisioningE2ERunner {
     }
   }
 
-  console.log('PASS: OTA Provisioning E2E (Java trust/channel/manifest/downgrade + Script 17 readiness & Staging URL guards) OK');
+  // 6. Verifica Script 17 parita' runtime Android su CRLF, DER >1024B e mix buildProfile Staging/Release
+  const expectScript17Rejection = (extraArgs, expectedReason) => {
+    let rejected = false;
+    try {
+      execFileSync(ps, [
+        ...psExecArgs, script17,
+        '-OtaReleasePublicKeyPath', pubDerPath,
+        '-OtaReleaseManifestUrl', manifestUrl,
+        ...extraArgs
+      ], { encoding: 'utf8', stdio: 'pipe' });
+    } catch (err) {
+      const parsed = JSON.parse((err.stdout || '').toString());
+      if (err.status === 1 && parsed.otaReady === false && parsed.reasons.includes(expectedReason)) {
+        rejected = true;
+      }
+    }
+    if (!rejected) {
+      throw new Error('Script 17 failed to reject with ' + expectedReason);
+    }
+  };
+
+  expectScript17Rejection(['-ApkPath', crlfChannelApk], 'APK_INVALID_BUNDLED_OTA_CHANNEL_FORMAT');
+  expectScript17Rejection(['-ApkPath', oversizedDerApk], 'APK_INVALID_BUNDLED_OTA_KEY');
+
+  const releaseProfileManifest = path.join(workDir, 'build_manifest_release.json');
+  fs.writeFileSync(releaseProfileManifest, JSON.stringify({
+    versionCode: 9,
+    buildProfile: 'Release',
+    otaProvisioned: true,
+    otaReleaseManifestUrl: manifestUrl,
+    otaReleasePublicKeySha256: pubSha
+  }));
+  const diagProfileManifest = path.join(workDir, 'build_manifest_diag.json');
+  fs.writeFileSync(diagProfileManifest, JSON.stringify({
+    versionCode: 7,
+    buildProfile: 'Diagnostic',
+    otaProvisioned: true,
+    otaReleaseManifestUrl: manifestUrl,
+    otaReleasePublicKeySha256: pubSha
+  }));
+  expectScript17Rejection(
+    ['-BuildManifestPath', releaseProfileManifest, '-ChannelProfile', 'Staging'],
+    'STAGING_BUILD_MANIFEST_PROFILE_MISMATCH'
+  );
+  expectScript17Rejection(
+    ['-BuildManifestPath', diagProfileManifest, '-ChannelProfile', 'Release'],
+    'RELEASE_BUILD_MANIFEST_PROFILE_MISMATCH'
+  );
+
+  console.log('PASS: OTA Provisioning E2E (Java trust/channel/manifest/downgrade + Script 17 readiness, Staging & CRLF/DER/profile guards) OK');
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true });
 }

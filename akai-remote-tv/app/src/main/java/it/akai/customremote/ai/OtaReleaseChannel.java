@@ -65,7 +65,7 @@ public final class OtaReleaseChannel {
                 return null;
             Set<String> hosts = Collections.singleton(
                     parsed.getHost().toLowerCase(Locale.ROOT));
-            if (!OtaHttpsTransport.safeHttpsEndpoint(url, hosts, ".manifest"))
+            if (!OtaHttpsTransport.safePublicHttpsManifestEndpoint(url, hosts, ".manifest"))
                 return null;
             return new Channel(url, hosts);
         } catch (Exception invalidOrUnprovisioned) {

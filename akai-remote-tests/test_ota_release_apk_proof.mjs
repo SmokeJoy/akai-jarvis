@@ -1,6 +1,7 @@
 // Critical OTA release publishing regressions. No real Android tool or key.
 import assert from 'node:assert/strict';
 import { auditActualApkOutputs } from '../scripts/lib/ota_release_apk_proof.mjs';
+import { validateReleaseHttpsUrl } from '../scripts/14_sign_ota_release_manifest.mjs';
 
 const original = '21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed';
 const alternate = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -79,5 +80,32 @@ reject({ ...fixture, badging: '' }, 'missing badging report');
 reject({ ...fixture, manifestXml: '' }, 'missing manifest report');
 reject({ ...fixture, handoff: { ...fixture.handoff, versionCode: 6 } },
        'wrong JSON expected version');
+
+assert.equal(validateReleaseHttpsUrl('https://updates.akai-jarvis.example/releases/v5.manifest', '.manifest').hostname, 'updates.akai-jarvis.example');
+count++;
+assert.equal(validateReleaseHttpsUrl('https://updates.akai-jarvis.example/releases/jarvis-v5.apk', '.apk').pathname, '/releases/jarvis-v5.apk');
+count++;
+for (const badUrl of [
+  'http://updates.akai-jarvis.example/releases/v5.apk',
+  'https://updates.akai-jarvis.example:8443/releases/v5.apk',
+  'https://updates.akai-jarvis.example/releases/v5.apk?x=1',
+  'https://updates.akai-jarvis.example/releases/v5.apk#frag',
+  'https://user@updates.akai-jarvis.example/releases/v5.apk',
+  'https://updates.akai-jarvis.example/releases/../v5.apk',
+  'https://updates.akai-jarvis.example/releases/%2e%2e/v5.apk',
+  'https://localhost/releases/v5.apk',
+  'https://127.0.0.1/releases/v5.apk',
+  'https://192.168.1.50/releases/v5.apk',
+  'https://[::1]/releases/v5.apk',
+  'https://jarvis.local/releases/v5.apk',
+  'https://router.lan/releases/v5.apk',
+  'https://host.internal/releases/v5.apk',
+  'https://tv.home/releases/v5.apk',
+  'https://singlelabel/releases/v5.apk',
+]) {
+  assert.throws(() => validateReleaseHttpsUrl(badUrl, '.apk'), /RELEASE_URL_REJECTED_/, 'reject unsafe release URL: ' + badUrl);
+  count++;
+}
+
 console.log('test_ota_release_apk_proof PASS: ' + count +
-            ' real-evidence parser cases; no local APK/signing key used');
+            ' real-evidence parser and PC-off URL cases; no local APK/signing key used');

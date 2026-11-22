@@ -57,7 +57,7 @@ public final class OtaUpdatePreparation {
             return deny("PREPARE_MAIN_THREAD_FORBIDDEN");
         if (Thread.currentThread().isInterrupted())
             return deny("PREPARE_CANCELLED");
-        if (!OtaHttpsTransport.safeHttpsEndpoint(
+        if (!OtaHttpsTransport.safePublicHttpsManifestEndpoint(
                 locallyConfiguredManifestUrl, locallyTrustedHosts, ".manifest"))
             return deny("PREPARE_MANIFEST_HOST_NOT_ALLOWED");
 

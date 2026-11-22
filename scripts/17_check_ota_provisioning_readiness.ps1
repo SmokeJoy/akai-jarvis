@@ -36,10 +36,15 @@ function Test-StrictOtaManifestUrl {
     $uri = $null
     if ([string]::IsNullOrWhiteSpace($CandidateUrl)) { return $null }
     $trimmed = $CandidateUrl.Trim()
+    if ($trimmed.Length -lt 20 -or $trimmed.Length -gt 480 -or $trimmed -match '[^\x21-\x7e]') { return $null }
+    $trimmedLower = $trimmed.ToLowerInvariant()
+    if ($trimmed.Contains("\") -or $trimmed.Contains("/../") -or $trimmed.EndsWith("/..") -or
+        $trimmedLower.Contains("%2e") -or $trimmedLower.Contains("%2f") -or $trimmedLower.Contains("%5c")) { return $null }
     if (-not [Uri]::TryCreate($trimmed, [UriKind]::Absolute, [ref]$uri)) { return $null }
     if ($uri.Scheme -ne "https" -or -not $uri.IsDefaultPort) { return $null }
     if (-not [string]::IsNullOrEmpty($uri.UserInfo) -or -not [string]::IsNullOrEmpty($uri.Query) -or -not [string]::IsNullOrEmpty($uri.Fragment)) { return $null }
-    if (-not $uri.AbsolutePath.EndsWith(".manifest", [StringComparison]::Ordinal)) { return $null }
+    $rawPath = $uri.AbsolutePath
+    if (-not $rawPath.EndsWith(".manifest", [StringComparison]::Ordinal)) { return $null }
     if ([string]::IsNullOrWhiteSpace($uri.DnsSafeHost)) { return $null }
     $h = $uri.DnsSafeHost.ToLowerInvariant()
     $ipObj = $null
@@ -47,7 +52,7 @@ function Test-StrictOtaManifestUrl {
         return $null
     }
     if ([System.Net.IPAddress]::TryParse($h.Trim('[', ']'), [ref]$ipObj)) { return $null }
-    if (-not $h.Contains(".") -or $h.EndsWith(".")) { return $null }
+    if ($h.StartsWith(".") -or $h.EndsWith(".") -or $h.Contains("..") -or -not $h.Contains(".")) { return $null }
     return $uri
 }
 
@@ -73,7 +78,7 @@ $trustKeyPresent = $false
 $trustKeySha256 = $null
 if ($resolvedKeyPath -and (Test-Path -LiteralPath $resolvedKeyPath -PathType Leaf)) {
     $derBytes = [IO.File]::ReadAllBytes($resolvedKeyPath)
-    if ($derBytes.Length -ge 200 -and $derBytes[0] -eq 0x30) {
+    if ($derBytes.Length -ge 200 -and $derBytes.Length -le 1024 -and $derBytes[0] -eq 0x30) {
         $trustKeyPresent = $true
         $trustKeySha256 = Get-Sha256Lower -Bytes $derBytes
     } else {
@@ -97,6 +102,19 @@ if (-not [string]::IsNullOrWhiteSpace($BuildManifestPath)) {
         if ($man.versionCode) {
             $manifestVersionCode = [int]$man.versionCode
             $manFloor = $manifestVersionCode + 1
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$man.buildProfile)) {
+            $prof = [string]$man.buildProfile
+            if ($ChannelProfile -eq 'Staging') {
+                if ($prof -ne 'Diagnostic') {
+                    [void]$reasons.Add("STAGING_BUILD_MANIFEST_PROFILE_MISMATCH")
+                }
+                if ($man.versionCode -and [int]$man.versionCode -gt 99) {
+                    [void]$reasons.Add("STAGING_VERSION_CODE_OUT_OF_RANGE")
+                }
+            } elseif ($ChannelProfile -eq 'Release' -and $prof -ne 'Release') {
+                [void]$reasons.Add("RELEASE_BUILD_MANIFEST_PROFILE_MISMATCH")
+            }
         }
         if ($null -ne $man.otaProvisioned) {
             $manifestOtaProvisioned = [bool]$man.otaProvisioned
@@ -148,7 +166,7 @@ if (-not [string]::IsNullOrWhiteSpace($ApkPath)) {
                 try { $st.CopyTo($ms) } finally { $st.Dispose() }
                 $apkKeyBytes = $ms.ToArray()
                 $ms.Dispose()
-                if ($apkKeyBytes.Length -ge 200 -and $apkKeyBytes[0] -eq 0x30) {
+                if ($apkKeyBytes.Length -ge 200 -and $apkKeyBytes.Length -le 1024 -and $apkKeyBytes[0] -eq 0x30) {
                     $apkBundledKeyPresent = $true
                     $apkBundledKeySha256 = Get-Sha256Lower -Bytes $apkKeyBytes
                 } else {
@@ -160,19 +178,32 @@ if (-not [string]::IsNullOrWhiteSpace($ApkPath)) {
 
             $chEntry = $zip.GetEntry("assets/ota-release-channel.txt")
             if ($null -ne $chEntry -and $chEntry.Length -gt 0) {
-                $sr = New-Object System.IO.StreamReader($chEntry.Open(), [Text.Encoding]::UTF8)
-                try {
-                    $chText = $sr.ReadToEnd().Trim()
-                } finally {
-                    $sr.Dispose()
+                $chMs = New-Object System.IO.MemoryStream
+                $chStream = $chEntry.Open()
+                try { $chStream.CopyTo($chMs) } finally { $chStream.Dispose() }
+                $chRawBytes = $chMs.ToArray()
+                $chMs.Dispose()
+                $formatValid = ($chRawBytes.Length -ge 20 -and $chRawBytes.Length -le 512 -and $chRawBytes[$chRawBytes.Length - 1] -eq 0x0A)
+                if ($formatValid) {
+                    for ($idx = 0; $idx -lt ($chRawBytes.Length - 1); $idx++) {
+                        $b = $chRawBytes[$idx]
+                        if ($b -lt 33 -or $b -gt 126) {
+                            $formatValid = $false
+                            break
+                        }
+                    }
                 }
-                $firstLine = ($chText -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
-                $chUri = Test-StrictOtaManifestUrl -CandidateUrl $firstLine
-                if ($null -ne $chUri) {
-                    $apkBundledChannelPresent = $true
-                    $apkBundledChannelUrl = $chUri.AbsoluteUri
+                if (-not $formatValid) {
+                    [void]$reasons.Add("APK_INVALID_BUNDLED_OTA_CHANNEL_FORMAT")
                 } else {
-                    [void]$reasons.Add("APK_INVALID_BUNDLED_OTA_CHANNEL")
+                    $channelLine = [Text.Encoding]::ASCII.GetString($chRawBytes, 0, $chRawBytes.Length - 1)
+                    $chUri = Test-StrictOtaManifestUrl -CandidateUrl $channelLine
+                    if ($null -ne $chUri) {
+                        $apkBundledChannelPresent = $true
+                        $apkBundledChannelUrl = $chUri.AbsoluteUri
+                    } else {
+                        [void]$reasons.Add("APK_INVALID_BUNDLED_OTA_CHANNEL")
+                    }
                 }
             } else {
                 [void]$reasons.Add("APK_MISSING_OTA_RELEASE_CHANNEL_TXT")

@@ -75,6 +75,36 @@ public final class OtaCandidateGate {
         return validSha256(a) && validSha256(b) && a.equalsIgnoreCase(b);
     }
 
+    public static boolean isPublicDnsHost(String host) {
+        if (host == null) return false;
+        String h = host.trim().toLowerCase(Locale.ROOT);
+        if (h.isEmpty() || h.length() > 253) return false;
+        if ("localhost".equals(h) || h.endsWith(".localhost")
+                || h.endsWith(".local") || h.endsWith(".lan")
+                || h.endsWith(".internal") || h.endsWith(".home")) {
+            return false;
+        }
+        if (h.indexOf('[') >= 0 || h.indexOf(':') >= 0 || h.startsWith(".") || h.endsWith(".")
+                || h.contains("..") || !h.contains(".")) {
+            return false;
+        }
+        if (h.matches("[0-9.]+")) {
+            return false;
+        }
+        return true;
+    }
+
+    public static boolean hasUnsafeUrlPath(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty() || !rawPath.startsWith("/")) {
+            return true;
+        }
+        if (rawPath.indexOf('\\') >= 0 || rawPath.contains("/../") || rawPath.endsWith("/..")) {
+            return true;
+        }
+        String lower = rawPath.toLowerCase(Locale.ROOT);
+        return lower.contains("%2e") || lower.contains("%2f") || lower.contains("%5c");
+    }
+
     /**
      * Metadata validation only. trustedHosts MUST be a locally configured,
      * nonempty allowlist: never take it from untrusted release metadata.
@@ -114,7 +144,9 @@ public final class OtaCandidateGate {
         if (!"https".equalsIgnoreCase(uri.getScheme()) ||
                 uri.getRawUserInfo() != null || uri.getFragment() != null ||
                 uri.getHost() == null || uri.getPort() != -1 && uri.getPort() != 443 ||
-                uri.getRawPath() == null || !uri.getRawPath().toLowerCase(Locale.ROOT).endsWith(".apk")) {
+                !isPublicDnsHost(uri.getHost()) ||
+                hasUnsafeUrlPath(uri.getRawPath()) ||
+                !uri.getRawPath().toLowerCase(Locale.ROOT).endsWith(".apk")) {
             return deny("UNSAFE_DOWNLOAD_URL");
         }
         // Exact DNS host comparison, not a suffix match (evil.example.com is not example.com).

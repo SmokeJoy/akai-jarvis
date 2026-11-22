@@ -21,38 +21,56 @@ import { resolve, join, basename, relative, isAbsolute, dirname } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { proveActualOwnerSignedApk } from './lib/ota_release_apk_proof.mjs';
 
-if (process.platform !== 'win32' || !process.env.LOCALAPPDATA ||
-    process.env.CI || process.env.GITHUB_ACTIONS)
-  throw new Error('Offline release signing requires the owner Windows PC, never CI.');
-
-const args = process.argv.slice(2);
-const fields = new Map();
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--owner-approved-after-tests') {
-    fields.set(args[i], 'true'); continue;
+export function validateReleaseHttpsUrl(raw, extension) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 480 || /[^\x21-\x7e]/.test(raw)) {
+    throw new Error('RELEASE_URL_REJECTED_FORMAT');
   }
-  if (!args[i].startsWith('--') || !args[i + 1] || args[i + 1].startsWith('--'))
-    throw new Error('Expected --name value pairs; see usage in script header.');
-  if (fields.has(args[i])) throw new Error('Duplicate CLI argument ' + args[i]);
-  fields.set(args[i], args[++i]);
-}
-const needed = ['--apk','--handoff','--manifest-url','--apk-url','--out','--approved-v4-source-sha'];
-if (!needed.every(x => fields.has(x)) ||
-    fields.size !== needed.length + 1 ||
-    !fields.has('--owner-approved-after-tests'))
-  throw new Error('Must provide all paths/URLs and explicit --owner-approved-after-tests confirmation.');
-
-function validateUrl(raw, extension) {
-  if (raw.length > 480 || /[^\x21-\x7e]/.test(raw)) throw new Error('Non-ASCII or too long URL');
+  const rawLower = raw.toLowerCase();
+  if (raw.includes('\\') || raw.includes('/../') || raw.endsWith('/..') ||
+      rawLower.includes('%2e') || rawLower.includes('%2f') || rawLower.includes('%5c')) {
+    throw new Error('RELEASE_URL_REJECTED_PATH_TRAVERSAL');
+  }
   const url = new URL(raw);
   if (url.protocol !== 'https:' || !url.hostname || url.port ||
       url.username || url.password || url.hash || url.search ||
-      !url.pathname.endsWith(extension) || !url.pathname.startsWith('/'))
-    throw new Error('Only fixed clean HTTPS URLs with ' + extension + ' are allowed.');
+      !url.pathname.endsWith(extension) || !url.pathname.startsWith('/')) {
+    throw new Error('RELEASE_URL_REJECTED_HTTPS_PIN_' + extension);
+  }
+  const host = url.hostname.toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') ||
+      host.endsWith('.lan') || host.endsWith('.internal') || host.endsWith('.home') ||
+      host.startsWith('[') || host.includes(':') || host.startsWith('.') ||
+      host.endsWith('.') || host.includes('..') || !host.includes('.') ||
+      /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) {
+    throw new Error('RELEASE_URL_REJECTED_PRIVATE_OR_LOCAL_HOST');
+  }
   return url;
 }
-const manifestUrl = validateUrl(fields.get('--manifest-url'), '.manifest');
-const apkUrl = validateUrl(fields.get('--apk-url'), '.apk');
+
+function runCli() {
+  if (process.platform !== 'win32' || !process.env.LOCALAPPDATA ||
+      process.env.CI || process.env.GITHUB_ACTIONS)
+    throw new Error('Offline release signing requires the owner Windows PC, never CI.');
+
+  const args = process.argv.slice(2);
+  const fields = new Map();
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--owner-approved-after-tests') {
+      fields.set(args[i], 'true'); continue;
+    }
+    if (!args[i].startsWith('--') || !args[i + 1] || args[i + 1].startsWith('--'))
+      throw new Error('Expected --name value pairs; see usage in script header.');
+    if (fields.has(args[i])) throw new Error('Duplicate CLI argument ' + args[i]);
+    fields.set(args[i], args[++i]);
+  }
+  const needed = ['--apk','--handoff','--manifest-url','--apk-url','--out','--approved-v4-source-sha'];
+  if (!needed.every(x => fields.has(x)) ||
+      fields.size !== needed.length + 1 ||
+      !fields.has('--owner-approved-after-tests'))
+    throw new Error('Must provide all paths/URLs and explicit --owner-approved-after-tests confirmation.');
+
+  const manifestUrl = validateReleaseHttpsUrl(fields.get('--manifest-url'), '.manifest');
+  const apkUrl = validateReleaseHttpsUrl(fields.get('--apk-url'), '.apk');
 if (manifestUrl.hostname.toLowerCase() !== apkUrl.hostname.toLowerCase())
   throw new Error('Signed APK URL must use the same owner-pinned HTTPS host.');
 const manifestFile = basename(manifestUrl.pathname);
@@ -170,3 +188,10 @@ process.stdout.write(
   createHash('sha256').update(publicDer).digest('hex') +
   '\nPublish only after real on-TV tests, independent review, and explicit approval.\n'
 );
+}
+
+const isMain =
+  Boolean(process.argv[1]) && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+if (isMain) {
+  runCli();
+}

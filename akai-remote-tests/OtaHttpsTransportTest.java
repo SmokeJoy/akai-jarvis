@@ -44,6 +44,42 @@ public final class OtaHttpsTransportTest {
         url(false, "https://updates.example.com/jarvis.apk#x", ".apk", "fragment");
         url(false, "https://updates.example.com/jarvis.zip", ".apk", "wrong suffix");
         url(false, null, ".apk", "null URL");
+        url(false, "https://updates.example.com/releases/../jarvis.apk", ".apk", "path traversal");
+        url(false, "https://updates.example.com/releases/%2e%2e/jarvis.apk", ".apk", "encoded traversal");
+        for (String badLocalHost : new String[] {
+                "localhost", "192.168.1.50", "127.0.0.1", "[::1]", "akai.local", "router.lan", "intranet"
+        }) {
+            if (OtaHttpsTransport.safeHttpsEndpoint(
+                    "https://" + badLocalHost + "/jarvis.manifest",
+                    Collections.singleton(badLocalHost), ".manifest")) {
+                throw new AssertionError("accepted non-public host: " + badLocalHost);
+            }
+            checks++;
+        }
+        if (!OtaHttpsTransport.safePublicHttpsManifestEndpoint(
+                "https://updates.example.com/jarvis.manifest", HOSTS, ".manifest")
+                || !OtaHttpsTransport.safePublicHttpsManifestEndpoint(
+                        "https://updates.example.com/jarvis.manifest.sig", HOSTS, ".sig")) {
+            throw new AssertionError("valid public HTTPS manifest/sig rejected");
+        }
+        checks++;
+        if (OtaHttpsTransport.safePublicHttpsManifestEndpoint(
+                "https://updates.example.com/jarvis.manifest?token=1", HOSTS, ".manifest")
+                || OtaHttpsTransport.safePublicHttpsManifestEndpoint(
+                        "https://updates.example.com/jarvis.manifest.sig?x=1", HOSTS, ".sig")) {
+            throw new AssertionError("query parameter accepted on manifest/sig endpoint");
+        }
+        checks++;
+        for (int redirectCode : new int[] {301, 302, 303, 307, 308}) {
+            if (!OtaHttpsTransport.isRedirectStatus(redirectCode))
+                throw new AssertionError("missing redirect status: " + redirectCode);
+            checks++;
+        }
+        for (int nonRedirect : new int[] {200, 403, 404}) {
+            if (OtaHttpsTransport.isRedirectStatus(nonRedirect))
+                throw new AssertionError("false redirect status: " + nonRedirect);
+            checks++;
+        }
 
         byte[] a = new byte[] {1, 2, 3, 4};
         byte[] read = OtaHttpsTransport.readBounded(new ByteArrayInputStream(a), 4);

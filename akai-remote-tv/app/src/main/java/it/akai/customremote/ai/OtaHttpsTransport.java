@@ -39,8 +39,10 @@ public final class OtaHttpsTransport {
             if (!"https".equalsIgnoreCase(uri.getScheme()) ||
                     uri.getRawUserInfo() != null || uri.getFragment() != null ||
                     uri.getHost() == null ||
+                    !OtaCandidateGate.isPublicDnsHost(uri.getHost()) ||
                     (uri.getPort() != -1 && uri.getPort() != 443) ||
-                    uri.getRawPath() == null || !uri.getRawPath().endsWith(requiredSuffix))
+                    OtaCandidateGate.hasUnsafeUrlPath(uri.getRawPath()) ||
+                    !uri.getRawPath().endsWith(requiredSuffix))
                 return false;
             String host = uri.getHost().toLowerCase(Locale.ROOT);
             for (String allowed : locallyTrustedHosts) {
@@ -51,6 +53,24 @@ public final class OtaHttpsTransport {
             return false;
         }
         return false;
+    }
+
+    public static boolean safePublicHttpsManifestEndpoint(String url, Set<String> locallyTrustedHosts,
+                                                          String requiredSuffix) {
+        if (!safeHttpsEndpoint(url, locallyTrustedHosts, requiredSuffix)) {
+            return false;
+        }
+        try {
+            URI uri = new URI(url);
+            return uri.getRawQuery() == null;
+        } catch (Exception invalid) {
+            return false;
+        }
+    }
+
+    public static boolean isRedirectStatus(int statusCode) {
+        return statusCode == 301 || statusCode == 302 || statusCode == 303
+                || statusCode == 307 || statusCode == 308;
     }
 
     private static HttpsURLConnection open(String url) throws IOException {
@@ -95,11 +115,17 @@ public final class OtaHttpsTransport {
     /** Fetch a signed protocol .manifest or detached .sig. Never accepts HTTP redirects. */
     public static byte[] fetchSmall(String url, Set<String> trustedHosts,
                                     String expectedSuffix, int maxBytes) throws IOException {
-        if (!safeHttpsEndpoint(url, trustedHosts, expectedSuffix))
+        boolean manifestOrSig = ".manifest".equals(expectedSuffix) || ".sig".equals(expectedSuffix);
+        boolean endpointOk = manifestOrSig
+                ? safePublicHttpsManifestEndpoint(url, trustedHosts, expectedSuffix)
+                : safeHttpsEndpoint(url, trustedHosts, expectedSuffix);
+        if (!endpointOk)
             throw new IOException("URL_NOT_TRUSTED");
         HttpsURLConnection conn = open(url);
         try {
-            if (conn.getResponseCode() != 200) throw new IOException("HTTP_STATUS_NOT_200");
+            int responseCode = conn.getResponseCode();
+            if (isRedirectStatus(responseCode)) throw new IOException("HTTP_REDIRECT_FORBIDDEN");
+            if (responseCode != 200) throw new IOException("HTTP_STATUS_NOT_200");
             if (conn.getContentLengthLong() > maxBytes)
                 throw new IOException("DECLARED_RESPONSE_TOO_LARGE");
             try (InputStream input = conn.getInputStream()) {
@@ -146,7 +172,10 @@ public final class OtaHttpsTransport {
         HttpsURLConnection connection = null;
         try {
             connection = open(signedCandidate.downloadUrl);
-            if (connection.getResponseCode() != 200)
+            int responseCode = connection.getResponseCode();
+            if (isRedirectStatus(responseCode))
+                throw new IOException("APK_HTTP_REDIRECT_FORBIDDEN");
+            if (responseCode != 200)
                 throw new IOException("APK_HTTP_STATUS_NOT_200");
             long declaredLength = connection.getContentLengthLong();
             if (declaredLength > signedCandidate.sizeBytes)
