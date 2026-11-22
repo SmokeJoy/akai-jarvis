@@ -107,8 +107,9 @@ public final class VisionSessionCoordinator {
         if (!ready) {
             VisualProjectionService.FrameResult late = received.getAndSet(null);
             if (late != null && late.jpeg != null) Arrays.fill(late.jpeg, (byte) 0);
-            return Observation.denied(cancel != null && cancel.isCancelled()
-                    ? "TASK_CANCELLED" : "FRAME_TIMEOUT");
+            return Observation.denied(
+                    ((cancel != null && cancel.isCancelled()) || Thread.currentThread().isInterrupted())
+                            ? "TASK_CANCELLED" : "FRAME_TIMEOUT");
         }
 
         VisualProjectionService.FrameResult frame = received.getAndSet(null);
@@ -136,7 +137,14 @@ public final class VisionSessionCoordinator {
             if (!described.success) {
                 return Observation.denied(described.error);
             }
-            if (cancel != null && cancel.isCancelled()) return Observation.denied("TASK_CANCELLED");
+            if ((cancel != null && cancel.isCancelled()) || Thread.currentThread().isInterrupted()) {
+                return Observation.denied("TASK_CANCELLED");
+            }
+            if (!VisualObservationProvider.active()
+                    || !VisualProjectionService.isSessionActive()
+                    || !adapter.hasCloudContextConsent()) {
+                return Observation.denied("SESSION_REVOKED_DURING_OBSERVATION");
+            }
             return new Observation(true, "REMOTE_IMAGE_DESCRIPTION_UNVERIFIED",
                     selectedProvider, described.description, frame.foregroundPackage,
                     frame.redactedUiContext, frame.observedAtMs,

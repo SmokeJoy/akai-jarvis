@@ -83,5 +83,29 @@ class VisualStopSourceTest(unittest.TestCase):
         self.assertIn("VisualObservationProvider.active()", before_learning)
         self.assertIn("aiAdapter.hasCloudContextConsent()", before_learning)
 
+    def test_vision_coordinator_checks_interrupt_and_post_upload_revocation(self):
+        coordinator = (ROOT / "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/"
+                       "VisionSessionCoordinator.java").read_text(encoding="utf-8")
+        self.assertIn("Thread.currentThread().isInterrupted()", coordinator)
+        after_upload = coordinator[coordinator.index("if (!described.success)"):]
+        self.assertIn("!VisualObservationProvider.active()", after_upload)
+        self.assertIn("!VisualProjectionService.isSessionActive()", after_upload)
+        self.assertIn("!adapter.hasCloudContextConsent()", after_upload)
+        self.assertIn('Observation.denied("SESSION_REVOKED_DURING_OBSERVATION")', after_upload)
+
+    def test_reflector_visual_retry_uses_bridge_and_blocks_sensitive_screen(self):
+        controller = (ROOT / "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/"
+                      "AkaiAiController.java").read_text(encoding="utf-8")
+        start = controller.index("String reflectorContext = buildReflectorContext(")
+        end = controller.index("if (stepExec.cancelled || isTokenCancelled(myToken))", start)
+        reflector = controller[start:end]
+        self.assertIn("VisualObservationBridge.publish(", reflector)
+        self.assertIn("VisualObservationBridge.consume(", reflector)
+        self.assertIn("VisualObservationBridge.clear()", reflector)
+        self.assertNotIn('wrapper.put("untrusted_visual_description", retryImage.description)', reflector)
+        self.assertIn("abortedForPrivacy", reflector)
+        self.assertIn('"PRIVACY_BLOCKED"', reflector)
+        self.assertIn("VisualStepPolicy.isCancellationOrRevocationReason(", reflector)
+
 if __name__ == "__main__":
     unittest.main()

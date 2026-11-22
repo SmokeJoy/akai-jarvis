@@ -41,6 +41,7 @@ public class AkaiAiController {
     // Modalita configurabile: CLOUD_OPTIONAL (default, false) vs LOCAL_ONLY (true)
     private static volatile boolean sStrictLocalOnly = false;
     private static volatile long sDefaultPollIntervalMs = 150L;
+    private static volatile long sVisualTransientRetryDelayMs = VisualStepPolicy.TRANSIENT_RETRY_DELAY_MS;
 
     public static boolean isStrictLocalOnly() {
         return sStrictLocalOnly;
@@ -77,6 +78,10 @@ public class AkaiAiController {
 
     public static void setDefaultPollIntervalMsForTest(long pollMs) {
         sDefaultPollIntervalMs = Math.max(0L, pollMs);
+    }
+
+    public static void setVisualTransientRetryDelayMsForTest(long delayMs) {
+        sVisualTransientRetryDelayMs = Math.max(0L, Math.min(VisualStepPolicy.TRANSIENT_RETRY_DELAY_MS, delayMs));
     }
 
     public static org.json.JSONArray getSupportedCatalog() {
@@ -676,6 +681,27 @@ public class AkaiAiController {
                 });
     }
 
+    private boolean sleepVisualRetryBounded(long delayMs, TaskToken token) {
+        long remaining = Math.max(0L, delayMs);
+        long deadlineNs = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(remaining);
+        while (remaining > 0L) {
+            if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()
+                    || !VisualObservationProvider.active() || !aiAdapter.hasCloudContextConsent()) {
+                return false;
+            }
+            long chunk = Math.min(50L, remaining);
+            try {
+                Thread.sleep(chunk);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            remaining = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadlineNs - System.nanoTime());
+        }
+        return !isTokenCancelled(token) && !Thread.currentThread().isInterrupted()
+                && VisualObservationProvider.active() && aiAdapter.hasCloudContextConsent();
+    }
+
     /**
      * Owner-approved multi-frame mode. One DeepSeek/Kimi frame description and
      * one cloud plan per iteration -> at most ONE Android action -> fresh UI.
@@ -710,9 +736,13 @@ public class AkaiAiController {
         String lastCondition = null;
         String failureReason = "Obiettivo non ancora verificato.";
         int cloudCalls = 0, visualFrames = 0, tokens = 0, executed = 0;
+        int consecutiveTransientObsFailures = 0;
+        int consecutiveActionFailures = 0;
+        int transientObservationRetries = 0;
         double costEur = 0.0;
         boolean verified = false;
         boolean cancelled = false;
+        boolean budgetBlocked = false;
         boolean answeredDialog = false;
         String dialogReply = null;
         ScreenPerceptionEngine.PerceptionSnapshot lastStepPreSnap = null;
@@ -722,169 +752,254 @@ public class AkaiAiController {
         String intentKey = relearnIntentKey != null && !relearnIntentKey.trim().isEmpty()
                 ? relearnIntentKey : generateIntentKey(query);
 
-        for (int attempt = 0; attempt < VisualStepPolicy.MAX_ACTION_STEPS; attempt++) {
-            if (isTokenCancelled(token)) {
-                cancelled = true;
-                failureReason = "Operazione interrotta dall'utente.";
-                break;
-            }
-            if (!VisualStepPolicy.mayContinueElapsed(attempt, cloudCalls,
-                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-                            System.nanoTime() - visualGoalStartedNs))
-                    || aiAdapter.isBudgetExceeded()) {
-                failureReason = "Limite di tempo, azioni, chiamate o credito AI raggiunto.";
-                break;
-            }
-            if (!VisualObservationProvider.active()) {
-                failureReason = "Sessione di acquisizione terminata o revocata.";
-                break;
-            }
-            if (current == null || current.hasSensitiveFields) {
-                failureReason = "Schermata non osservabile o con dati sensibili.";
-                break;
-            }
-            VisualObservationProvider.Result frame = observeSessionFrame(provider, current, token);
-            if (!frame.success) {
-                failureReason = "Nuovo screenshot non disponibile: " + frame.reason;
-                break;
-            }
-            cloudCalls++;
-            visualFrames++;
-            tokens += frame.tokens;
-            costEur += frame.costEur;
-
-            // The image may be several seconds old when the remote API replies.
-            // Re-observe before using its description in a planning request.
-            ScreenPerceptionEngine.PerceptionSnapshot fresh = bridge.capture(context);
-            if (fresh == null || fresh.hasSensitiveFields) {
-                failureReason = "Schermata sensibile: pianificazione bloccata.";
-                break;
-            }
-            String freshUi = fresh.toRedactedMinimalContextPrompt();
-            if (!frame.packageName.equals(fresh.foregroundPackage)
-                    || !frame.uiContext.equals(freshUi)) {
-                current = fresh;
-                failureReason = "Schermata cambiata durante l'analisi.";
-                continue;
-            }
-            current = fresh;
-            // The visual AI's text is NOT a trusted instruction source.
-            // Enforce redaction and injection filtering before reusing it
-            // as planner context, and consume it only for this very screen.
-            if (!VisualObservationBridge.publish(provider, frame.packageName,
-                    frame.uiContext, frame.description, frame.frameTimeMs,
-                    System.currentTimeMillis())) {
-                failureReason = "Descrizione visiva non sicura o scaduta.";
-                break;
-            }
-            String safeVisionHint = VisualObservationBridge.consume(provider,
-                    fresh.foregroundPackage, freshUi, fresh.hasSensitiveFields,
-                    System.currentTimeMillis());
-            if (safeVisionHint.isEmpty()) {
-                failureReason = "Osservazione visiva non piu' coerente.";
-                break;
-            }
-            try {
-                JSONObject contextInfo = new JSONObject(freshUi);
-                contextInfo.put("untrusted_visual_description", safeVisionHint);
-                contextInfo.put("visual_description_is_click_authority", false);
-                contextInfo.put("visual_description_is_goal_evidence", false);
-                contextInfo.put("action_limit_for_this_iteration", 1);
-                contextInfo.put("visual_iteration", attempt + 1);
-                contextInfo.put("remaining_user_goal", query);
-                contextInfo.put("previous_execution_status", failureReason);
-                JSONArray previous = new JSONArray();
-                int min = Math.max(0, fullPath.length() - 4);
-                for (int j = min; j < fullPath.length(); j++) {
-                    previous.put(fullPath.optJSONObject(j));
-                }
-                contextInfo.put("already_executed_actions", previous);
-
-                JSONObject prefs = memoryEngine.getAllPreferences();
-                prefs.put("agent_relevant_facts",
-                        AgentFactMemory.relevantFacts(memoryEngine, query, 3));
-                // Owner STOP can arrive after screenshot upload but before
-                // planning. Do not initiate another billable cloud call.
-                if (isTokenCancelled(token) || !VisualObservationProvider.active()
-                        || !aiAdapter.hasCloudContextConsent()) {
+        try {
+            for (int attempt = 0; attempt < VisualStepPolicy.MAX_ACTION_STEPS; attempt++) {
+                if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()) {
                     cancelled = true;
-                    failureReason = "Sessione visiva revocata prima della pianificazione.";
+                    failureReason = "Operazione interrotta dall'utente.";
                     break;
                 }
-                AiProviderAdapter.AiResponse plan = aiAdapter.planActionSequence(
-                        query, contextInfo.toString(), prefs,
-                        memoryEngine.getRecentConversations(2));
-                cloudCalls++;
-                tokens += plan.totalTokens;
-                costEur += plan.costEur;
-
-                // The cloud result has no authority after capture permission
-                // has been stopped during its network round trip.
-                if (isTokenCancelled(token) || !VisualObservationProvider.active()
-                        || !aiAdapter.hasCloudContextConsent()) {
-                    cancelled = true;
-                    failureReason = "Sessione visiva revocata durante la pianificazione.";
-                    break;
-                }
-                if (!plan.success) {
-                    failureReason = "Pianificazione DeepSeek/Kimi non riuscita.";
-                    break;
-                }
-                JSONObject chosen = VisualStepPolicy.firstStep(plan.actions);
-                if (chosen == null) {
-                    if (fullPath.length() == 0 && plan.reply != null) {
-                        answeredDialog = true;
-                        dialogReply = plan.reply;
-                        failureReason = "Risposta testuale senza azioni TV.";
-                    } else {
-                        failureReason = "Nessuna ulteriore azione TV proposta.";
+                long elapsedAttemptMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                        System.nanoTime() - visualGoalStartedNs);
+                if (!VisualStepPolicy.mayContinueElapsed(attempt, cloudCalls, elapsedAttemptMs)
+                        || aiAdapter.isBudgetExceeded()) {
+                    if (aiAdapter.isBudgetExceeded()) {
+                        budgetBlocked = true;
                     }
+                    failureReason = "Limite di tempo, azioni, chiamate o credito AI raggiunto.";
                     break;
                 }
-                String stateSignature = freshUi + "|" + frame.description;
-                String actionSignature = chosen.toString();
-                if (VisualStepPolicy.repeatedWithoutProgress(lastAction,
-                        lastPerceivedState, actionSignature, stateSignature)) {
-                    failureReason = "Nessun progresso: stessa azione sulla stessa schermata.";
+                if (!VisualObservationProvider.active()) {
+                    failureReason = "Sessione di acquisizione terminata o revocata.";
                     break;
                 }
-                lastAction = actionSignature;
-                lastPerceivedState = stateSignature;
-                JSONArray single = new JSONArray().put(new JSONObject(chosen.toString()));
-                if (isTokenCancelled(token) || !VisualObservationProvider.active()) {
+                if (current == null || current.hasSensitiveFields) {
+                    failureReason = "Schermata non osservabile o con dati sensibili.";
+                    break;
+                }
+                VisualObservationProvider.Result frame = observeSessionFrame(provider, current, token);
+                if (!frame.success) {
+                    if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()
+                            || !VisualObservationProvider.active()
+                            || !aiAdapter.hasCloudContextConsent()
+                            || VisualStepPolicy.isCancellationOrRevocationReason(frame.reason)) {
+                        cancelled = true;
+                        failureReason = "Operazione interrotta o sessione visiva revocata.";
+                        break;
+                    }
+                    long elapsedObsErrMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - visualGoalStartedNs);
+                    if (VisualStepPolicy.isTransientObservationFailure(frame.reason)
+                            && VisualStepPolicy.mayRetryTransientObservation(
+                                    consecutiveTransientObsFailures, attempt + 1, cloudCalls, elapsedObsErrMs)
+                            && !aiAdapter.isBudgetExceeded()) {
+                        consecutiveTransientObsFailures++;
+                        transientObservationRetries++;
+                        failureReason = "Recupero transitorio screenshot (" + frame.reason + ").";
+                        if ("FRAME_RATE_LIMIT".equals(frame.reason) || "FRAME_REQUEST_BUSY".equals(frame.reason)) {
+                            if (!sleepVisualRetryBounded(sVisualTransientRetryDelayMs, token)) {
+                                cancelled = true;
+                                failureReason = "Operazione interrotta durante il recupero visivo.";
+                                break;
+                            }
+                        }
+                        current = bridge.capture(context);
+                        if (current == null || current.hasSensitiveFields) {
+                            failureReason = "Schermata non osservabile o con dati sensibili.";
+                            break;
+                        }
+                        continue;
+                    }
+                    failureReason = "Nuovo screenshot non disponibile: " + frame.reason;
+                    break;
+                }
+                cloudCalls++;
+                visualFrames++;
+                tokens += frame.tokens;
+                costEur += frame.costEur;
+
+                // The image may be several seconds old when the remote API replies.
+                // Re-observe before using its description in a planning request.
+                ScreenPerceptionEngine.PerceptionSnapshot fresh = bridge.capture(context);
+                if (fresh == null || fresh.hasSensitiveFields) {
+                    failureReason = "Schermata sensibile: pianificazione bloccata.";
+                    break;
+                }
+                if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()
+                        || !VisualObservationProvider.active() || !aiAdapter.hasCloudContextConsent()) {
                     cancelled = true;
-                    failureReason = "Sessione visiva revocata prima dell'azione.";
+                    failureReason = "Sessione visiva revocata durante l'analisi.";
                     break;
                 }
-                ScreenPerceptionEngine.PerceptionSnapshot stepPreSnap = current;
-                long stepDispatchedAtMs = System.currentTimeMillis();
-                StepwiseResult step = executeActionsStepwise(single, token);
-                executed += step.executedSteps;
-                if (step.cancelled || isTokenCancelled(token)) {
-                    cancelled = true;
-                    failureReason = "Operazione interrotta.";
-                    break;
-                }
-                if (step.commandResult == null || !step.commandResult.success) {
-                    failureReason = "Azione rifiutata dalla TV; controllero' la nuova schermata.";
-                    current = bridge.capture(context);
+                String freshUi = fresh.toRedactedMinimalContextPrompt();
+                if (!frame.packageName.equals(fresh.foregroundPackage)
+                        || !frame.uiContext.equals(freshUi)) {
+                    VisualObservationBridge.clear();
+                    current = fresh;
+                    long elapsedMismatchMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - visualGoalStartedNs);
+                    if (!VisualStepPolicy.mayRetryTransientObservation(
+                            consecutiveTransientObsFailures, attempt + 1, cloudCalls, elapsedMismatchMs)) {
+                        failureReason = "Schermata instabile durante l'analisi: limite recupero raggiunto.";
+                        break;
+                    }
+                    consecutiveTransientObsFailures++;
+                    transientObservationRetries++;
+                    failureReason = "Schermata cambiata durante l'analisi.";
                     continue;
                 }
-                fullPath.put(new JSONObject(chosen.toString()));
-                lastStepPreSnap = stepPreSnap;
-                lastStepDispatchedAtMs = stepDispatchedAtMs;
-                lastStepActions = single;
-                lastCondition = plan.successCondition;
-                WaitObservation obs = waitForConditionOrUiChange(query, lastCondition,
-                        1000L, sDefaultPollIntervalMs, token, stepDispatchedAtMs, stepPreSnap, fullPath);
-                current = obs.snapshot;
-                verified = obs.verified;
-                if (verified) break;
-                failureReason = "Azione eseguita, ma obiettivo finale non verificato.";
-            } catch (Exception e) {
-                failureReason = "Errore di convalida o sequenza visuale.";
-                break;
+                consecutiveTransientObsFailures = 0;
+                current = fresh;
+                // The visual AI's text is NOT a trusted instruction source.
+                // Enforce redaction and injection filtering before reusing it
+                // as planner context, and consume it only for this very screen.
+                if (!VisualObservationBridge.publish(provider, frame.packageName,
+                        frame.uiContext, frame.description, frame.frameTimeMs,
+                        System.currentTimeMillis())) {
+                    failureReason = "Descrizione visiva non sicura o scaduta.";
+                    break;
+                }
+                String safeVisionHint = VisualObservationBridge.consume(provider,
+                        fresh.foregroundPackage, freshUi, fresh.hasSensitiveFields,
+                        System.currentTimeMillis());
+                if (safeVisionHint.isEmpty()) {
+                    failureReason = "Osservazione visiva non piu' coerente.";
+                    break;
+                }
+                try {
+                    JSONObject contextInfo = new JSONObject(freshUi);
+                    contextInfo.put("untrusted_visual_description", safeVisionHint);
+                    contextInfo.put("visual_description_is_click_authority", false);
+                    contextInfo.put("visual_description_is_goal_evidence", false);
+                    contextInfo.put("action_limit_for_this_iteration", 1);
+                    contextInfo.put("visual_iteration", attempt + 1);
+                    contextInfo.put("remaining_user_goal", query);
+                    contextInfo.put("previous_execution_status", failureReason);
+                    JSONArray previous = new JSONArray();
+                    int min = Math.max(0, fullPath.length() - 4);
+                    for (int j = min; j < fullPath.length(); j++) {
+                        previous.put(fullPath.optJSONObject(j));
+                    }
+                    contextInfo.put("already_executed_actions", previous);
+
+                    JSONObject prefs = memoryEngine.getAllPreferences();
+                    prefs.put("agent_relevant_facts",
+                            AgentFactMemory.relevantFacts(memoryEngine, query, 3));
+                    // Owner STOP can arrive after screenshot upload but before
+                    // planning. Do not initiate another billable cloud call.
+                    if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()
+                            || !VisualObservationProvider.active()
+                            || !aiAdapter.hasCloudContextConsent()) {
+                        cancelled = true;
+                        failureReason = "Sessione visiva revocata prima della pianificazione.";
+                        break;
+                    }
+                    AiProviderAdapter.AiResponse plan = aiAdapter.planActionSequence(
+                            query, contextInfo.toString(), prefs,
+                            memoryEngine.getRecentConversations(2));
+                    cloudCalls++;
+                    tokens += plan.totalTokens;
+                    costEur += plan.costEur;
+
+                    // The cloud result has no authority after capture permission
+                    // has been stopped during its network round trip.
+                    if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()
+                            || !VisualObservationProvider.active()
+                            || !aiAdapter.hasCloudContextConsent()) {
+                        cancelled = true;
+                        failureReason = "Sessione visiva revocata durante la pianificazione.";
+                        break;
+                    }
+                    if (!plan.success) {
+                        if (plan.error != null && plan.error.contains("Budget")) {
+                            budgetBlocked = true;
+                        }
+                        failureReason = (plan.error != null && !plan.error.trim().isEmpty())
+                                ? plan.error : "Pianificazione DeepSeek/Kimi non riuscita.";
+                        break;
+                    }
+                    JSONObject chosen = VisualStepPolicy.firstStep(plan.actions);
+                    if (chosen == null) {
+                        if (fullPath.length() == 0 && plan.reply != null) {
+                            answeredDialog = true;
+                            dialogReply = plan.reply;
+                            failureReason = "Risposta testuale senza azioni TV.";
+                        } else {
+                            failureReason = "Nessuna ulteriore azione TV proposta.";
+                        }
+                        break;
+                    }
+                    String stateSignature = freshUi + "|" + safeVisionHint;
+                    String actionSignature = chosen.toString();
+                    if (VisualStepPolicy.repeatedWithoutProgress(lastAction,
+                            lastPerceivedState, actionSignature, stateSignature)) {
+                        failureReason = "Nessun progresso: stessa azione sulla stessa schermata.";
+                        break;
+                    }
+                    lastAction = actionSignature;
+                    lastPerceivedState = stateSignature;
+                    JSONArray single = new JSONArray().put(new JSONObject(chosen.toString()));
+                    if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()
+                            || !VisualObservationProvider.active()) {
+                        cancelled = true;
+                        failureReason = "Sessione visiva revocata prima dell'azione.";
+                        break;
+                    }
+                    ScreenPerceptionEngine.PerceptionSnapshot stepPreSnap = current;
+                    long stepDispatchedAtMs = System.currentTimeMillis();
+                    StepwiseResult step = executeActionsStepwise(single, token);
+                    executed += step.executedSteps;
+                    if (step.cancelled || isTokenCancelled(token) || Thread.currentThread().isInterrupted()) {
+                        cancelled = true;
+                        failureReason = "Operazione interrotta.";
+                        break;
+                    }
+                    if (step.commandResult == null || !step.commandResult.success) {
+                        consecutiveActionFailures++;
+                        long elapsedAfterActionMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                                System.nanoTime() - visualGoalStartedNs);
+                        if (!VisualStepPolicy.mayContinueAfterActionFailure(
+                                consecutiveActionFailures, attempt + 1, cloudCalls, elapsedAfterActionMs)) {
+                            failureReason = "Troppe azioni rifiutate consecutivamente dalla TV.";
+                            break;
+                        }
+                        failureReason = "Azione rifiutata dalla TV; controllero' la nuova schermata.";
+                        current = bridge.capture(context);
+                        if (current == null || current.hasSensitiveFields) {
+                            failureReason = "Schermata non osservabile o con dati sensibili.";
+                            break;
+                        }
+                        continue;
+                    }
+                    consecutiveActionFailures = 0;
+                    fullPath.put(new JSONObject(chosen.toString()));
+                    lastStepPreSnap = stepPreSnap;
+                    lastStepDispatchedAtMs = stepDispatchedAtMs;
+                    lastStepActions = single;
+                    lastCondition = plan.successCondition;
+                    WaitObservation obs = waitForConditionOrUiChange(query, lastCondition,
+                            1000L, sDefaultPollIntervalMs, token, stepDispatchedAtMs, stepPreSnap, fullPath);
+                    current = obs.snapshot;
+                    if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()) {
+                        cancelled = true;
+                        verified = false;
+                        failureReason = "Operazione interrotta dall'utente.";
+                        break;
+                    }
+                    verified = obs.verified;
+                    if (verified) break;
+                    failureReason = "Azione eseguita, ma obiettivo finale non verificato.";
+                } catch (Exception e) {
+                    failureReason = "Errore di convalida o sequenza visuale.";
+                    break;
+                }
             }
+        } finally {
+            VisualObservationBridge.clear();
+        }
+        if (isTokenCancelled(token) || Thread.currentThread().isInterrupted()) {
+            cancelled = true;
+            verified = false;
         }
 
         boolean learned = false;
@@ -922,6 +1037,7 @@ public class AkaiAiController {
             result.put("source", provider);
             result.put("visual_session", true);
             result.put("visual_frames", visualFrames);
+            result.put("transient_observation_retries", transientObservationRetries);
             result.put("executed_steps", executed);
             result.put("cloud_calls", cloudCalls);
             result.put("tokens", tokens);
@@ -940,8 +1056,9 @@ public class AkaiAiController {
                     ? OUTCOME_COMMAND_SENT : OUTCOME_FAILED))));
         } catch (Exception ignored) {}
         String status = verified ? "SUCCESS_VERIFIED"
-                : cancelled ? "CANCELLED" : answeredDialog
-                ? "ANSWERED_DIALOG" : "COMPLETED_UNVERIFIED";
+                : cancelled ? "CANCELLED"
+                : budgetBlocked ? "BUDGET_EXCEEDED"
+                : answeredDialog ? "ANSWERED_DIALOG" : "COMPLETED_UNVERIFIED";
         String finalMessage = verified
                 ? "Obiettivo raggiunto e verificato sullo stato attuale della TV."
                 : answeredDialog ? dialogReply
@@ -1522,87 +1639,137 @@ public class AkaiAiController {
         if (usedCloudPlanner && !stepExec.cancelled && !isTokenCancelled(myToken) && (!execRes.success || !verified) && !aiAdapter.isBudgetExceeded()) {
             String reflectorContext = buildReflectorContext(query, candidateCondition, evidenceBaselineSnap, postSnap, actionDispatchedAtMs, candidateActions, execRes);
             // A changed application/screen may require a SECOND, fresh image.
-            // It cannot reuse the previous screenshot or authorize blind clicks.
-            if (VisualObservationProvider.active() && postSnap != null
-                    && !postSnap.hasSensitiveFields && !isTokenCancelled(myToken)) {
-                VisualObservationProvider.Result retryImage = observeSessionFrame(
-                        provider, postSnap, myToken);
-                if (retryImage.success) {
-                    cloudCalls++;
-                    visualFrames++;
-                    totalTokens += retryImage.tokens;
-                    costEur += retryImage.costEur;
-                    try {
-                        JSONObject wrapper = new JSONObject(reflectorContext);
-                        wrapper.put("untrusted_visual_description", retryImage.description);
-                        wrapper.put("visual_frame_time_ms", retryImage.frameTimeMs);
-                        wrapper.put("visual_description_is_click_authority", false);
-                        wrapper.put("visual_description_is_goal_evidence", false);
+            // Always sanitize via VisualObservationBridge (never inject raw model text)
+            // and fail closed into PRIVACY_BLOCKED if the screen becomes sensitive.
+            boolean abortedForPrivacy = false;
+            boolean abortedForCancel = false;
+            try {
+                if (VisualObservationProvider.active() && postSnap != null
+                        && !postSnap.hasSensitiveFields && !isTokenCancelled(myToken)
+                        && aiAdapter.hasCloudContextConsent()) {
+                    VisualObservationProvider.Result retryImage = observeSessionFrame(
+                            provider, postSnap, myToken);
+                    if (retryImage.success) {
+                        cloudCalls++;
+                        visualFrames++;
+                        totalTokens += retryImage.tokens;
+                        costEur += retryImage.costEur;
                         // Re-check live context before feeding the planner.
                         ScreenPerceptionEngine.PerceptionSnapshot latest = bridge.capture(context);
                         snapshotCount++;
-                        if (latest != null && !latest.hasSensitiveFields
-                                && retryImage.packageName.equals(latest.foregroundPackage)
-                                && retryImage.uiContext.equals(latest.toRedactedMinimalContextPrompt())) {
-                            reflectorContext = wrapper.toString();
-                            postSnap = latest;
+                        if (latest != null && latest.hasSensitiveFields) {
+                            abortedForPrivacy = true;
+                        } else if (isTokenCancelled(myToken) || Thread.currentThread().isInterrupted()
+                                || !VisualObservationProvider.active()
+                                || !aiAdapter.hasCloudContextConsent()) {
+                            abortedForCancel = true;
+                        } else if (latest != null) {
+                            String latestUi = latest.toRedactedMinimalContextPrompt();
+                            if (retryImage.packageName.equals(latest.foregroundPackage)
+                                    && retryImage.uiContext.equals(latestUi)
+                                    && VisualObservationBridge.publish(provider, retryImage.packageName,
+                                            retryImage.uiContext, retryImage.description,
+                                            retryImage.frameTimeMs, System.currentTimeMillis())) {
+                                String safeRetryHint = VisualObservationBridge.consume(
+                                        provider, latest.foregroundPackage, latestUi,
+                                        false, System.currentTimeMillis());
+                                if (!safeRetryHint.isEmpty()) {
+                                    try {
+                                        JSONObject wrapper = new JSONObject(reflectorContext);
+                                        wrapper.put("untrusted_visual_description", safeRetryHint);
+                                        wrapper.put("visual_frame_time_ms", retryImage.frameTimeMs);
+                                        wrapper.put("visual_description_is_click_authority", false);
+                                        wrapper.put("visual_description_is_goal_evidence", false);
+                                        reflectorContext = wrapper.toString();
+                                        postSnap = latest;
+                                    } catch (Exception ignored) {}
+                                }
+                            }
                         }
-                    } catch (Exception ignored) {}
+                    } else if (isTokenCancelled(myToken) || Thread.currentThread().isInterrupted()
+                            || VisualStepPolicy.isCancellationOrRevocationReason(retryImage.reason)) {
+                        abortedForCancel = true;
+                    }
                 }
+            } finally {
+                VisualObservationBridge.clear();
             }
-            JSONObject prefs = memoryEngine.getAllPreferences();
-            try {
-                prefs.put("agent_relevant_facts",
-                        AgentFactMemory.relevantFacts(memoryEngine, query, 3));
-            } catch (Exception ignored) {}
-            JSONArray convHistory = memoryEngine.getRecentConversations(3);
-            AiProviderAdapter.AiResponse retryRes = aiAdapter.planActionSequence(
-                    query + " [RETRY_DIFFERENT_PLAN]", reflectorContext, prefs, convHistory);
-            cloudCalls++;
-            promptTokens += retryRes.promptTokens;
-            compTokens += retryRes.completionTokens;
-            totalTokens += retryRes.totalTokens;
-            costEur += retryRes.costEur;
-            if (retryRes.warningMessage != null) planWarning = retryRes.warningMessage;
+            if (abortedForPrivacy) {
+                try {
+                    result.put("success", false);
+                    result.put("status", "PRIVACY_BLOCKED");
+                    result.put("execution_outcome", OUTCOME_NOT_TESTED);
+                    result.put("privacy_blocked", true);
+                    result.put("verified", false);
+                    result.put("learned_new_procedure", false);
+                    result.put("cloud_calls", cloudCalls);
+                    result.put("visual_frame_count", visualFrames);
+                    result.put("snapshot_count", snapshotCount);
+                    result.put("tokens", totalTokens);
+                    result.put("cost_eur", costEur);
+                    result.put("reply", "Operazione sospesa per sicurezza: rilevato campo sensibile o password sullo schermo.");
+                    result.put("source", "security_guard");
+                    result.put("execution_mode", getExecutionMode());
+                    result.put("strict_local_only", isStrictLocalOnly());
+                } catch (Exception ignored) {}
+                return result;
+            }
+            if (!abortedForCancel && !isTokenCancelled(myToken) && !Thread.currentThread().isInterrupted()
+                    && aiAdapter.hasCloudContextConsent()) {
+                JSONObject prefs = memoryEngine.getAllPreferences();
+                try {
+                    prefs.put("agent_relevant_facts",
+                            AgentFactMemory.relevantFacts(memoryEngine, query, 3));
+                } catch (Exception ignored) {}
+                JSONArray convHistory = memoryEngine.getRecentConversations(3);
+                AiProviderAdapter.AiResponse retryRes = aiAdapter.planActionSequence(
+                        query + " [RETRY_DIFFERENT_PLAN]", reflectorContext, prefs, convHistory);
+                cloudCalls++;
+                promptTokens += retryRes.promptTokens;
+                compTokens += retryRes.completionTokens;
+                totalTokens += retryRes.totalTokens;
+                costEur += retryRes.costEur;
+                if (retryRes.warningMessage != null) planWarning = retryRes.warningMessage;
 
-            if (!isTokenCancelled(myToken) && retryRes.success && retryRes.actions != null && retryRes.actions.length() > 0) {
-                String firstSerialized = candidateActions.toString();
-                String retrySerialized = retryRes.actions.toString();
-                if (firstSerialized.equals(retrySerialized)) {
-                    Log.w(TAG, "Replan rejected: identical action sequence returned by LLM.");
-                    replanRejectedDuplicate = true;
-                } else {
-                    replanCount = 1;
-                    candidateActions = retryRes.actions;
-                    candidateCondition = retryRes.successCondition;
-                    if (retryRes.intentKey != null && !retryRes.intentKey.isEmpty()) {
-                        candidateKey = retryRes.intentKey;
-                    }
-                    if (retryRes.reply != null && !retryRes.reply.isEmpty()) {
-                        planReply = retryRes.reply;
-                    }
-                    evidenceBaselineSnap = postSnap;
-                    actionDispatchedAtMs = System.currentTimeMillis();
-                    StepwiseResult replanStepExec = executeActionsStepwise(candidateActions, myToken);
-                    execRes = replanStepExec.commandResult;
-                    snapshotCount += replanStepExec.snapshotCount;
-                    totalWaitElapsedMs += replanStepExec.waitElapsedMs;
-                    executedStepsTotal += replanStepExec.executedSteps;
-                    if (replanStepExec.cancelled || isTokenCancelled(myToken)) {
-                        postSnap = replanStepExec.lastSnapshot;
-                        verified = false;
-                    } else if (execRes.success) {
-                        WaitObservation retryObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken, actionDispatchedAtMs, evidenceBaselineSnap, candidateActions);
-                        postSnap = retryObs.snapshot;
-                        verified = retryObs.verified;
-                        snapshotCount += retryObs.snapshotCount;
-                        totalWaitElapsedMs += retryObs.elapsedMs;
+                if (!isTokenCancelled(myToken) && retryRes.success && retryRes.actions != null && retryRes.actions.length() > 0) {
+                    String firstSerialized = candidateActions.toString();
+                    String retrySerialized = retryRes.actions.toString();
+                    if (firstSerialized.equals(retrySerialized)) {
+                        Log.w(TAG, "Replan rejected: identical action sequence returned by LLM.");
+                        replanRejectedDuplicate = true;
                     } else {
-                        postSnap = replanStepExec.lastSnapshot != null ? replanStepExec.lastSnapshot : bridge.capture(context);
-                        if (replanStepExec.lastSnapshot == null) snapshotCount++;
-                        verified = false;
+                        replanCount = 1;
+                        candidateActions = retryRes.actions;
+                        candidateCondition = retryRes.successCondition;
+                        if (retryRes.intentKey != null && !retryRes.intentKey.isEmpty()) {
+                            candidateKey = retryRes.intentKey;
+                        }
+                        if (retryRes.reply != null && !retryRes.reply.isEmpty()) {
+                            planReply = retryRes.reply;
+                        }
+                        evidenceBaselineSnap = postSnap;
+                        actionDispatchedAtMs = System.currentTimeMillis();
+                        StepwiseResult replanStepExec = executeActionsStepwise(candidateActions, myToken);
+                        execRes = replanStepExec.commandResult;
+                        snapshotCount += replanStepExec.snapshotCount;
+                        totalWaitElapsedMs += replanStepExec.waitElapsedMs;
+                        executedStepsTotal += replanStepExec.executedSteps;
+                        if (replanStepExec.cancelled || isTokenCancelled(myToken)) {
+                            postSnap = replanStepExec.lastSnapshot;
+                            verified = false;
+                        } else if (execRes.success) {
+                            WaitObservation retryObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken, actionDispatchedAtMs, evidenceBaselineSnap, candidateActions);
+                            postSnap = retryObs.snapshot;
+                            verified = retryObs.verified;
+                            snapshotCount += retryObs.snapshotCount;
+                            totalWaitElapsedMs += retryObs.elapsedMs;
+                        } else {
+                            postSnap = replanStepExec.lastSnapshot != null ? replanStepExec.lastSnapshot : bridge.capture(context);
+                            if (replanStepExec.lastSnapshot == null) snapshotCount++;
+                            verified = false;
+                        }
+                        Log.i(TAG, "Discovery verification attempt 2 (replan): " + verified + " (execSuccess=" + execRes.success + ")");
                     }
-                    Log.i(TAG, "Discovery verification attempt 2 (replan): " + verified + " (execSuccess=" + execRes.success + ")");
                 }
             }
         }

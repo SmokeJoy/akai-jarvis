@@ -52,6 +52,50 @@ public final class VisualStepPolicyTest {
         check(!VisualStepPolicy.repeatedWithoutProgress(
                 "dpad_right", "UI1", "dpad_left", "UI1"),
                 "different action is different plan");
+        for (String transientErr : new String[] {
+                "FRAME_RATE_LIMIT", "FRAME_FOREGROUND_CHANGED", "UI_CHANGED_BEFORE_UPLOAD",
+                "NO_NEW_FRAME_TIMEOUT", "FRAME_TIMEOUT", "FRAME_REQUEST_BUSY" }) {
+            check(VisualStepPolicy.isTransientObservationFailure(transientErr),
+                    "transient observation error allowed: " + transientErr);
+        }
+        for (String terminalErr : new String[] {
+                null, "", "UNKNOWN_CODE", "BLACK_OR_DRM_PROTECTED_FRAME",
+                "SENSITIVE_OR_UNKNOWN_SCREEN", "NO_CONSENTED_SESSION", "UNSAFE_OBSERVATION_REQUEST",
+                "CLOUD_CONSENT_REVOKED", "FRAME_LIMIT_REACHED", "SESSION_EXPIRED",
+                "PROVIDER_CHANGED", "SESSION_REVOKED_DURING_OBSERVATION", "TASK_CANCELLED" }) {
+            check(!VisualStepPolicy.isTransientObservationFailure(terminalErr),
+                    "terminal/security/revocation error never retried: " + terminalErr);
+        }
+        for (String cancelErr : new String[] {
+                "TASK_CANCELLED", "SESSION_REVOKED_DURING_OBSERVATION",
+                "SESSION_REVOKED_BEFORE_UPLOAD", "SESSION_STOPPED",
+                "SESSION_CLOSED", "CLOUD_CONSENT_REVOKED" }) {
+            check(VisualStepPolicy.isCancellationOrRevocationReason(cancelErr),
+                    "cancellation/revocation classified: " + cancelErr);
+        }
+        check(!VisualStepPolicy.isCancellationOrRevocationReason("FRAME_TIMEOUT"),
+                "FRAME_TIMEOUT is transient, not cancellation");
+        check(VisualStepPolicy.mayRetryTransientObservation(0, 0, 0, 1L),
+                "first transient retry permitted");
+        check(VisualStepPolicy.mayRetryTransientObservation(
+                VisualStepPolicy.MAX_TRANSIENT_OBSERVATION_RETRIES - 1, 1, 2, 100L),
+                "second transient retry permitted");
+        check(!VisualStepPolicy.mayRetryTransientObservation(
+                VisualStepPolicy.MAX_TRANSIENT_OBSERVATION_RETRIES, 2, 2, 100L),
+                "transient retry cap enforced");
+        check(!VisualStepPolicy.mayRetryTransientObservation(-1, 0, 0, 1L),
+                "negative retry count denied");
+        check(!VisualStepPolicy.mayRetryTransientObservation(0,
+                VisualStepPolicy.MAX_ACTION_STEPS, 0, 1L),
+                "transient retry honors step limit");
+        check(VisualStepPolicy.mayContinueAfterActionFailure(0, 1, 2, 100L),
+                "initial action failure state allowed");
+        check(VisualStepPolicy.mayContinueAfterActionFailure(
+                VisualStepPolicy.MAX_CONSECUTIVE_ACTION_FAILURES - 1, 1, 2, 100L),
+                "single action failure permits bounded recovery");
+        check(!VisualStepPolicy.mayContinueAfterActionFailure(
+                VisualStepPolicy.MAX_CONSECUTIVE_ACTION_FAILURES, 2, 4, 100L),
+                "consecutive action failure cap enforced");
         System.out.println("VisualStepPolicyTest PASS: " + checks + " checks");
     }
 }
