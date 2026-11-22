@@ -373,34 +373,37 @@ public class TvController {
         }
     }
 
+    /**
+     * Dispatches DTV switch + channel keystrokes via {@link DtvChannelTuningCoordinator}.
+     * Note: a positive {@link CommandResult} means only COMMAND_SENT (keystrokes queued),
+     * NEVER final TV STATE_VERIFIED.
+     */
     public CommandResult tuneDtvChannel(int channel) {
         try {
-            if (!uinputDriver.isAvailable()) {
-                return new CommandResult(false, "Driver UInput non disponibile per sintonizzare canale");
-            }
-            CommandResult dtvRes = executeTvInputAction("input_tv", "Digitale Terrestre");
-            if (!dtvRes.success) {
-                return dtvRes;
-            }
-            try { Thread.sleep(600); } catch (InterruptedException ignored) {}
+            it.akai.customremote.CommandResult res = DtvChannelTuningCoordinator.tuneChannel(
+                    channel,
+                    new DtvChannelTuningCoordinator.HardwareBridge() {
+                        @Override
+                        public boolean isUInputAvailable() {
+                            return uinputDriver != null && uinputDriver.isAvailable();
+                        }
 
-            String chStr = String.valueOf(channel);
-            for (int i = 0; i < chStr.length(); i++) {
-                char c = chStr.charAt(i);
-                int digit = Character.getNumericValue(c);
-                int k = (digit == 0) ? UInputDriver.KEY_0 : (UInputDriver.KEY_1 + (digit - 1));
-                if (!uinputDriver.sendKey(k)) {
-                    return new CommandResult(false, "Invio cifra canale fallito: sintonizzazione non verificata");
-                }
-                try { Thread.sleep(250); } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return new CommandResult(false, "Sintonizzazione interrotta: stato non verificato");
-                }
-            }
-            if (!uinputDriver.sendKey(UInputDriver.KEY_ENTER)) {
-                return new CommandResult(false, "Invio conferma canale fallito: sintonizzazione non verificata");
-            }
-            return new CommandResult(true, "Comandi canale " + channel + " inviati (stato TV non verificato)");
+                        @Override
+                        public it.akai.customremote.CommandResult switchToDtv() {
+                            return executeTvInputAction("input_tv", "Digitale Terrestre");
+                        }
+
+                        @Override
+                        public boolean sendKey(int keyCode) {
+                            return uinputDriver.sendKey(keyCode);
+                        }
+
+                        @Override
+                        public void sleepMs(long ms) throws InterruptedException {
+                            Thread.sleep(ms);
+                        }
+                    });
+            return new CommandResult(res.success, res.message, res.unsupported);
         } catch (Exception e) {
             return new CommandResult(false, "Errore sintonizzazione canale: " + e.getMessage());
         }
@@ -418,6 +421,9 @@ public class TvController {
 
         try {
             for (int i = 0; i < stepCount; i++) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return new CommandResult(false, "Sequenza interrotta prima del passo " + (i + 1) + ": stato non verificato");
+                }
                 org.json.JSONObject step = actions.getJSONObject(i);
                 String type = step.optString("type", "");
 
@@ -473,7 +479,7 @@ public class TvController {
                     }
                     case "select_channel":
                     case "tune_channel": {
-                        int ch = step.optInt("number", 1);
+                        int ch = step.optInt("number", -1);
                         CommandResult res = tuneDtvChannel(ch);
                         if (!res.success) {
                             return new CommandResult(false, "Fallito al passo " + (i + 1) + " (canale " + ch + "): " + res.message);
@@ -492,7 +498,12 @@ public class TvController {
                     }
                     case "wait": {
                         long ms = Math.min(step.optLong("ms", 1000), 7000);
-                        try { Thread.sleep(ms); } catch (InterruptedException ignored) {}
+                        try {
+                            Thread.sleep(ms);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return new CommandResult(false, "Sequenza interrotta durante attesa al passo " + (i + 1) + ": stato non verificato");
+                        }
                         break;
                     }
                     default:

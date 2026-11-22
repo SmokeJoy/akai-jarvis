@@ -263,6 +263,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/CommandResult.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/TvAppPackages.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/TvInputIntentPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/DtvChannelTuningCoordinator.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/TlsCertificateManager.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/RestApiRouter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/LocalIntentParser.java \
@@ -289,14 +290,16 @@ jobs:
             akai-remote-tests/AgentSkillGateTest.java \
             akai-remote-tests/AgentFactMemoryTest.java \
             akai-remote-tests/KeystoreCredentialHealthTest.java \
-            akai-remote-tests/TvInputGoalVerificationTest.java
+            akai-remote-tests/TvInputGoalVerificationTest.java \
+            akai-remote-tests/DtvChannelTuningCoordinatorTest.java
 
           java -cp test_bin it.akai.customremote.UnitTests
           java -cp test_bin it.akai.customremote.AgentSkillGateTest
           java -cp test_bin it.akai.customremote.AgentFactMemoryTest
           java -cp test_bin it.akai.customremote.KeystoreCredentialHealthTest
           java -cp test_bin it.akai.customremote.TvInputGoalVerificationTest
-          echo "All 40 Java unit tests + Keystore + TvInputGoalVerificationTest passed with 100% success."
+          java -cp test_bin it.akai.customremote.DtvChannelTuningCoordinatorTest
+          echo "All 40 Java unit tests + Keystore + TvInputGoalVerificationTest + DtvChannelTuningCoordinatorTest passed with 100% success."
 
       - name: 4b. V4 OTA archive/manifest signature and exact upgrade policy gates (JDK 8)
         run: |

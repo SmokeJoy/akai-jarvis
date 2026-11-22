@@ -58,6 +58,21 @@ class TvInputTifContractTests(unittest.TestCase):
         self.assertIn('"tv_input"', self.verifier)
         self.assertIn('"oem_dialog"', self.verifier)
 
+    def test_dtv_channel_tuning_coordinator_and_no_ignored_interrupts(self):
+        coordinator = (SRC_JAVA / "DtvChannelTuningCoordinator.java").read_text(encoding="utf-8")
+        self.assertIn("DtvChannelTuningCoordinator.tuneChannel", self.tv_controller)
+        self.assertIn("Thread.currentThread().interrupt()", self.tv_controller)
+        self.assertIn('step.optInt("number", -1)', self.tv_controller)
+        self.assertIsNone(
+            re.search(r"catch\s*\(\s*InterruptedException\s+ignored\s*\)", self.tv_controller),
+            "TvController.java must NEVER swallow InterruptedException!",
+        )
+        self.assertIn("MIN_CHANNEL", coordinator)
+        self.assertIn("MAX_CHANNEL", coordinator)
+        self.assertIn("Thread.currentThread().interrupt()", coordinator)
+        self.assertIn("isInterrupted()", coordinator)
+        self.assertIn("stato TV non verificato", coordinator)
+
     def test_status_telemetry_and_main_activity_report_accessibility_read_only(self):
         self.assertIn("isAccessibilityActive", self.router)
         self.assertIn('"accessibility_active"', self.router)
