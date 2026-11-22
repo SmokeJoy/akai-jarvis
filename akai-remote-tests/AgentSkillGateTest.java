@@ -37,6 +37,11 @@ public final class AgentSkillGateTest {
         expect(AgentSkillGate.canLearn(true, openYoutube, "{\"type\":\"contains_text\",\"value\":\"\"}"), false, "empty success value");
         expect(AgentSkillGate.canLearn(true, openYoutube, "{\"type\":\"any_of_pkgs\",\"values\":[]}"), false, "empty package list");
         expect(AgentSkillGate.canLearn(true, openYoutube, "{\"type\":\"player_active\"}"), true, "player verification allowed");
+        String tvCenterPkg = "{\"type\":\"pkg_is\",\"value\":\"com.mediatek.wwtv.tvcenter\"}";
+        expect(AgentSkillGate.canLearn(true, action("tune_channel", "number", 105), tvCenterPkg), true, "valid DTV tune_channel 105 learnable when verified");
+        expect(AgentSkillGate.canLearn(false, action("tune_channel", "number", 105), tvCenterPkg), false, "unverified DTV tune_channel never learnable");
+        expect(AgentSkillGate.canLearn(true, action("tune_channel", "number", 0), tvCenterPkg), false, "DTV tune_channel 0 rejected");
+        expect(AgentSkillGate.canLearn(true, action("select_channel", "number", 10000), tvCenterPkg), false, "DTV select_channel > 9999 rejected");
         JSONArray tooLong = new JSONArray();
         for (int i = 0; i < 11; i++) tooLong.put(new JSONObject().put("type", "command").put("action", "back"));
         expect(AgentSkillGate.canLearn(true, tooLong, verifiedPackage), false, "bounded learned plan");

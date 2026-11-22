@@ -4,8 +4,11 @@ import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -34,6 +37,10 @@ public final class TvInputIntentPolicy {
 
     private static final Pattern DTV_CHANNEL_NUM_PATTERN =
             Pattern.compile("(?:^| )(?:dtv|dvbt|dvbt2) [0-9]{1,3}(?: |$)");
+    private static final Pattern STANDALONE_LCN_PATTERN =
+            Pattern.compile("^\\s*0*([1-9][0-9]{0,2})\\s*$");
+    private static final Pattern PREFIXED_CHANNEL_NUM_PATTERN =
+            Pattern.compile("(?i)(?:^|[^a-z0-9])(?:(?:ch|canale|channel|dtv|lcn)\\s*[:.#-]?\\s*|(?:dvb-?t2|dvb-?t)[\\s:.#-]+)0*([1-9][0-9]{0,3})(?=$|[^a-z0-9:/.])");
 
     private TvInputIntentPolicy() {}
 
@@ -370,6 +377,45 @@ public final class TvInputIntentPolicy {
             }
         }
         return false;
+    }
+
+    /**
+     * Requires explicit DTV/tuner/EPG origin AND an unambiguous matching channel number (1..9999).
+     * Rejects bare channel names/numbers without DTV origin, clocks ("19:05"), dates ("05/11/2026"),
+     * audio/video specs ("5.1 Dolby", "1080p 50Hz"), DVB-T2 tech labels alone ("DVB-T2" vs channel 2),
+     * and ambiguous multi-channel lists (e.g. EPG ["CH 001", "CH 005"]).
+     */
+    public static boolean hasPositiveDtvChannelNumberEvidence(int channelNumber, List<String> visibleTexts) {
+        if (channelNumber < 1 || channelNumber > 9999 || visibleTexts == null || visibleTexts.isEmpty()) {
+            return false;
+        }
+        if (!hasPositiveDtvEvidence(visibleTexts)) {
+            return false;
+        }
+        Set<Integer> matchedChannels = new HashSet<>();
+        for (String raw : visibleTexts) {
+            if (raw == null) continue;
+            Matcher standalone = STANDALONE_LCN_PATTERN.matcher(raw);
+            if (standalone.matches()) {
+                try {
+                    int parsed = Integer.parseInt(standalone.group(1));
+                    if (parsed >= 1 && parsed <= 9999) {
+                        matchedChannels.add(parsed);
+                    }
+                } catch (NumberFormatException ignored) {}
+                continue;
+            }
+            Matcher prefixed = PREFIXED_CHANNEL_NUM_PATTERN.matcher(raw);
+            while (prefixed.find()) {
+                try {
+                    int parsed = Integer.parseInt(prefixed.group(1));
+                    if (parsed >= 1 && parsed <= 9999) {
+                        matchedChannels.add(parsed);
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return matchedChannels.size() == 1 && matchedChannels.contains(channelNumber);
     }
 
     public static boolean hasPositiveHdmiPortEvidence(int portNumber, List<String> visibleTexts) {

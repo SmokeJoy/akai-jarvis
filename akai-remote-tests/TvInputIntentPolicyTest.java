@@ -197,6 +197,48 @@ public class TvInputIntentPolicyTest {
         assertTrue(!TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Arrays.asList("Nessun segnale")), "Nessun segnale rejected for HDMI");
         assertTrue(!TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Collections.<String>emptyList()), "Empty rejected for HDMI");
 
+        // 8. Explicit DTV channel number UI evidence (fails closed on DVB-T2 tech label, clocks, dates, EPG lists, bare names)
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("DTV", "CH 005", "Canale 5")),
+                "Corroborated DTV + CH 005 + Canale 5 allowed");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("DVB-T2", "CH 005")),
+                "DVB-T2 + CH 005 allowed");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(105, Arrays.asList("DVB-T2 105")),
+                "Compact DVB-T2 105 allowed");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("DTV 5", "19:05", "2026")),
+                "DTV 5 allowed alongside clock and 4-digit year");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(2, Collections.singletonList("DVB-T2")),
+                "DVB-T2 tech label alone must NEVER count as channel 2");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(2, Collections.singletonList("DVBT2")),
+                "DVBT2 tech label alone must NEVER count as channel 2");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Collections.singletonList("19:05")),
+                "Clock 19:05 rejected for channel 5");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("DTV", "19:05")),
+                "Clock 19:05 with DTV but no channel rejected");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("DTV", "05/11/2026")),
+                "Date 05/11/2026 with DTV rejected for channel 5");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("DTV", "5.1 Dolby")),
+                "Audio spec 5.1 Dolby rejected for channel 5");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(50, Arrays.asList("DTV", "1080p 50Hz")),
+                "Refresh rate 50Hz rejected for channel 50");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(2026, Arrays.asList("DTV", "2026")),
+                "Bare 4-digit year 2026 rejected as standalone LCN");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("DTV", "CH 050")),
+                "CH 050 rejected for channel 5");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("DTV", "CH 015")),
+                "CH 015 rejected for channel 5");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("Guida TV", "CH 001", "CH 005")),
+                "Multi-channel EPG list rejected for channel 5");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Collections.singletonList("Canale 5")),
+                "Bare Canale 5 without DTV/tuner/EPG origin rejected");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(5, Arrays.asList("HDMI 1", "DTV", "CH 005")),
+                "Conflicting HDMI 1 + DTV + CH 005 rejected");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(0, Arrays.asList("DTV", "CH 000")),
+                "Invalid channel 0 rejected");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(-1, Arrays.asList("DTV", "CH 001")),
+                "Negative channel rejected");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvChannelNumberEvidence(10000, Arrays.asList("DTV", "CH 10000")),
+                "Channel > 9999 rejected");
+
         System.out.println("TvInputIntentPolicyTest PASS: TIF URI, discovery, candidate order, OEM ANR and fail-closed UI evidence assertions OK.");
     }
 }

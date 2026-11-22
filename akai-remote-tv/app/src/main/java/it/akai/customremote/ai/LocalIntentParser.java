@@ -218,7 +218,7 @@ public class LocalIntentParser {
         if (namedChannel > 0) {
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "tune_channel").put("number", namedChannel)); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "channel_" + namedChannel, "Sintonizza " + namedChannelTitle, acts, "Sintonizzazione " + namedChannelTitle + " (Canale " + namedChannel + ")...", "local_fast_path", null);
+            return new ParsedIntent(true, "channel_" + namedChannel, "Sintonizza " + namedChannelTitle, acts, "Sintonizzazione " + namedChannelTitle + " (Canale " + namedChannel + ")...", "local_fast_path", tvCenterCond);
         }
 
         // Sintonizzazione canale numerico diretto (es. "canale 5", "canale 20")
@@ -228,7 +228,7 @@ public class LocalIntentParser {
             int ch = Integer.parseInt(chanMatcher.group(1));
             JSONArray acts = new JSONArray();
             try { acts.put(new JSONObject().put("type", "tune_channel").put("number", ch)); } catch (Exception ignored) {}
-            return new ParsedIntent(true, "channel_" + ch, "Sintonizza Canale " + ch, acts, "Sintonizzazione Canale " + ch + "...", "local_fast_path", null);
+            return new ParsedIntent(true, "channel_" + ch, "Sintonizza Canale " + ch, acts, "Sintonizzazione Canale " + ch + "...", "local_fast_path", tvCenterCond);
         }
 
         // Navigazione D-Pad e Menu

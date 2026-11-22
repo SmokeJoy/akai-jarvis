@@ -73,6 +73,28 @@ class TvInputTifContractTests(unittest.TestCase):
         self.assertIn("isInterrupted()", coordinator)
         self.assertIn("stato TV non verificato", coordinator)
 
+    def test_channel_evidence_and_ai_controller_wiring(self):
+        self.assertIn("hasPositiveDtvChannelNumberEvidence", self.policy)
+        self.assertIn("hasPositiveDtvChannelNumberEvidence", self.verifier)
+        self.assertIn('"canali tv"', self.verifier)
+        self.assertIsNone(
+            re.search(r"catch\s*\(\s*InterruptedException\s+ignored\s*\)", self.ai_ctrl),
+            "AkaiAiController.java must NEVER swallow InterruptedException!",
+        )
+        visual_begin = self.ai_ctrl.index("private JSONObject processVisualGoalLocked(")
+        reflector_begin = self.ai_ctrl.index("private String buildReflectorContext(", visual_begin)
+        visual_body = self.ai_ctrl[visual_begin:reflector_begin]
+        self.assertIn("stepPreSnap", visual_body)
+        self.assertIn("stepDispatchedAtMs", visual_body)
+        self.assertIn("needs_visual_confirmation", visual_body)
+        reflector_end = self.ai_ctrl.index("public JSONObject processQuery(", reflector_begin)
+        reflector_body = self.ai_ctrl[reflector_begin:reflector_end]
+        self.assertIn("actionDispatchedAtMs, previousActions", reflector_body)
+        local_plan_begin = self.ai_ctrl.index("private DiscoveryPlan planLocalDiscovery(")
+        local_plan_body = self.ai_ctrl[local_plan_begin:]
+        self.assertIn('"input_tv"', local_plan_body)
+        self.assertNotIn('.put("pkg", "com.mediatek.wwtv.tvcenter")', local_plan_body)
+
     def test_status_telemetry_and_main_activity_report_accessibility_read_only(self):
         self.assertIn("isAccessibilityActive", self.router)
         self.assertIn('"accessibility_active"', self.router)

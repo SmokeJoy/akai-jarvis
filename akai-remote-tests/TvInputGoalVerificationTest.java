@@ -70,8 +70,8 @@ public class TvInputGoalVerificationTest {
     }
 
     public static void main(String[] args) throws Exception {
-        // 1. LocalIntentParser must attach pkg_is com.mediatek.wwtv.tvcenter to all TV inputs + catalog
-        for (String q : Arrays.asList("digitale terrestre", "hdmi 1", "passa a hdmi 2", "metti hdmi 3", "ingressi")) {
+        // 1. LocalIntentParser must attach pkg_is com.mediatek.wwtv.tvcenter to all TV inputs + numeric/named channels + catalog
+        for (String q : Arrays.asList("digitale terrestre", "hdmi 1", "passa a hdmi 2", "metti hdmi 3", "ingressi", "canale 5", "metti rai 1")) {
             LocalIntentParser.ParsedIntent p = LocalIntentParser.parse(null, q);
             assertTrue(p.matched, "query matched: " + q);
             assertTrue(p.successCondition != null && !p.successCondition.trim().isEmpty(), "has successCondition: " + q);
@@ -327,7 +327,85 @@ public class TvInputGoalVerificationTest {
         assertTrue(!unchangedHdmiV.satisfied && unchangedHdmiV.observedFinalStateOnly,
                 "Identical pre/post HDMI 1 snapshot denied as observedFinalStateOnly=true");
 
-        // 3c. End-to-end AkaiAiController.createForTest verification (fast-path & autonomous planner)
+        //   (3) Keyword precedence & action-aware tune_channel / select_channel verifier tests
+        ScreenPerceptionEngine.PerceptionSnapshot playerActiveEmptyTv = new ScreenPerceptionEngine.PerceptionSnapshot(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE,
+                TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs,
+                Collections.<String>emptyList(),
+                Collections.<ScreenPerceptionEngine.ClickableElement>emptyList(),
+                null,
+                false,
+                true,
+                true,
+                nowMs);
+        for (String bypassPhrase : Arrays.asList("guarda hdmi 1", "guarda il digitale terrestre", "elenco canali")) {
+            GoalEvidenceVerifier.Verdict bypassV = GoalEvidenceVerifier.verify(
+                    bypassPhrase, tvCond, preHome, playerActiveEmptyTv, nowMs, nowMs - 10L, null);
+            assertTrue(!bypassV.satisfied && "tv_input".equals(bypassV.goalKind),
+                    "TV input precedence blocks mentionsPlayback bypass for: " + bypassPhrase);
+        }
+        ScreenPerceptionEngine.PerceptionSnapshot raiPlayOk = new ScreenPerceptionEngine.PerceptionSnapshot(
+                "it.rainet.androidtv", null, nowMs, Collections.singletonList("Rai 1 HD"),
+                Collections.<ScreenPerceptionEngine.ClickableElement>emptyList(), null, false, true, true, nowMs);
+        assertTrue(GoalEvidenceVerifier.verify("metti Rai 1 in diretta", null, preHome, raiPlayOk, nowMs, nowMs - 10L, null).satisfied,
+                "Streaming app RaiPlay goal preserves playback verdict");
+
+        JSONArray tuneCh5 = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 5));
+        JSONArray selectCh5 = new JSONArray().put(new JSONObject().put("type", "select_channel").put("number", 5));
+        JSONArray badCh0 = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 0));
+        JSONArray badCh10000 = new JSONArray().put(new JSONObject().put("type", "select_channel").put("number", 10000));
+        ScreenPerceptionEngine.PerceptionSnapshot ch5Ok = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("DTV", "CH 005", "Canale 5"), nowMs);
+        assertTrue(GoalEvidenceVerifier.verify("vai su Mediaset", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, tuneCh5).satisfied,
+                "Action-aware tune_channel 5 verified with fresh transitioned DTV+CH005");
+        assertTrue(GoalEvidenceVerifier.verify("vai su Mediaset", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, selectCh5).satisfied,
+                "Action-aware select_channel 5 verified with fresh transitioned DTV+CH005");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Collections.<String>emptyList(), nowMs), nowMs, nowMs - 10L, tuneCh5).satisfied,
+                "tune_channel 5 denied on bare empty tvcenter");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Collections.singletonList("Canale 5"), nowMs), nowMs, nowMs - 10L, tuneCh5).satisfied,
+                "tune_channel 5 denied on bare Canale 5 without DTV origin");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("DTV", "CH 050"), nowMs), nowMs, nowMs - 10L, tuneCh5).satisfied,
+                "tune_channel 5 denied on wrong channel CH 050");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("Guida TV", "CH 001", "CH 005"), nowMs), nowMs, nowMs - 10L, tuneCh5).satisfied,
+                "tune_channel 5 denied on multi-channel EPG list");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("DTV", "19:05"), nowMs), nowMs, nowMs - 10L, tuneCh5).satisfied,
+                "tune_channel 5 denied when only clock 19:05 is visible");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("HDMI 1", "DTV", "CH 005"), nowMs), nowMs, nowMs - 10L, tuneCh5).satisfied,
+                "tune_channel 5 denied when HDMI 1 external source visible");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, dtvInputsPanelOpen, nowMs, nowMs - 10L, tuneCh5).satisfied,
+                "tune_channel 5 denied while InputsPanelActivity open");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 5", tvCond, preHome, snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs - 50L, Arrays.asList("DTV", "CH 005"), nowMs - 50L), nowMs, nowMs, tuneCh5).satisfied,
+                "tune_channel 5 denied on stale pre-command snapshot");
+        GoalEvidenceVerifier.Verdict unchangedCh5V = GoalEvidenceVerifier.verify("canale 5", tvCond,
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        nowMs - 200L, Arrays.asList("DTV", "CH 005", "Canale 5"), nowMs - 200L),
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        nowMs - 200L, Arrays.asList("DTV", "CH 005", "Canale 5"), nowMs),
+                nowMs, nowMs - 10L, tuneCh5);
+        assertTrue(!unchangedCh5V.satisfied && unchangedCh5V.observedFinalStateOnly,
+                "Identical pre/post channel 5 snapshot denied as observedFinalStateOnly=true");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 0", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, badCh0).satisfied,
+                "Invalid tune_channel 0 rejected");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 10000", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, badCh10000).satisfied,
+                "Invalid select_channel 10000 rejected");
+
+        // 3c. End-to-end AkaiAiController.createForTest verification (fast-path, autonomous & visual mode)
         boolean prevStrictLocal = AkaiAiController.isStrictLocalOnly();
         android.content.Context testCtx = new android.content.Context() {};
         AkaiMemoryEngine memEngine = AkaiMemoryEngine.getInstance(testCtx);
@@ -337,14 +415,17 @@ public class TvInputGoalVerificationTest {
             final List<ScreenPerceptionEngine.PerceptionSnapshot> nextPostSnaps = new ArrayList<>();
             final AtomicInteger postIndex = new AtomicInteger(0);
             final boolean[] captureAtCallTime = new boolean[] { true };
+            final boolean[] actionDispatched = new boolean[] { false };
             final ScreenPerceptionEngine.PerceptionSnapshot[] fixedPre = new ScreenPerceptionEngine.PerceptionSnapshot[1];
             final ScreenPerceptionEngine.PerceptionSnapshot[] fixedPost = new ScreenPerceptionEngine.PerceptionSnapshot[1];
+            final JSONArray[] cloudPlannedActions = new JSONArray[1];
+            final String[] cloudPlannedCondition = new String[] { tvCond };
 
             AkaiAiController.PerceptionAndExecutionBridge mockBridge = new AkaiAiController.PerceptionAndExecutionBridge() {
                 @Override
                 public ScreenPerceptionEngine.PerceptionSnapshot capture(android.content.Context c) {
                     int idx = postIndex.getAndIncrement();
-                    if (idx == 0) {
+                    if (idx == 0 || !actionDispatched[0]) {
                         if (fixedPre[0] != null) {
                             return fixedPre[0];
                         }
@@ -366,6 +447,7 @@ public class TvInputGoalVerificationTest {
 
                 @Override
                 public TvController.CommandResult executeActions(JSONArray actions) {
+                    actionDispatched[0] = true;
                     return new TvController.CommandResult(true, "Richiesta ingresso inviata");
                 }
 
@@ -382,17 +464,20 @@ public class TvInputGoalVerificationTest {
                 @Override public double getRemainingBudgetEur() { return 5.0; }
                 @Override
                 public AiResponse planActionSequence(String userGoal, String screenContext, JSONObject preferences, JSONArray conversationHistory) {
-                    JSONArray acts = new JSONArray();
-                    try {
-                        acts.put(new JSONObject().put("type", "command").put("action", "input_tv"));
-                    } catch (Exception ignored) {}
+                    JSONArray acts = cloudPlannedActions[0];
+                    if (acts == null) {
+                        acts = new JSONArray();
+                        try {
+                            acts.put(new JSONObject().put("type", "command").put("action", "input_tv"));
+                        } catch (Exception ignored) {}
+                    }
                     return new AiResponse(
                             true,
                             "Passo al digitale terrestre...",
                             acts,
                             "autonomous_dtv_switch",
                             userGoal,
-                            tvCond,
+                            cloudPlannedCondition[0],
                             true,
                             12,
                             8,
@@ -543,6 +628,184 @@ public class TvInputGoalVerificationTest {
             assertEquals(true, unchangedE2E.optBoolean("observed_final_state_only"), "E2E identical pre/post observed_final_state_only=true");
             assertEquals(true, unchangedE2E.optBoolean("needs_visual_confirmation"), "E2E identical pre/post needs_visual_confirmation=true");
             assertEquals(0, memEngine.getAllProcedures().length(), "E2E identical pre/post saves 0 procedures");
+
+            // 3c-bis (1). Fast-path "canale 5" & "metti rai 1" E2E fail-closed & verified paths
+            for (List<String> unverifiedChTexts : Arrays.asList(
+                    Collections.<String>emptyList(),
+                    Collections.singletonList("Canale 5"),
+                    Arrays.asList("HDMI 1", "1080p"))) {
+                memEngine.resetForTest();
+                postIndex.set(0);
+                actionDispatched[0] = false;
+                captureAtCallTime[0] = true;
+                fixedPre[0] = null;
+                fixedPost[0] = null;
+                nextPostSnaps.clear();
+                nextPostSnaps.add(snapWithActivity(TvInputIntentPolicy.TV_CENTER_PACKAGE,
+                        TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, unverifiedChTexts, System.currentTimeMillis()));
+                JSONObject chUnv = ctrl.processQuery("canale 5", false);
+                assertEquals(false, chUnv.optBoolean("success", true), "fast-path canale 5 unverified: " + unverifiedChTexts);
+                assertEquals(false, chUnv.optBoolean("verified", true), "fast-path canale 5 verified=false: " + unverifiedChTexts);
+                assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, chUnv.optString("execution_outcome"), "fast-path canale 5 COMMAND_SENT");
+                assertEquals("COMPLETED_UNVERIFIED", chUnv.optString("status"), "fast-path canale 5 COMPLETED_UNVERIFIED");
+                assertEquals(true, chUnv.optBoolean("needs_visual_confirmation"), "fast-path canale 5 needs_visual_confirmation=true");
+                assertEquals(0, memEngine.getAllProcedures().length(), "fast-path canale 5 unverified saves 0 procedures");
+            }
+
+            long tStaleCh = System.currentTimeMillis();
+            memEngine.resetForTest();
+            postIndex.set(0);
+            actionDispatched[0] = false;
+            captureAtCallTime[0] = false;
+            fixedPre[0] = snapFull("it.akai.customhome.v8", "it.akai.customhome.MainActivity", tStaleCh - 5000L,
+                    Collections.singletonList("Home"), tStaleCh);
+            fixedPost[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                    tStaleCh - 5000L, Arrays.asList("DTV", "CH 005", "Canale 5"), tStaleCh - 5000L);
+            JSONObject staleChE2E = ctrl.processQuery("canale 5", false);
+            assertEquals(false, staleChE2E.optBoolean("success", true), "fast-path canale 5 stale success=false");
+            assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, staleChE2E.optString("execution_outcome"), "fast-path canale 5 stale COMMAND_SENT");
+            assertEquals("COMPLETED_UNVERIFIED", staleChE2E.optString("status"), "fast-path canale 5 stale COMPLETED_UNVERIFIED");
+            assertEquals(true, staleChE2E.optBoolean("needs_visual_confirmation"), "fast-path canale 5 stale visual confirmation");
+
+            long tUnchCh = System.currentTimeMillis();
+            memEngine.resetForTest();
+            postIndex.set(0);
+            actionDispatched[0] = false;
+            captureAtCallTime[0] = false;
+            fixedPre[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                    tUnchCh - 500L, Arrays.asList("DTV", "CH 005", "Canale 5"), tUnchCh);
+            fixedPost[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                    tUnchCh - 500L, Arrays.asList("DTV", "CH 005", "Canale 5"), tUnchCh + 50L);
+            JSONObject unchChE2E = ctrl.processQuery("canale 5", false);
+            assertEquals(false, unchChE2E.optBoolean("success", true), "fast-path canale 5 unchanged success=false");
+            assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, unchChE2E.optString("execution_outcome"), "fast-path canale 5 unchanged COMMAND_SENT");
+            assertEquals("COMPLETED_UNVERIFIED", unchChE2E.optString("status"), "fast-path canale 5 unchanged COMPLETED_UNVERIFIED");
+            assertEquals(true, unchChE2E.optBoolean("observed_final_state_only"), "fast-path canale 5 unchanged observed_final_state_only=true");
+            assertEquals(true, unchChE2E.optBoolean("needs_visual_confirmation"), "fast-path canale 5 unchanged visual confirmation");
+
+            for (String[] pair : Arrays.asList(
+                    new String[] { "canale 5", "CH 005", "Canale 5" },
+                    new String[] { "metti rai 1", "CH 001", "Rai 1" })) {
+                memEngine.resetForTest();
+                postIndex.set(0);
+                actionDispatched[0] = false;
+                captureAtCallTime[0] = true;
+                fixedPre[0] = null;
+                fixedPost[0] = null;
+                nextPostSnaps.clear();
+                nextPostSnaps.add(snapWithActivity(TvInputIntentPolicy.TV_CENTER_PACKAGE,
+                        TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, Arrays.asList("DTV", pair[1], pair[2]), System.currentTimeMillis()));
+                JSONObject chOkRes = ctrl.processQuery(pair[0], false);
+                assertEquals(true, chOkRes.optBoolean("success"), "fast-path verified success=true for " + pair[0]);
+                assertEquals(true, chOkRes.optBoolean("verified"), "fast-path verified=true for " + pair[0]);
+                assertEquals(AkaiAiController.OUTCOME_STATE_VERIFIED, chOkRes.optString("execution_outcome"), "fast-path STATE_VERIFIED for " + pair[0]);
+                assertEquals("SUCCESS_VERIFIED", chOkRes.optString("status"), "fast-path SUCCESS_VERIFIED for " + pair[0]);
+            }
+
+            // 3c-bis (2). Autonomous/cloud-planned tune_channel(105) & select_channel(105)
+            AkaiAiController.setStrictLocalOnly(false);
+            for (String actionType : Arrays.asList("tune_channel", "select_channel")) {
+                cloudPlannedCondition[0] = tvCond;
+                cloudPlannedActions[0] = new JSONArray().put(new JSONObject().put("type", actionType).put("number", 105));
+
+                for (List<String> failTexts : Arrays.asList(
+                        Collections.<String>emptyList(),
+                        Arrays.asList("Rai 1 HD", "DTV"))) {
+                    memEngine.resetForTest();
+                    postIndex.set(0);
+                    actionDispatched[0] = false;
+                    captureAtCallTime[0] = true;
+                    fixedPre[0] = null;
+                    fixedPost[0] = null;
+                    nextPostSnaps.clear();
+                    nextPostSnaps.add(snapWithActivity(TvInputIntentPolicy.TV_CENTER_PACKAGE,
+                            TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, failTexts, System.currentTimeMillis()));
+                    JSONObject autoChFail = ctrl.processQuery("vai al centocinque", false);
+                    assertEquals(false, autoChFail.optBoolean("success", true), actionType + " 105 unverified -> success=false");
+                    assertEquals(false, autoChFail.optBoolean("verified", true), actionType + " 105 unverified -> verified=false");
+                    assertEquals(false, autoChFail.optBoolean("learned_new_procedure", true), actionType + " 105 unverified -> learned=false");
+                    assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, autoChFail.optString("execution_outcome"), actionType + " 105 COMMAND_SENT");
+                    assertEquals("COMPLETED_UNVERIFIED", autoChFail.optString("status"), actionType + " 105 COMPLETED_UNVERIFIED");
+                    assertEquals(true, autoChFail.optBoolean("needs_visual_confirmation"), actionType + " 105 visual confirmation");
+                    assertEquals(0, memEngine.getAllProcedures().length(), actionType + " 105 unverified saves 0 procedures");
+                }
+
+                memEngine.resetForTest();
+                postIndex.set(0);
+                actionDispatched[0] = false;
+                captureAtCallTime[0] = true;
+                fixedPre[0] = null;
+                fixedPost[0] = null;
+                nextPostSnaps.clear();
+                nextPostSnaps.add(snapWithActivity(TvInputIntentPolicy.TV_CENTER_PACKAGE,
+                        TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, Arrays.asList("DTV", "CH 105"), System.currentTimeMillis()));
+                JSONObject autoChOk = ctrl.processQuery("vai al centocinque", false);
+                assertEquals(true, autoChOk.optBoolean("success"), actionType + " 105 verified success=true");
+                assertEquals(true, autoChOk.optBoolean("verified"), actionType + " 105 verified=true");
+                assertEquals(true, autoChOk.optBoolean("learned_new_procedure"), actionType + " 105 learned=true");
+                assertEquals(AkaiAiController.OUTCOME_STATE_VERIFIED, autoChOk.optString("execution_outcome"), actionType + " 105 STATE_VERIFIED");
+                assertEquals("SUCCESS_VERIFIED", autoChOk.optString("status"), actionType + " 105 SUCCESS_VERIFIED");
+                assertEquals(1, memEngine.getAllProcedures().length(), actionType + " 105 saves 1 SQLite procedure");
+            }
+
+            // 3c-bis (3). Visual mode (processVisualGoalLocked) fail-closed on stale & unchanged TV snapshots
+            it.akai.customremote.ai.VisualObservationProvider.Session mockVisualSession =
+                    new it.akai.customremote.ai.VisualObservationProvider.Session() {
+                @Override
+                public it.akai.customremote.ai.VisualObservationProvider.Result observe(
+                        String provider, String pkg, String ui,
+                        it.akai.customremote.ai.VisualObservationProvider.Cancellation cancel) {
+                    return it.akai.customremote.ai.VisualObservationProvider.Result.observed(
+                            provider, pkg, ui, "Schermata TV corrente", System.currentTimeMillis(), 10, 0.0);
+                }
+            };
+            assertTrue(it.akai.customremote.ai.VisualObservationProvider.install(mockVisualSession),
+                    "Install mock visual session for TV fail-closed regression");
+            try {
+                cloudPlannedCondition[0] = tvCond;
+                for (JSONObject visualAct : Arrays.asList(
+                        new JSONObject().put("type", "command").put("action", "input_tv"),
+                        new JSONObject().put("type", "tune_channel").put("number", 5))) {
+                    long tVisStale = System.currentTimeMillis();
+                    memEngine.resetForTest();
+                    postIndex.set(0);
+                    actionDispatched[0] = false;
+                    captureAtCallTime[0] = false;
+                    cloudPlannedActions[0] = new JSONArray().put(visualAct);
+                    fixedPre[0] = snapFull("it.akai.customhome.v8", "it.akai.customhome.MainActivity", tVisStale - 6000L,
+                            Collections.singletonList("Home"), tVisStale);
+                    fixedPost[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                            tVisStale - 5000L, Arrays.asList("DTV", "CH 005", "Canale 5"), tVisStale - 5000L);
+                    JSONObject visStaleRes = ctrl.processQuery("metti tv visivo", false);
+                    assertEquals(false, visStaleRes.optBoolean("verified", true), "visual stale verified=false for " + visualAct);
+                    assertEquals(false, visStaleRes.optBoolean("learned_new_procedure", true), "visual stale learned=false");
+                    assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, visStaleRes.optString("execution_outcome"), "visual stale COMMAND_SENT");
+                    assertEquals("COMPLETED_UNVERIFIED", visStaleRes.optString("status"), "visual stale COMPLETED_UNVERIFIED");
+                    assertEquals(true, visStaleRes.optBoolean("needs_visual_confirmation"), "visual stale needs_visual_confirmation=true");
+                    assertEquals(0, memEngine.getAllProcedures().length(), "visual stale saves 0 procedures");
+                }
+
+                long tVisUnch = System.currentTimeMillis();
+                memEngine.resetForTest();
+                postIndex.set(0);
+                actionDispatched[0] = false;
+                captureAtCallTime[0] = false;
+                cloudPlannedActions[0] = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 5));
+                fixedPre[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        tVisUnch - 500L, Arrays.asList("DTV", "CH 005", "Canale 5"), tVisUnch);
+                fixedPost[0] = snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        tVisUnch - 500L, Arrays.asList("DTV", "CH 005", "Canale 5"), tVisUnch + 50L);
+                JSONObject visUnchRes = ctrl.processQuery("metti canale cinque visivo", false);
+                assertEquals(false, visUnchRes.optBoolean("verified", true), "visual unchanged verified=false");
+                assertEquals(false, visUnchRes.optBoolean("learned_new_procedure", true), "visual unchanged learned=false");
+                assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, visUnchRes.optString("execution_outcome"), "visual unchanged COMMAND_SENT");
+                assertEquals("COMPLETED_UNVERIFIED", visUnchRes.optString("status"), "visual unchanged COMPLETED_UNVERIFIED");
+                assertEquals(true, visUnchRes.optBoolean("needs_visual_confirmation"), "visual unchanged needs_visual_confirmation=true");
+                assertEquals(true, visUnchRes.optBoolean("observed_final_state_only"), "visual unchanged observed_final_state_only=true");
+                assertEquals(0, memEngine.getAllProcedures().length(), "visual unchanged saves 0 procedures");
+            } finally {
+                it.akai.customremote.ai.VisualObservationProvider.clear(mockVisualSession);
+            }
         } finally {
             AkaiAiController.setStrictLocalOnly(prevStrictLocal);
             AkaiAiController.setDefaultPollIntervalMsForTest(150L);

@@ -55,7 +55,8 @@ public final class AgentSkillGate {
                         break;
                     case "select_channel":
                     case "tune_channel":
-                        if (action.optInt("number", -1) < 1) return false;
+                        int ch = action.optInt("number", -1);
+                        if (ch < 1 || ch > 9999) return false;
                         hasEffectiveAction = true;
                         break;
                     case "wait":
