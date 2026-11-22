@@ -80,6 +80,8 @@ class TvInputTifContractTests(unittest.TestCase):
         self.assertIn("resolveTvInputTargetFromActions", self.verifier)
         self.assertIn("resolveTvInputTargetFromGoal", self.verifier)
         self.assertIn("hasImplicitNamedBroadcastChannel", self.verifier)
+        self.assertIn("hasAmbiguousMediasetBroadcastCue", self.verifier)
+        self.assertNotIn("hasStreamingContext", self.verifier)
         self.assertIn("AMBIGUOUS_NAMED_CHANNEL", self.verifier)
         self.assertIn("TvInputIntentPolicy.isTvCenterPackage(pkg)", self.verifier)
         verify_begin = self.verifier.index("public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot,\n") if "public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot,\n" in self.verifier else self.verifier.index("org.json.JSONArray executedActions) {\n        if (snapshot == null")

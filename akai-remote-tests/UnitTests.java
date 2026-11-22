@@ -2720,8 +2720,9 @@ public class UnitTests {
                     && !GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaWrongNumber).satisfied
                     && GoalEvidenceVerifier.verify("metti Italia 2 in diretta da Mediaset Infinity", mediaLabelWithSuffix).satisfied
                     && GoalEvidenceVerifier.verify("metti Italia2 in diretta da Mediaset Infinity", mediaCompactLabel).satisfied
-                    && !GoalEvidenceVerifier.verify("metti Rai 1 in diretta", raiWrongNumber).satisfied
-                    && GoalEvidenceVerifier.verify("metti Rai1 in diretta", raiCompactLabel).satisfied
+                    && !GoalEvidenceVerifier.verify("metti Rai 1 in diretta su RaiPlay", raiWrongNumber).satisfied
+                    && GoalEvidenceVerifier.verify("metti Rai1 in diretta su RaiPlay", raiCompactLabel).satisfied
+                    && !GoalEvidenceVerifier.verify("metti Rai 1 in diretta", raiCompactLabel).satisfied
                     && !GoalEvidenceVerifier.verify("apri YouTube e cerca video di gatti",
                             "{\"type\":\"pkg_is\",\"value\":\"com.google.android.youtube.tv\"}",
                             new ScreenPerceptionEngine.PerceptionSnapshot(

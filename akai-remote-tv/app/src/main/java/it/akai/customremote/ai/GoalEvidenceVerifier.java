@@ -24,7 +24,7 @@ public final class GoalEvidenceVerifier {
     private GoalEvidenceVerifier() {}
 
     private static final class TvInputTarget {
-        final String kind; // "HDMI", "DTV_CHANNEL", "DTV", "INPUTS_PANEL"
+        final String kind; // "HDMI", "DTV_CHANNEL", "DTV_NAMED_ITALIA2", "AMBIGUOUS_NAMED_CHANNEL", "DTV", "INPUTS_PANEL"
         final int number;
 
         TvInputTarget(String kind, int number) {
@@ -250,8 +250,21 @@ public final class GoalEvidenceVerifier {
         return null;
     }
 
+    private static boolean hasAmbiguousMediasetBroadcastCue(String q) {
+        return has(q, "20 mediaset") || has(q, "mediaset 20")
+                || has(q, "mediaset extra")
+                || (has(q, "mediaset") && (has(q, "canale") || has(q, "canali")));
+    }
+
     private static String resolveExplicitNonTvAppPackage(String q) {
-        if (has(q, "mediaset") || has(q, "infinity")) return "it.mediaset.infinitytv";
+        if (has(q, "infinity")) return "it.mediaset.infinitytv";
+        if (has(q, "mediaset")
+                && !hasExplicitDtvTerm(q)
+                && !NUMERIC_CHANNEL_GOAL_PATTERN.matcher(q).find()
+                && !hasImplicitNamedBroadcastChannel(q)
+                && !hasAmbiguousMediasetBroadcastCue(q)) {
+            return "it.mediaset.infinitytv";
+        }
         if (has(q, "youtube")) return "com.google.android.youtube.tv";
         if (has(q, "raiplay")) return "it.rainet.androidtv";
         if (has(q, "impostazioni") || has(q, "settings")) return "com.android.tv.settings";
@@ -313,11 +326,6 @@ public final class GoalEvidenceVerifier {
         return has(q, "digitale terrestre") || has(q, "dtv") || has(q, "antenna");
     }
 
-    private static boolean hasStreamingContext(String q) {
-        return has(q, "diretta") || has(q, "live") || has(q, "streaming")
-                || has(q, "raiplay") || has(q, "mediaset") || has(q, "infinity") || has(q, "youtube");
-    }
-
     private static TvInputTarget resolveTvInputTargetFromGoal(String q, org.json.JSONArray executedActions) {
         if (resolveExplicitNonTvAppPackage(q) != null) {
             return null;
@@ -326,7 +334,7 @@ public final class GoalEvidenceVerifier {
         if (has(q, "hdmi 2") || has(q, "hdmi2")) return new TvInputTarget("HDMI", 2);
         if (has(q, "hdmi 3") || has(q, "hdmi3")) return new TvInputTarget("HDMI", 3);
         Matcher cm = NUMERIC_CHANNEL_GOAL_PATTERN.matcher(q);
-        if (cm.find() && (!hasStreamingContext(q) || hasExplicitDtvTerm(q))) {
+        if (cm.find()) {
             int ch = -1;
             try {
                 ch = Integer.parseInt(cm.group(1));
@@ -334,21 +342,26 @@ public final class GoalEvidenceVerifier {
             return new TvInputTarget("DTV_CHANNEL", ch);
         }
         int namedCh = resolveNamedDtvChannelFromGoal(q);
-        if (!hasStreamingContext(q)) {
-            if (namedCh > 0 && (hasExplicitDtvTerm(q) || hasDtvChannelAction(executedActions))) {
-                return new TvInputTarget("DTV_CHANNEL", namedCh);
+        if (namedCh > 0 && (hasExplicitDtvTerm(q) || hasDtvChannelAction(executedActions))) {
+            return new TvInputTarget("DTV_CHANNEL", namedCh);
+        }
+        if ((has(q, "italia 2") || has(q, "italia2"))
+                && (hasExplicitDtvTerm(q) || hasDtvChannelAction(executedActions))) {
+            if (hasDtvChannelAction(executedActions)) {
+                TvInputTarget actTarget = resolveTvInputTargetFromActions(executedActions);
+                return new TvInputTarget("DTV_CHANNEL", actTarget != null ? actTarget.number : -1);
             }
-            if ((has(q, "italia 2") || has(q, "italia2"))
-                    && (hasExplicitDtvTerm(q) || hasDtvChannelAction(executedActions))) {
-                if (hasDtvChannelAction(executedActions)) {
-                    TvInputTarget actTarget = resolveTvInputTargetFromActions(executedActions);
-                    return new TvInputTarget("DTV_CHANNEL", actTarget != null ? actTarget.number : -1);
-                }
-                return new TvInputTarget("DTV_NAMED_ITALIA2", -1);
+            return new TvInputTarget("DTV_NAMED_ITALIA2", -1);
+        }
+        if (hasImplicitNamedBroadcastChannel(q)) {
+            return new TvInputTarget("AMBIGUOUS_NAMED_CHANNEL", namedCh);
+        }
+        if (hasAmbiguousMediasetBroadcastCue(q)) {
+            if (hasDtvChannelAction(executedActions)) {
+                TvInputTarget actTarget = resolveTvInputTargetFromActions(executedActions);
+                return new TvInputTarget("DTV_CHANNEL", actTarget != null ? actTarget.number : -1);
             }
-            if (hasImplicitNamedBroadcastChannel(q)) {
-                return new TvInputTarget("AMBIGUOUS_NAMED_CHANNEL", namedCh);
-            }
+            return new TvInputTarget("AMBIGUOUS_NAMED_CHANNEL", -1);
         }
         if (hasExplicitDtvTerm(q)
                 || has(q, "canali tv") || has(q, "canale tv") || has(q, "elenco canali") || "tv".equals(q)) {

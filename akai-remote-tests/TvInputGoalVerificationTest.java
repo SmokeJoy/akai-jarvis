@@ -364,7 +364,7 @@ public class TvInputGoalVerificationTest {
         ScreenPerceptionEngine.PerceptionSnapshot raiPlayOk = new ScreenPerceptionEngine.PerceptionSnapshot(
                 "it.rainet.androidtv", null, nowMs, Collections.singletonList("Rai 1 HD"),
                 Collections.<ScreenPerceptionEngine.ClickableElement>emptyList(), null, false, true, true, nowMs);
-        assertTrue(GoalEvidenceVerifier.verify("metti Rai 1 in diretta", null, preHome, raiPlayOk, nowMs, nowMs - 10L, null).satisfied,
+        assertTrue(GoalEvidenceVerifier.verify("metti Rai 1 in diretta su RaiPlay", null, preHome, raiPlayOk, nowMs, nowMs - 10L, null).satisfied,
                 "Streaming app RaiPlay goal preserves playback verdict");
 
         JSONArray tuneCh1 = new JSONArray().put(new JSONObject().put("type", "tune_channel").put("number", 1));
@@ -572,6 +572,98 @@ public class TvInputGoalVerificationTest {
         assertTrue(!GoalEvidenceVerifier.verify(
                 "metti Rai 1 sul digitale terrestre", tvCond, preCmdRai1, preCmdRai1, nowMs, nowMs, tuneCh1).satisfied,
                 "#7086673114 (5c) pre-command Rai 1 DTV snapshot DENIED");
+
+        // 3b-quater. ChatGPT P1 review #7087417546: distinguish explicit streaming providers from generic live/diretta modifiers
+        // (1) Generic live/diretta/streaming modifiers WITHOUT explicit provider or DTV action MUST fail closed on other active player (com.example.hdmiplayer)
+        for (String ambRai1LiveGoal : Arrays.asList("metti Rai 1 in diretta", "metti Rai 1 live", "metti Rai 1 in streaming")) {
+            GoalEvidenceVerifier.Verdict otherLiveRai1 = GoalEvidenceVerifier.verify(
+                    ambRai1LiveGoal, null, preHome, otherPlayerRai1, nowMs, nowMs - 10L, null);
+            assertTrue(!otherLiveRai1.satisfied && "tv_input".equals(otherLiveRai1.goalKind),
+                    "#7087417546 (1a) '" + ambRai1LiveGoal + "' actions=null DENIED on com.example.hdmiplayer active+label");
+            GoalEvidenceVerifier.Verdict unreqRaiPlay = GoalEvidenceVerifier.verify(
+                    ambRai1LiveGoal, null, preHome, raiPlayOk, nowMs, nowMs - 10L, null);
+            assertTrue(!unreqRaiPlay.satisfied && "tv_input".equals(unreqRaiPlay.goalKind),
+                    "#7087417546 (1b) '" + ambRai1LiveGoal + "' actions=null DENIED on unrequested RaiPlay");
+        }
+        for (String ambIt2LiveGoal : Arrays.asList("Italia 2 live", "metti Italia 2 live", "Italia 2 in diretta", "Italia 2 in streaming")) {
+            GoalEvidenceVerifier.Verdict otherLiveIt2 = GoalEvidenceVerifier.verify(
+                    ambIt2LiveGoal, null, preHome, otherPlayerItalia2, nowMs, nowMs - 10L, null);
+            assertTrue(!otherLiveIt2.satisfied && "tv_input".equals(otherLiveIt2.goalKind),
+                    "#7087417546 (1c) '" + ambIt2LiveGoal + "' actions=null DENIED on com.example.hdmiplayer active+label");
+            GoalEvidenceVerifier.Verdict unreqMediaset = GoalEvidenceVerifier.verify(
+                    ambIt2LiveGoal, null, preHome, mediasetPlayOk, nowMs, nowMs - 10L, null);
+            assertTrue(!unreqMediaset.satisfied && "tv_input".equals(unreqMediaset.goalKind),
+                    "#7087417546 (1d) '" + ambIt2LiveGoal + "' actions=null DENIED on unrequested Mediaset Infinity");
+        }
+        GoalEvidenceVerifier.Verdict can5LiveHdmi = GoalEvidenceVerifier.verify(
+                "metti Canale 5 in diretta", null, preHome,
+                snapFullPlayback("com.example.hdmiplayer", null, nowMs, Collections.singletonList("Canale 5"), true, true, nowMs),
+                nowMs, nowMs - 10L, null);
+        assertTrue(!can5LiveHdmi.satisfied && "tv_input".equals(can5LiveHdmi.goalKind),
+                "#7087417546 (1e) metti Canale 5 in diretta actions=null DENIED on com.example.hdmiplayer active+label");
+
+        // (2) "mediaset" broadcast channel group ambiguity audit (without "infinity"): never hijack channel cues to Infinity app
+        assertTrue(!GoalEvidenceVerifier.verify(
+                "metti Italia 2 su Mediaset", null, preHome, mediasetPlayOk, nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (2a) metti Italia 2 su Mediaset (no Infinity) DENIED even on Mediaset Infinity active");
+        assertTrue(!GoalEvidenceVerifier.verify(
+                "metti Italia 2 su Mediaset", null, preHome, otherPlayerItalia2, nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (2b) metti Italia 2 su Mediaset DENIED on com.example.hdmiplayer");
+        ScreenPerceptionEngine.PerceptionSnapshot hdmi20Mediaset = snapFullPlayback(
+                "com.example.hdmiplayer", null, nowMs, Collections.singletonList("20 Mediaset"), true, true, nowMs);
+        ScreenPerceptionEngine.PerceptionSnapshot infinity20Mediaset = snapFullPlayback(
+                "it.mediaset.infinitytv", null, nowMs, Collections.singletonList("20 Mediaset"), true, true, nowMs);
+        ScreenPerceptionEngine.PerceptionSnapshot infinityExtra = snapFullPlayback(
+                "it.mediaset.infinitytv", null, nowMs, Collections.singletonList("Mediaset Extra"), true, true, nowMs);
+        for (String ambMediasetChan : Arrays.asList("metti 20 Mediaset", "metti un canale Mediaset", "canali Mediaset live")) {
+            assertTrue(!GoalEvidenceVerifier.verify(ambMediasetChan, null, preHome, hdmi20Mediaset, nowMs, nowMs - 10L, null).satisfied,
+                    "#7087417546 (2c) '" + ambMediasetChan + "' DENIED on hdmiplayer");
+            assertTrue(!GoalEvidenceVerifier.verify(ambMediasetChan, null, preHome, infinity20Mediaset, nowMs, nowMs - 10L, null).satisfied,
+                    "#7087417546 (2d) '" + ambMediasetChan + "' DENIED on Infinity without explicit app request");
+        }
+        assertTrue(!GoalEvidenceVerifier.verify("metti Mediaset Extra live", null, preHome, infinityExtra, nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (2e) metti Mediaset Extra live DENIED on Infinity");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 20 Mediaset", null, preHome, infinity20Mediaset, nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (2f) canale 20 Mediaset DENIED on Infinity");
+        assertTrue(!GoalEvidenceVerifier.verify("canale 20 Mediaset", null, preHome,
+                snapFullPlayback(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        nowMs, Collections.singletonList("20 Mediaset"), true, true, nowMs),
+                nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (2g) canale 20 Mediaset DENIED on bare tvcenter without DTV+CH020");
+        assertTrue(GoalEvidenceVerifier.verify("canale 20 Mediaset", tvCond, preHome,
+                snapFull(TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                        nowMs, Arrays.asList("DTV", "CH 020", "20 Mediaset"), nowMs),
+                nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (2h) canale 20 Mediaset ALLOWED on fresh DTV + CH 020");
+        assertTrue(GoalEvidenceVerifier.verify("vai su Mediaset", null, preHome,
+                snapFull("it.mediaset.infinitytv", null, nowMs, Collections.singletonList("Home"), nowMs),
+                nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (2i) standalone app goal 'vai su Mediaset' preserved as open_app");
+
+        // (3) Positive checks: explicit streaming providers (RaiPlay / Mediaset Infinity) AND fresh explicit antenna DTV
+        GoalEvidenceVerifier.Verdict posRaiPlay = GoalEvidenceVerifier.verify(
+                "metti Rai 1 in diretta su RaiPlay", null, preHome, raiPlayOk, nowMs, nowMs - 10L, null);
+        assertTrue(posRaiPlay.satisfied && "playback".equals(posRaiPlay.goalKind),
+                "#7087417546 (3a) explicit RaiPlay live playback ALLOWED");
+        assertTrue(!GoalEvidenceVerifier.verify(
+                "metti Rai 1 in diretta su RaiPlay", null, preHome, otherPlayerRai1, nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (3b) explicit RaiPlay DENIED on wrong player package");
+        GoalEvidenceVerifier.Verdict posInfinity = GoalEvidenceVerifier.verify(
+                "metti Italia 2 live su Mediaset Infinity", null, preHome, mediasetPlayOk, nowMs, nowMs - 10L, null);
+        assertTrue(posInfinity.satisfied && "playback".equals(posInfinity.goalKind),
+                "#7087417546 (3c) explicit Mediaset Infinity live playback ALLOWED");
+        assertTrue(!GoalEvidenceVerifier.verify(
+                "metti Italia 2 live su Mediaset Infinity", null, preHome, otherPlayerItalia2, nowMs, nowMs - 10L, null).satisfied,
+                "#7087417546 (3d) explicit Mediaset Infinity DENIED on wrong player package");
+        assertTrue(GoalEvidenceVerifier.verify(
+                "metti Rai 1 in diretta", tvCond, preHome, ch1Ok, nowMs, nowMs - 10L, tuneCh1).satisfied,
+                "#7087417546 (3e) metti Rai 1 in diretta WITH tuneCh1 + fresh DTV CH 001 ALLOWED");
+        assertTrue(!GoalEvidenceVerifier.verify(
+                "metti Rai 1 in diretta", tvCond, preHome, otherPlayerRai1, nowMs, nowMs - 10L, tuneCh1).satisfied,
+                "#7087417546 (3f) metti Rai 1 in diretta WITH tuneCh1 DENIED on com.example.hdmiplayer");
+        assertTrue(GoalEvidenceVerifier.verify(
+                "metti Rai 1 sul digitale terrestre", tvCond, preHome, ch1Ok, nowMs, nowMs - 10L, tuneCh1).satisfied,
+                "#7087417546 (3g) fresh explicit antenna DTV for Rai 1 ALLOWED");
 
         // 3c. End-to-end AkaiAiController.createForTest verification (fast-path, autonomous & visual mode)
         boolean prevStrictLocal = AkaiAiController.isStrictLocalOnly();
@@ -1026,19 +1118,22 @@ public class TvInputGoalVerificationTest {
                         "E2E planner bypass saves 0 procedures for '" + goalQuery + "'");
             }
 
-            // 3c-bis (5). E2E implicit named broadcast channel ("metti per favore Rai 1") with non-DTV action
-            //            and active player/audio on HDMI/other player or bare tvcenter MUST fail closed and NEVER learn in SQLite (#7086673114)
+            // 3c-bis (5). E2E implicit named broadcast channels (including generic live/diretta modifiers, #7086673114 + #7087417546)
+            //            with non-DTV action and active player/audio on HDMI/other player or bare tvcenter MUST fail closed and NEVER learn in SQLite
             AkaiAiController.setStrictLocalOnly(false);
             Object[][] implicitE2eCases = new Object[][] {
-                    new Object[] { "com.example.hdmiplayer", null, Collections.singletonList("Rai 1"), "{\"type\":\"pkg_is\",\"value\":\"com.example.hdmiplayer\"}" },
-                    new Object[] { TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, Collections.singletonList("Rai 1"), tvCond }
+                    new Object[] { "metti per favore Rai 1", "com.example.hdmiplayer", null, Collections.singletonList("Rai 1"), "{\"type\":\"pkg_is\",\"value\":\"com.example.hdmiplayer\"}" },
+                    new Object[] { "metti per favore Rai 1", TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, Collections.singletonList("Rai 1"), tvCond },
+                    new Object[] { "metti Rai 1 in diretta", "com.example.hdmiplayer", null, Collections.singletonList("Rai 1"), "{\"type\":\"pkg_is\",\"value\":\"com.example.hdmiplayer\"}" },
+                    new Object[] { "Italia 2 live", "com.example.hdmiplayer", null, Collections.singletonList("Italia 2"), "{\"type\":\"pkg_is\",\"value\":\"com.example.hdmiplayer\"}" }
             };
             for (Object[] tc : implicitE2eCases) {
-                String postPkg = (String) tc[0];
-                String postAct = (String) tc[1];
+                String goalQuery = (String) tc[0];
+                String postPkg = (String) tc[1];
+                String postAct = (String) tc[2];
                 @SuppressWarnings("unchecked")
-                List<String> postTexts = (List<String>) tc[2];
-                String candCond = (String) tc[3];
+                List<String> postTexts = (List<String>) tc[3];
+                String candCond = (String) tc[4];
                 memEngine.resetForTest();
                 postIndex.set(0);
                 actionDispatched[0] = false;
@@ -1050,21 +1145,21 @@ public class TvInputGoalVerificationTest {
                 nextPostSnaps.clear();
                 nextPostSnaps.add(snapFullPlayback(postPkg, postAct, System.currentTimeMillis(), postTexts,
                         true, true, System.currentTimeMillis()));
-                JSONObject implicitRes = ctrl.processQuery("metti per favore Rai 1", false);
+                JSONObject implicitRes = ctrl.processQuery(goalQuery, false);
                 assertEquals(false, implicitRes.optBoolean("success", true),
-                        "E2E #7086673114 implicit Rai 1 MUST fail on " + postPkg);
+                        "E2E implicit/live MUST fail for '" + goalQuery + "' on " + postPkg);
                 assertEquals(false, implicitRes.optBoolean("verified", true),
-                        "E2E #7086673114 implicit Rai 1 verified=false on " + postPkg);
+                        "E2E implicit/live verified=false for '" + goalQuery + "' on " + postPkg);
                 assertEquals(false, implicitRes.optBoolean("learned_new_procedure", true),
-                        "E2E #7086673114 implicit Rai 1 never learns SQLite skill on " + postPkg);
+                        "E2E implicit/live never learns SQLite skill for '" + goalQuery + "' on " + postPkg);
                 assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, implicitRes.optString("execution_outcome"),
-                        "E2E #7086673114 implicit Rai 1 COMMAND_SENT on " + postPkg);
+                        "E2E implicit/live COMMAND_SENT for '" + goalQuery + "' on " + postPkg);
                 assertEquals("COMPLETED_UNVERIFIED", implicitRes.optString("status"),
-                        "E2E #7086673114 implicit Rai 1 COMPLETED_UNVERIFIED on " + postPkg);
+                        "E2E implicit/live COMPLETED_UNVERIFIED for '" + goalQuery + "' on " + postPkg);
                 assertEquals(true, implicitRes.optBoolean("needs_visual_confirmation"),
-                        "E2E #7086673114 implicit Rai 1 needs_visual_confirmation=true on " + postPkg);
+                        "E2E implicit/live needs_visual_confirmation=true for '" + goalQuery + "' on " + postPkg);
                 assertEquals(0, memEngine.getAllProcedures().length(),
-                        "E2E #7086673114 implicit Rai 1 saves 0 procedures on " + postPkg);
+                        "E2E implicit/live saves 0 procedures for '" + goalQuery + "' on " + postPkg);
             }
         } finally {
             AkaiAiController.setStrictLocalOnly(prevStrictLocal);
