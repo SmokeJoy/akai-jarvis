@@ -389,11 +389,18 @@ public class TvController {
                 char c = chStr.charAt(i);
                 int digit = Character.getNumericValue(c);
                 int k = (digit == 0) ? UInputDriver.KEY_0 : (UInputDriver.KEY_1 + (digit - 1));
-                uinputDriver.sendKey(k);
-                try { Thread.sleep(250); } catch (InterruptedException ignored) {}
+                if (!uinputDriver.sendKey(k)) {
+                    return new CommandResult(false, "Invio cifra canale fallito: sintonizzazione non verificata");
+                }
+                try { Thread.sleep(250); } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return new CommandResult(false, "Sintonizzazione interrotta: stato non verificato");
+                }
             }
-            uinputDriver.sendKey(UInputDriver.KEY_ENTER);
-            return new CommandResult(true, "Sintonizzazione Canale " + channel);
+            if (!uinputDriver.sendKey(UInputDriver.KEY_ENTER)) {
+                return new CommandResult(false, "Invio conferma canale fallito: sintonizzazione non verificata");
+            }
+            return new CommandResult(true, "Comandi canale " + channel + " inviati (stato TV non verificato)");
         } catch (Exception e) {
             return new CommandResult(false, "Errore sintonizzazione canale: " + e.getMessage());
         }
