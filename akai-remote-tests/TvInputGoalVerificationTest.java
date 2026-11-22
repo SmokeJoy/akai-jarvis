@@ -69,6 +69,22 @@ public class TvInputGoalVerificationTest {
                 captureTs);
     }
 
+    private static ScreenPerceptionEngine.PerceptionSnapshot snapFullPlayback(
+            String pkg, String activity, long activityTs, List<String> texts,
+            boolean isMusicActive, boolean isPlayerActive, long captureTs) {
+        return new ScreenPerceptionEngine.PerceptionSnapshot(
+                pkg,
+                activity,
+                activityTs,
+                texts,
+                Collections.<ScreenPerceptionEngine.ClickableElement>emptyList(),
+                null,
+                false,
+                isMusicActive,
+                isPlayerActive,
+                captureTs);
+    }
+
     public static void main(String[] args) throws Exception {
         // 1. LocalIntentParser must attach pkg_is com.mediatek.wwtv.tvcenter to all TV inputs + numeric/named channels + catalog
         for (String q : Arrays.asList("digitale terrestre", "hdmi 1", "passa a hdmi 2", "metti hdmi 3", "ingressi", "canale 5", "metti rai 1")) {
@@ -464,6 +480,99 @@ public class TvInputGoalVerificationTest {
         assertTrue(!GoalEvidenceVerifier.verify("canale 10000", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, badCh10000).satisfied,
                 "Invalid select_channel 10000 rejected");
 
+        // 3b-ter. ChatGPT P1 review #7086673114: implicit named broadcast channels without DTV action fail closed
+        // (1) "metti Rai 1", actions=null, HDMI/other player + "Rai 1" + both audio/player active => DENIED
+        ScreenPerceptionEngine.PerceptionSnapshot otherPlayerRai1 = snapFullPlayback(
+                "com.example.hdmiplayer", null, nowMs, Collections.singletonList("Rai 1"),
+                true, true, nowMs);
+        GoalEvidenceVerifier.Verdict implicitOtherPlayerV = GoalEvidenceVerifier.verify(
+                "metti Rai 1", null, preHome, otherPlayerRai1, nowMs, nowMs - 10L, null);
+        assertTrue(!implicitOtherPlayerV.satisfied && "tv_input".equals(implicitOtherPlayerV.goalKind),
+                "#7086673114 (1) metti Rai 1 actions=null DENIED on other active player with Rai 1 overlay");
+        ScreenPerceptionEngine.PerceptionSnapshot tvcenterHdmiRai1 = snapFullPlayback(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, nowMs,
+                Arrays.asList("HDMI 1", "Rai 1"), true, true, nowMs);
+        GoalEvidenceVerifier.Verdict implicitHdmiV = GoalEvidenceVerifier.verify(
+                "metti Rai 1", null, preHome, tvcenterHdmiRai1, nowMs, nowMs - 10L, null);
+        assertTrue(!implicitHdmiV.satisfied && "tv_input".equals(implicitHdmiV.goalKind),
+                "#7086673114 (1b) metti Rai 1 actions=null DENIED on tvcenter HDMI 1 + Rai 1 + both active");
+        ScreenPerceptionEngine.PerceptionSnapshot otherPlayerItalia2 = snapFullPlayback(
+                "com.example.hdmiplayer", null, nowMs, Collections.singletonList("Italia 2"),
+                true, true, nowMs);
+        assertTrue(!GoalEvidenceVerifier.verify("metti Italia 2", null, preHome, otherPlayerItalia2, nowMs, nowMs - 10L, null).satisfied,
+                "#7086673114 (1c) metti Italia 2 actions=null DENIED on other active player");
+        assertTrue(!GoalEvidenceVerifier.verify("metti Rai 2", null, preHome, snapFullPlayback(
+                "com.example.hdmiplayer", null, nowMs, Collections.singletonList("Rai 2"), true, true, nowMs),
+                nowMs, nowMs - 10L, null).satisfied,
+                "#7086673114 (1d) metti Rai 2 actions=null DENIED on other active player");
+
+        // (2) "metti Rai 1" (and even "metti Rai 1 in diretta") on tvcenter + bare "Rai 1" + both active (no DTV) => DENIED
+        ScreenPerceptionEngine.PerceptionSnapshot tvcenterBareRai1 = snapFullPlayback(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, nowMs,
+                Collections.singletonList("Rai 1"), true, true, nowMs);
+        GoalEvidenceVerifier.Verdict tvcenterBareV = GoalEvidenceVerifier.verify(
+                "metti Rai 1", null, preHome, tvcenterBareRai1, nowMs, nowMs - 10L, null);
+        assertTrue(!tvcenterBareV.satisfied && "tv_input".equals(tvcenterBareV.goalKind),
+                "#7086673114 (2) metti Rai 1 actions=null DENIED on tvcenter + bare Rai 1 (no DTV)");
+        GoalEvidenceVerifier.Verdict tvcenterLiveSpoofV = GoalEvidenceVerifier.verify(
+                "metti Rai 1 in diretta", null, preHome, tvcenterBareRai1, nowMs, nowMs - 10L, null);
+        assertTrue(!tvcenterLiveSpoofV.satisfied && "tv_input".equals(tvcenterLiveSpoofV.goalKind),
+                "#7086673114 (2b) metti Rai 1 in diretta DENIED on tvcenter bare Rai 1 (no DTV bypass via isPlayerActive)");
+
+        // (3) Explicit streaming goals ("metti Rai 1 su RaiPlay" & Mediaset Infinity) preserved
+        assertTrue(GoalEvidenceVerifier.verify(
+                "metti Rai 1 su RaiPlay", null, preHome, raiPlayOk, nowMs, nowMs - 10L, null).satisfied,
+                "#7086673114 (3) metti Rai 1 su RaiPlay ALLOWED on active RaiPlay");
+        ScreenPerceptionEngine.PerceptionSnapshot mediasetPlayOk = snapFullPlayback(
+                "it.mediaset.infinitytv", null, nowMs, Collections.singletonList("Italia 2 HD"),
+                true, true, nowMs);
+        assertTrue(GoalEvidenceVerifier.verify(
+                "metti Italia 2 in diretta da Mediaset Infinity", null, preHome, mediasetPlayOk, nowMs, nowMs - 10L, null).satisfied,
+                "#7086673114 (3b) metti Italia 2 in diretta da Mediaset Infinity ALLOWED on active Mediaset Infinity");
+
+        // (4) Explicit antenna with DTV + CH 001 + fresh transition => ALLOWED (and Italia 2 DTV checked by channel identity)
+        GoalEvidenceVerifier.Verdict explicitAntennaNoAct = GoalEvidenceVerifier.verify(
+                "metti Rai 1 sul digitale terrestre", tvCond, preHome, ch1Ok, nowMs, nowMs - 10L, null);
+        assertTrue(explicitAntennaNoAct.satisfied && "tv_input".equals(explicitAntennaNoAct.goalKind),
+                "#7086673114 (4a) explicit antenna metti Rai 1 sul digitale terrestre ALLOWED with DTV+CH001");
+        GoalEvidenceVerifier.Verdict explicitAntennaWithAct = GoalEvidenceVerifier.verify(
+                "metti Rai 1 sul digitale terrestre", tvCond, preHome, ch1Ok, nowMs, nowMs - 10L, tuneCh1);
+        assertTrue(explicitAntennaWithAct.satisfied && "tv_input".equals(explicitAntennaWithAct.goalKind),
+                "#7086673114 (4b) explicit antenna with tuneCh1 ALLOWED with DTV+CH001");
+        ScreenPerceptionEngine.PerceptionSnapshot dtvItalia2Ok = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs, Arrays.asList("DTV", "Italia 2"), nowMs);
+        assertTrue(GoalEvidenceVerifier.verify(
+                "metti Italia 2 sul digitale terrestre", tvCond, preHome, dtvItalia2Ok, nowMs, nowMs - 10L, null).satisfied,
+                "#7086673114 (4c) metti Italia 2 sul digitale terrestre ALLOWED on DTV + Italia 2");
+        assertTrue(!GoalEvidenceVerifier.verify(
+                "metti Italia 2 sul digitale terrestre", tvCond, preHome, ch5Ok, nowMs, nowMs - 10L, null).satisfied,
+                "#7086673114 (4d) metti Italia 2 sul digitale terrestre DENIED on DTV + Canale 5");
+
+        // (5) Unchanged pre/post and stale UI => DENIED
+        ScreenPerceptionEngine.PerceptionSnapshot preRai1Identical = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs - 200L, Arrays.asList("DTV", "CH 001", "Rai 1"), nowMs - 200L);
+        ScreenPerceptionEngine.PerceptionSnapshot postRai1Identical = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs - 200L, Arrays.asList("DTV", "CH 001", "Rai 1"), nowMs);
+        GoalEvidenceVerifier.Verdict unchangedRai1V = GoalEvidenceVerifier.verify(
+                "metti Rai 1 sul digitale terrestre", tvCond, preRai1Identical, postRai1Identical, nowMs, nowMs - 10L, tuneCh1);
+        assertTrue(!unchangedRai1V.satisfied && unchangedRai1V.observedFinalStateOnly,
+                "#7086673114 (5a) unchanged pre/post Rai 1 DTV snapshot DENIED as observedFinalStateOnly=true");
+        ScreenPerceptionEngine.PerceptionSnapshot staleRai1Age = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs - 20_000L, Arrays.asList("DTV", "CH 001", "Rai 1"), nowMs - 20_000L);
+        assertTrue(!GoalEvidenceVerifier.verify(
+                "metti Rai 1 sul digitale terrestre", tvCond, preHome, staleRai1Age, nowMs, 0L, tuneCh1).satisfied,
+                "#7086673114 (5b) stale >15s Rai 1 DTV snapshot DENIED");
+        ScreenPerceptionEngine.PerceptionSnapshot preCmdRai1 = snapFull(
+                TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY,
+                nowMs - 50L, Arrays.asList("DTV", "CH 001", "Rai 1"), nowMs - 50L);
+        assertTrue(!GoalEvidenceVerifier.verify(
+                "metti Rai 1 sul digitale terrestre", tvCond, preCmdRai1, preCmdRai1, nowMs, nowMs, tuneCh1).satisfied,
+                "#7086673114 (5c) pre-command Rai 1 DTV snapshot DENIED");
+
         // 3c. End-to-end AkaiAiController.createForTest verification (fast-path, autonomous & visual mode)
         boolean prevStrictLocal = AkaiAiController.isStrictLocalOnly();
         android.content.Context testCtx = new android.content.Context() {};
@@ -499,7 +608,17 @@ public class TvInputGoalVerificationTest {
                         long actTs = (tmpl.foregroundActivityTimestamp > 0L)
                                 ? Math.max(tmpl.foregroundActivityTimestamp, postNow)
                                 : 0L;
-                        return snapFull(tmpl.foregroundPackage, tmpl.foregroundActivity, actTs, tmpl.visibleTexts, postNow);
+                        return new ScreenPerceptionEngine.PerceptionSnapshot(
+                                tmpl.foregroundPackage,
+                                tmpl.foregroundActivity,
+                                actTs,
+                                tmpl.visibleTexts,
+                                tmpl.clickableElements,
+                                tmpl.focusedElementText,
+                                tmpl.hasSensitiveFields,
+                                tmpl.isMusicActive,
+                                tmpl.isPlayerActive,
+                                postNow);
                     }
                     return snapWithActivity(TvInputIntentPolicy.TV_CENTER_PACKAGE, null, Collections.<String>emptyList(), System.currentTimeMillis());
                 }
@@ -905,6 +1024,47 @@ public class TvInputGoalVerificationTest {
                         "E2E planner bypass status=COMPLETED_UNVERIFIED for '" + goalQuery + "'");
                 assertEquals(0, memEngine.getAllProcedures().length(),
                         "E2E planner bypass saves 0 procedures for '" + goalQuery + "'");
+            }
+
+            // 3c-bis (5). E2E implicit named broadcast channel ("metti per favore Rai 1") with non-DTV action
+            //            and active player/audio on HDMI/other player or bare tvcenter MUST fail closed and NEVER learn in SQLite (#7086673114)
+            AkaiAiController.setStrictLocalOnly(false);
+            Object[][] implicitE2eCases = new Object[][] {
+                    new Object[] { "com.example.hdmiplayer", null, Collections.singletonList("Rai 1"), "{\"type\":\"pkg_is\",\"value\":\"com.example.hdmiplayer\"}" },
+                    new Object[] { TvInputIntentPolicy.TV_CENTER_PACKAGE, TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY, Collections.singletonList("Rai 1"), tvCond }
+            };
+            for (Object[] tc : implicitE2eCases) {
+                String postPkg = (String) tc[0];
+                String postAct = (String) tc[1];
+                @SuppressWarnings("unchecked")
+                List<String> postTexts = (List<String>) tc[2];
+                String candCond = (String) tc[3];
+                memEngine.resetForTest();
+                postIndex.set(0);
+                actionDispatched[0] = false;
+                captureAtCallTime[0] = true;
+                fixedPre[0] = null;
+                fixedPost[0] = null;
+                cloudPlannedCondition[0] = candCond;
+                cloudPlannedActions[0] = new JSONArray().put(new JSONObject().put("type", "press_key").put("key", "enter"));
+                nextPostSnaps.clear();
+                nextPostSnaps.add(snapFullPlayback(postPkg, postAct, System.currentTimeMillis(), postTexts,
+                        true, true, System.currentTimeMillis()));
+                JSONObject implicitRes = ctrl.processQuery("metti per favore Rai 1", false);
+                assertEquals(false, implicitRes.optBoolean("success", true),
+                        "E2E #7086673114 implicit Rai 1 MUST fail on " + postPkg);
+                assertEquals(false, implicitRes.optBoolean("verified", true),
+                        "E2E #7086673114 implicit Rai 1 verified=false on " + postPkg);
+                assertEquals(false, implicitRes.optBoolean("learned_new_procedure", true),
+                        "E2E #7086673114 implicit Rai 1 never learns SQLite skill on " + postPkg);
+                assertEquals(AkaiAiController.OUTCOME_COMMAND_SENT, implicitRes.optString("execution_outcome"),
+                        "E2E #7086673114 implicit Rai 1 COMMAND_SENT on " + postPkg);
+                assertEquals("COMPLETED_UNVERIFIED", implicitRes.optString("status"),
+                        "E2E #7086673114 implicit Rai 1 COMPLETED_UNVERIFIED on " + postPkg);
+                assertEquals(true, implicitRes.optBoolean("needs_visual_confirmation"),
+                        "E2E #7086673114 implicit Rai 1 needs_visual_confirmation=true on " + postPkg);
+                assertEquals(0, memEngine.getAllProcedures().length(),
+                        "E2E #7086673114 implicit Rai 1 saves 0 procedures on " + postPkg);
             }
         } finally {
             AkaiAiController.setStrictLocalOnly(prevStrictLocal);

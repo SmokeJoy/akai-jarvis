@@ -876,7 +876,7 @@ public class AkaiAiController {
                 lastStepActions = single;
                 lastCondition = plan.successCondition;
                 WaitObservation obs = waitForConditionOrUiChange(query, lastCondition,
-                        1000L, sDefaultPollIntervalMs, token, stepDispatchedAtMs, stepPreSnap, single);
+                        1000L, sDefaultPollIntervalMs, token, stepDispatchedAtMs, stepPreSnap, fullPath);
                 current = obs.snapshot;
                 verified = obs.verified;
                 if (verified) break;
@@ -908,7 +908,7 @@ public class AkaiAiController {
         GoalEvidenceVerifier.Verdict visualEvidence = (!verified && !cancelled && !answeredDialog
                 && fullPath.length() > 0 && lastStepActions != null)
                 ? GoalEvidenceVerifier.verify(query, lastCondition, lastStepPreSnap, current,
-                        System.currentTimeMillis(), lastStepDispatchedAtMs, lastStepActions)
+                        System.currentTimeMillis(), lastStepDispatchedAtMs, fullPath)
                 : null;
         String visualConfirmPrompt = (!verified && !cancelled && !answeredDialog && fullPath.length() > 0)
                 ? resolveVisualConfirmationPrompt(visualEvidence)

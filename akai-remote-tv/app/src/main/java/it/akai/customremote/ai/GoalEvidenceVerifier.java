@@ -269,6 +269,11 @@ public final class GoalEvidenceVerifier {
         return -1;
     }
 
+    private static boolean hasImplicitNamedBroadcastChannel(String q) {
+        return resolveNamedDtvChannelFromGoal(q) > 0
+                || has(q, "italia 2") || has(q, "italia2");
+    }
+
     private static TvInputTarget resolveTvInputTargetFromActions(org.json.JSONArray executedActions) {
         if (executedActions == null) {
             return null;
@@ -329,9 +334,21 @@ public final class GoalEvidenceVerifier {
             return new TvInputTarget("DTV_CHANNEL", ch);
         }
         int namedCh = resolveNamedDtvChannelFromGoal(q);
-        if (namedCh > 0 && !hasStreamingContext(q)
-                && (hasExplicitDtvTerm(q) || hasDtvChannelAction(executedActions))) {
-            return new TvInputTarget("DTV_CHANNEL", namedCh);
+        if (!hasStreamingContext(q)) {
+            if (namedCh > 0 && (hasExplicitDtvTerm(q) || hasDtvChannelAction(executedActions))) {
+                return new TvInputTarget("DTV_CHANNEL", namedCh);
+            }
+            if ((has(q, "italia 2") || has(q, "italia2"))
+                    && (hasExplicitDtvTerm(q) || hasDtvChannelAction(executedActions))) {
+                if (hasDtvChannelAction(executedActions)) {
+                    TvInputTarget actTarget = resolveTvInputTargetFromActions(executedActions);
+                    return new TvInputTarget("DTV_CHANNEL", actTarget != null ? actTarget.number : -1);
+                }
+                return new TvInputTarget("DTV_NAMED_ITALIA2", -1);
+            }
+            if (hasImplicitNamedBroadcastChannel(q)) {
+                return new TvInputTarget("AMBIGUOUS_NAMED_CHANNEL", namedCh);
+            }
         }
         if (hasExplicitDtvTerm(q)
                 || has(q, "canali tv") || has(q, "canale tv") || has(q, "elenco canali") || "tv".equals(q)) {
@@ -352,6 +369,30 @@ public final class GoalEvidenceVerifier {
     private static Verdict verifyTvInputTarget(TvInputTarget target,
                                                ScreenPerceptionEngine.PerceptionSnapshot snapshot,
                                                String pkg, long nowMs, long minTimestampMs) {
+        if ("AMBIGUOUS_NAMED_CHANNEL".equals(target.kind)) {
+            return denied("tv_input",
+                    "Richiesta canale TV ambigua senza app streaming esplicita ne' azione/conferma DTV: chiarire sorgente (antenna/app) o confermare visivamente");
+        }
+        if ("DTV_NAMED_ITALIA2".equals(target.kind)) {
+            if (!TvInputIntentPolicy.isTvCenterPackage(pkg)) {
+                return denied("tv_input", "LiveTV (tvcenter) non e' in primo piano per canale Italia 2");
+            }
+            Verdict stale = checkTvInputFreshness(snapshot, nowMs, minTimestampMs);
+            if (stale != null) return stale;
+            if (TvInputIntentPolicy.isInputsPanelActivity(snapshot.foregroundActivity)) {
+                return denied("tv_input", "Pannello ingressi ancora aperto: sintonizzazione Italia 2 non confermata");
+            }
+            if (TvInputIntentPolicy.hasExternalSourceLabel(snapshot.visibleTexts)) {
+                return denied("tv_input", "LiveTV mostra una sorgente esterna (HDMI/AV) anziche' canale Italia 2");
+            }
+            if (!TvInputIntentPolicy.hasPositiveDtvEvidence(snapshot.visibleTexts)) {
+                return denied("tv_input", "LiveTV in primo piano ma senza conferma DTV/tuner/EPG fresca per Italia 2: conferma visiva richiesta");
+            }
+            if (hasVisibleChannelLabel(snapshot, "italia 2", "italia2")) {
+                return allowed("tv_input", "LiveTV in primo piano con conferma DTV fresca per canale Italia 2");
+            }
+            return denied("tv_input", "LiveTV in primo piano ma canale Italia 2 non confermato nei nodi UI freschi: conferma visiva richiesta");
+        }
         if ("DTV_CHANNEL".equals(target.kind)) {
             int ch = target.number;
             if (ch < 1 || ch > 9999) {
@@ -500,6 +541,9 @@ public final class GoalEvidenceVerifier {
         } else if (mentionsPlayback(q)) {
             if (pkg.isEmpty() || pkg.contains("customhome") || pkg.contains("launcher")) {
                 goalVerdict = denied("playback", "Il player non e' in primo piano");
+            } else if (TvInputIntentPolicy.isTvCenterPackage(pkg)) {
+                goalVerdict = denied("tv_input",
+                        "LiveTV (tvcenter) non puo' certificare riproduzione o canale antenna tramite solo isPlayerActive: conferma DTV/visiva richiesta");
             } else if (!snapshot.isMusicActive || !snapshot.isPlayerActive) {
                 goalVerdict = denied("playback", "La sola schermata dell'app non prova riproduzione audio/video");
             } else if ((has(q, "italia 2") || has(q, "italia2"))

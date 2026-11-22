@@ -79,6 +79,9 @@ class TvInputTifContractTests(unittest.TestCase):
         self.assertIn("resolveExplicitNonTvAppPackage", self.verifier)
         self.assertIn("resolveTvInputTargetFromActions", self.verifier)
         self.assertIn("resolveTvInputTargetFromGoal", self.verifier)
+        self.assertIn("hasImplicitNamedBroadcastChannel", self.verifier)
+        self.assertIn("AMBIGUOUS_NAMED_CHANNEL", self.verifier)
+        self.assertIn("TvInputIntentPolicy.isTvCenterPackage(pkg)", self.verifier)
         verify_begin = self.verifier.index("public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot,\n") if "public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot,\n" in self.verifier else self.verifier.index("org.json.JSONArray executedActions) {\n        if (snapshot == null")
         verify_body = self.verifier[verify_begin:]
         self.assertLess(verify_body.index("resolveExplicitNonTvAppPackage("), verify_body.index("resolveTvInputTargetFromGoal("))
@@ -94,6 +97,8 @@ class TvInputTifContractTests(unittest.TestCase):
         self.assertIn("stepPreSnap", visual_body)
         self.assertIn("stepDispatchedAtMs", visual_body)
         self.assertIn("needs_visual_confirmation", visual_body)
+        self.assertIn("stepPreSnap, fullPath)", visual_body)
+        self.assertIn("lastStepDispatchedAtMs, fullPath)", visual_body)
         reflector_end = self.ai_ctrl.index("public JSONObject processQuery(", reflector_begin)
         reflector_body = self.ai_ctrl[reflector_begin:reflector_end]
         self.assertIn("actionDispatchedAtMs, previousActions", reflector_body)
