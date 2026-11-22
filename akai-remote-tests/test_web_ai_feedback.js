@@ -7,12 +7,14 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(
     path.join(__dirname, '..', 'akai-remote-web', 'app.js'), 'utf8');
+const htmlSource = fs.readFileSync(
+    path.join(__dirname, '..', 'akai-remote-web', 'index.html'), 'utf8');
 
 function extractFunction(name, asyncFunction = false) {
     const declaration = `    ${asyncFunction ? 'async ' : ''}function ${name}(`;
     const start = source.indexOf(declaration);
     assert.ok(start >= 0, `missing ${name}`);
-    // All three functions are directly nested inside the top-level IIFE;
+    // All extracted functions are directly nested inside the top-level IIFE;
     // only their closing brace uses exactly four spaces of indentation.
     const closing = '\n    }';
     const end = source.indexOf(closing, start);
@@ -24,7 +26,8 @@ const functions = [
     extractFunction('isHandledAiReply'),
     extractFunction('isVerifiedAiReply'),
     extractFunction('askAi', true),
-    extractFunction('displayAiResponse')
+    extractFunction('displayAiResponse'),
+    extractFunction('updateAccessibilityStatus')
 ].join('\n');
 
 function fakeClassList() {
@@ -113,6 +116,74 @@ async function verifyConsentUi() {
         assert.equal(saved.cloud_context_consent, Boolean(checkbox && checkbox.checked),
             'absent consent control must not silently opt the owner in');
     }
+}
+
+async function verifyAccessibilityUi() {
+    assert.match(htmlSource, /id="accessibility-notice"/);
+    assert.match(htmlSource, /id="accessibility-badge"/);
+
+    const connSource = [
+        extractFunction('updateAccessibilityStatus'),
+        extractFunction('checkConnection', true)
+    ].join('\n') + '\n({ checkConnection, updateAccessibilityStatus })';
+
+    async function runStatus(httpStatus, body, throwErr = null) {
+        const badge = { textContent: '', style: { color: '' } };
+        const noticeClasses = new Set(['hidden']);
+        const notice = {
+            textContent: '',
+            classList: {
+                add(c) { noticeClasses.add(c); },
+                remove(c) { noticeClasses.delete(c); },
+                contains(c) { return noticeClasses.has(c); }
+            }
+        };
+        const state = { token: 'test-only', pingMs: 0, accessibilityActive: null };
+        let expiredCalled = false;
+        let lastConnState = null;
+        const sandbox = {
+            state,
+            elements: { accessibilityBadge: badge, accessibilityNotice: notice },
+            performance: { now: () => 10 },
+            AbortController,
+            setTimeout,
+            clearTimeout,
+            getApiUrl(p) { return 'https://test.invalid' + p; },
+            setConnectionState(s, label) { lastConnState = { s, label }; },
+            handleSessionExpired() { expiredCalled = true; },
+            fetch: async () => {
+                if (throwErr) throw throwErr;
+                return { status: httpStatus, ok: httpStatus >= 200 && httpStatus < 300, json: async () => body };
+            }
+        };
+        const exposed = vm.runInNewContext(connSource, sandbox);
+        await exposed.checkConnection();
+        return { state, badge, notice, noticeClasses, expiredCalled, lastConnState };
+    }
+
+    const disabled = await runStatus(200, { authenticated: true, accessibility_active: false });
+    assert.equal(disabled.state.accessibilityActive, false);
+    assert.equal(disabled.badge.textContent, 'Disattivato');
+    assert.equal(disabled.noticeClasses.has('hidden'), false, 'disabled notice must be visible');
+    assert.match(disabled.notice.textContent, /Accessibilit/);
+    assert.equal(disabled.notice.textContent.includes('<'), false, 'notice must use plain textContent');
+
+    const enabled = await runStatus(200, { authenticated: true, accessibility_active: true });
+    assert.equal(enabled.state.accessibilityActive, true);
+    assert.equal(enabled.badge.textContent, 'Attivo');
+    assert.equal(enabled.noticeClasses.has('hidden'), true);
+    assert.equal(enabled.notice.textContent, '');
+
+    const unauthorized = await runStatus(401, { error: 'Unauthorized' });
+    assert.equal(unauthorized.expiredCalled, true);
+    assert.equal(unauthorized.state.accessibilityActive, null);
+    assert.equal(unauthorized.badge.textContent, 'Non verificato');
+    assert.equal(unauthorized.noticeClasses.has('hidden'), true);
+
+    const offline = await runStatus(0, null, new Error('ECONNREFUSED'));
+    assert.equal(offline.state.accessibilityActive, null);
+    assert.equal(offline.badge.textContent, 'Non verificato');
+    assert.equal(offline.noticeClasses.has('hidden'), true);
 }
 
 async function run() {
@@ -229,8 +300,18 @@ async function run() {
     assert.match(tlsRequired.elements.aiResponseText.textContent, /HTTPS/);
     assert.match(tlsRequired.elements.aiBadgeStatus.textContent, /Non Riuscito/);
 
+    const needsVisual = await scenario(400, {
+        success: false, status: 'COMPLETED_UNVERIFIED', verified: false,
+        execution_outcome: 'COMMAND_SENT', needs_visual_confirmation: true,
+        reply: 'Ingresso selezionato, verifica sullo schermo.'
+    });
+    assert.equal(needsVisual.returned, false);
+    assert.equal(needsVisual.elements.aiBadgeStatus.textContent, '⚠️ Non Verificato — Conferma Visiva');
+    assert.ok(needsVisual.messages.some(m => /Verifica sulla TV/.test(m.text)));
+
     await verifyConsentUi();
-    console.log('Web AI feedback regression PASS (16 outcomes + 5 consent cases; no TV or cloud API used)');
+    await verifyAccessibilityUi();
+    console.log('Web AI feedback regression PASS (17 outcomes + 5 consent + 4 accessibility cases; no TV or cloud API used)');
 }
 
 run().catch(err => {

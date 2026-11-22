@@ -102,6 +102,7 @@ function createHarness({ fetchImpl, voices = [], phoneVoiceEnabled = false } = {
         lastTurnContinuation: null,
         phoneSpeechPromise: null,
         phoneSpeechResolve: null,
+        activePhoneUtterance: null,
         userCancelRequested: false
     };
 
@@ -173,7 +174,7 @@ function createHarness({ fetchImpl, voices = [], phoneVoiceEnabled = false } = {
     };
 
     const exposed = vm.runInNewContext(
-        bundle + '\n({ startConversation, stopConversation, commitTurn, handleTvSpeechTurn, askAi, classifyTurnContinuation, setJarvisState })',
+        bundle + '\n({ startConversation, stopConversation, cancelBackendAiTask, commitTurn, handleTvSpeechTurn, askAi, classifyTurnContinuation, setJarvisState })',
         context
     );
 
@@ -414,7 +415,239 @@ async function run() {
         assert.equal(h.convoSession.turnLocked, false);
     }
 
-    console.log('test_web_convo_lifecycle PASS: 11 conversation lifecycle, error, STOP and turnId-race cases OK');
+    // 8. Phone speech Turn 1 completes -> Turn 2 revokes phoneVoiceEnabled -> falls back to TV eSpeak polling
+    {
+        const italianOffline = { name: 'Italiano', lang: 'it-IT', localService: true };
+        const h = createHarness({
+            phoneVoiceEnabled: true,
+            voices: [italianOffline],
+            fetchImpl: async (url, _opts, idx) => {
+                if (url.endsWith('/api/ai/speech_status')) {
+                    return {
+                        ok: true, status: 200,
+                        json: async () => ({ speaking: idx === 0, speech_state: idx === 0 ? 'PLAYING' : 'IDLE' })
+                    };
+                }
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({
+                        success: true, status: 'SUCCESS_VERIFIED',
+                        verified: true, execution_outcome: 'STATE_VERIFIED',
+                        reply: 'Comando eseguito.'
+                    })
+                };
+            }
+        });
+        h.exposed.startConversation();
+        h.convoSession.turnLocked = true;
+        const turn1Promise = h.exposed.commitTurn('Primo turno', ++h.convoSession.currentTurnId);
+        await new Promise(r => setImmediate(r));
+        assert.equal(h.spokenUtterances.length >= 1, true);
+        h.spokenUtterances[0].onend();
+        await turn1Promise;
+        assert.equal(h.convoSession.phoneSpeechPromise, null, 'Turn 1 must clear phoneSpeechPromise on onend');
+        assert.equal(h.convoSession.activePhoneUtterance, null, 'Turn 1 must clear activePhoneUtterance on onend');
+        assert.equal(h.speechRequests.length, 0);
+
+        // Turn 2: owner toggles phone audio off before speaking again
+        h.state.phoneVoiceEnabled = false;
+        h.convoSession.turnLocked = true;
+        await h.exposed.commitTurn('Secondo turno', ++h.convoSession.currentTurnId);
+        assert.ok(h.speechRequests.length >= 2, 'Turn 2 must fall back to TV /api/ai/speech_status polling');
+        assert.equal(h.convoSession.state, JarvisConvoState.READY);
+        assert.equal(h.convoSession.turnLocked, false);
+    }
+
+    // 9. cancelBackendAiTask during active SPEAKING state recovers conversation to READY without hanging
+    {
+        let speechStatusReads = 0;
+        const h = createHarness({
+            fetchImpl: async (url) => {
+                if (url.endsWith('/api/ai/speech_status')) {
+                    speechStatusReads++;
+                    return { ok: true, status: 200, json: async () => ({ speaking: true, speech_state: 'PLAYING' }) };
+                }
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({
+                        success: true, status: 'SUCCESS_VERIFIED',
+                        verified: true, execution_outcome: 'STATE_VERIFIED',
+                        reply: 'Parlo a lungo sulla TV.'
+                    })
+                };
+            }
+        });
+        h.exposed.startConversation();
+        h.convoSession.turnLocked = true;
+        const turnPromise = h.exposed.commitTurn('Parlami', ++h.convoSession.currentTurnId);
+        await new Promise(r => setImmediate(r));
+        await new Promise(r => setImmediate(r));
+        assert.equal(h.convoSession.state, JarvisConvoState.SPEAKING);
+        const turnIdBeforeCancel = h.convoSession.currentTurnId;
+
+        const cancelledOk = await h.exposed.cancelBackendAiTask();
+        assert.equal(cancelledOk, true);
+        await turnPromise;
+        assert.equal(h.convoSession.active, true, 'single STOP during SPEAKING keeps session READY');
+        assert.equal(h.convoSession.state, JarvisConvoState.READY);
+        assert.equal(h.convoSession.turnLocked, false);
+        assert.equal(h.elements.btnConvoTalkAgain.classList.contains('hidden'), false);
+        assert.ok(h.convoSession.currentTurnId > turnIdBeforeCancel, 'turnId incremented to invalidate old poll loop');
+        assert.equal(h.cancelRequests.length, 1);
+        assert.ok(speechStatusReads <= 3, 'poll loop must exit immediately on SPEAKING cancel');
+    }
+
+    // 10. HTTP 401 on /api/ai/speech_status expires session cleanly and poll carries 3000ms AbortSignal
+    {
+        let sawAbortSignal = false;
+        const h = createHarness({
+            fetchImpl: async (url, options) => {
+                if (url.endsWith('/api/ai/speech_status')) {
+                    sawAbortSignal = Boolean(options && options.signal);
+                    return { ok: false, status: 401, json: async () => ({ error: 'Session expired' }) };
+                }
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({
+                        success: true, status: 'SUCCESS_VERIFIED',
+                        verified: true, execution_outcome: 'STATE_VERIFIED',
+                        reply: 'Eseguito.'
+                    })
+                };
+            }
+        });
+        h.exposed.startConversation();
+        h.convoSession.turnLocked = true;
+        await h.exposed.commitTurn('Apri YouTube', ++h.convoSession.currentTurnId);
+        assert.equal(sawAbortSignal, true, 'speech_status poll must pass AbortSignal');
+        assert.ok(h.timerCalls.some(t => t.ms === 3000), 'speech_status poll must arm 3000ms timeout');
+        assert.equal(h.sessionExpiredCalled, true);
+        assert.equal(h.convoSession.active, false);
+        assert.equal(h.convoSession.state, JarvisConvoState.IDLE);
+        assert.equal(h.convoSession.turnLocked, false);
+        assert.equal(h.micStarts, 1, 'expired speech_status must not reopen mic');
+    }
+
+    // 11. Single-shot push-to-talk (#btn-voice-ai, convoSession.active === false) submits spoken command & recovers on no-speech/cancel
+    {
+        const singleShotSrc = [
+            extractFunction('initSpeechRecognition'),
+            extractFunction('toggleVoiceRecognition'),
+            extractFunction('stopListening')
+        ].join('\n') + '\n({ initSpeechRecognition, toggleVoiceRecognition, stopListening })';
+        let createdRec = null;
+        const askCalls = [];
+        const toasts = [];
+        let stopConvoCalled = false;
+        const btnClasses = new Set();
+        const activeClasses = new Set(['hidden']);
+        const el = {
+            voiceFootnote: { textContent: '' },
+            btnVoiceAi: { classList: { add(c) { btnClasses.add(c); }, remove(c) { btnClasses.delete(c); } } },
+            aiActiveLabel: { textContent: '' },
+            aiActiveState: { classList: { add(c) { activeClasses.add(c); }, remove(c) { activeClasses.delete(c); }, contains(c) { return activeClasses.has(c); } } },
+            aiTextInput: { value: '' }
+        };
+        const st = { isListening: false, speechRecognition: null };
+        const cs = { active: false, turnLocked: false, lastTranscript: '', vadTimer: null, silenceTimeoutMs: 1400, state: JarvisConvoState.IDLE };
+        class FakeSpeechRec {
+            constructor() { createdRec = this; }
+            start() { this.onstart(); }
+            stop() { this.onend(); }
+        }
+        const sb = {
+            window: { isSecureContext: true, SpeechRecognition: FakeSpeechRec },
+            location: { protocol: 'https:', hostname: 'tv.local' },
+            state: st,
+            convoSession: cs,
+            elements: el,
+            JarvisConvoState,
+            console,
+            setTimeout,
+            clearTimeout,
+            setJarvisState() {},
+            resetInactivityTimer() {},
+            triggerHaptic() {},
+            showToast(t, e) { toasts.push({ t, e }); },
+            stopConversation() { stopConvoCalled = true; },
+            commitTurn() { throw new Error('must not call commitTurn in single-shot mode'); },
+            askAi(q, speak) { askCalls.push({ q, speak }); }
+        };
+        const ss = vm.runInNewContext(singleShotSrc, sb);
+        ss.initSpeechRecognition();
+        assert.ok(st.speechRecognition === createdRec);
+
+        // Case A: final speech submits once and cleans listening UI
+        ss.toggleVoiceRecognition();
+        assert.equal(st.isListening, true);
+        assert.equal(btnClasses.has('listening'), true);
+        createdRec.onresult({
+            resultIndex: 0,
+            results: [{ isFinal: true, 0: { transcript: 'Apri RaiPlay' } }]
+        });
+        assert.deepEqual(askCalls, [{ q: 'Apri RaiPlay', speak: true }]);
+        assert.equal(st.isListening, false);
+        assert.equal(btnClasses.has('listening'), false);
+
+        // Case B: interim speech flushed via onend when no final was emitted
+        ss.toggleVoiceRecognition();
+        createdRec.onresult({
+            resultIndex: 0,
+            results: [{ isFinal: false, 0: { transcript: 'Metti canale 5' } }]
+        });
+        createdRec.onend();
+        assert.equal(askCalls.length, 2);
+        assert.deepEqual(askCalls[1], { q: 'Metti canale 5', speak: true });
+
+        // Case C: no-speech cleans UI without calling stopConversation
+        ss.toggleVoiceRecognition();
+        createdRec.onerror({ error: 'no-speech' });
+        assert.equal(activeClasses.has('hidden'), true);
+        assert.equal(stopConvoCalled, false);
+
+        // Case D: manual toggle stop clears transcript before stop() so nothing stray sends
+        ss.toggleVoiceRecognition();
+        cs.lastTranscript = 'Frase parziale annullata';
+        ss.toggleVoiceRecognition();
+        assert.equal(askCalls.length, 2, 'manual toggle stop must not send partial transcript');
+    }
+
+    // 12. cancelBackendAiTask during active phone TTS cleanly transitions SPEAKING -> READY without reopening mic
+    {
+        const italianOffline = { name: 'Italiano', lang: 'it-IT', localService: true };
+        const h = createHarness({
+            phoneVoiceEnabled: true,
+            voices: [italianOffline],
+            fetchImpl: async () => ({
+                ok: true, status: 200,
+                json: async () => ({
+                    success: true, status: 'ANSWERED_DIALOG',
+                    execution_outcome: 'NOT_TESTED', verified: false,
+                    reply: 'Ecco una spiegazione lunga sul telefono.'
+                })
+            })
+        });
+        h.exposed.startConversation();
+        h.convoSession.turnLocked = true;
+        const turnPromise = h.exposed.commitTurn('Raccontami tutto', ++h.convoSession.currentTurnId);
+        await new Promise(r => setImmediate(r));
+        assert.ok(h.convoSession.phoneSpeechPromise, 'phoneSpeechPromise must be active while speaking');
+        assert.equal(h.convoSession.state, JarvisConvoState.SPEAKING);
+
+        const cancelledOk = await h.exposed.cancelBackendAiTask();
+        assert.equal(cancelledOk, true);
+        await turnPromise;
+        assert.equal(h.convoSession.state, JarvisConvoState.READY);
+        assert.equal(h.convoSession.turnLocked, false);
+        assert.equal(h.convoSession.active, true);
+        assert.equal(h.convoSession.phoneSpeechPromise, null);
+        assert.equal(h.convoSession.activePhoneUtterance, null);
+        assert.equal(h.elements.btnConvoTalkAgain.classList.contains('hidden'), false);
+        assert.equal(h.micStarts, 1, 'STOP during phone TTS must not auto-reopen mic');
+        assert.equal(h.cancelRequests.length, 1);
+    }
+
+    console.log('test_web_convo_lifecycle PASS: 16 conversation lifecycle, push-to-talk, error, STOP, phone TTS cancel, 401 poll and turnId-race cases OK');
 }
 
 run().catch(err => {

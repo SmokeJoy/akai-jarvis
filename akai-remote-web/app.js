@@ -21,6 +21,7 @@
         speechRecognition: null,
         isListening: false,
         caFingerprint: null,
+        accessibilityActive: null,
         // Opt-in per page: never switch the TV to phone audio silently.
         phoneVoiceEnabled: false
     };
@@ -47,7 +48,11 @@
         lastTranscript: '',
         aiAbortController: null,
         lastQuery: '',
-        lastTurnContinuation: null
+        lastTurnContinuation: null,
+        phoneSpeechPromise: null,
+        phoneSpeechResolve: null,
+        activePhoneUtterance: null,
+        userCancelRequested: false
     };
 
     // DOM Elements Cache
@@ -118,6 +123,7 @@
         btnToggleCaInstructions: document.getElementById('btn-toggle-ca-instructions'),
         caInstructionsPanel: document.getElementById('ca-instructions-panel'),
         voiceEnvNotice: document.getElementById('voice-env-notice'),
+        accessibilityNotice: document.getElementById('accessibility-notice'),
 
         // Settings Modal
         modalSettings: document.getElementById('modal-settings'),
@@ -125,6 +131,7 @@
         serverHost: document.getElementById('server-host'),
         serverPort: document.getElementById('server-port'),
         sessionBadge: document.getElementById('session-badge'),
+        accessibilityBadge: document.getElementById('accessibility-badge'),
         btnSaveSettings: document.getElementById('btn-save-settings'),
         btnRevokeSession: document.getElementById('btn-revoke-session'),
 
@@ -233,12 +240,43 @@
         }
     }
 
+    function updateAccessibilityStatus(statusData) {
+        const active = (statusData && typeof statusData.accessibility_active === 'boolean')
+            ? statusData.accessibility_active
+            : null;
+        state.accessibilityActive = active;
+
+        if (elements.accessibilityBadge) {
+            if (active === true) {
+                elements.accessibilityBadge.textContent = 'Attivo';
+                elements.accessibilityBadge.style.color = 'var(--mint)';
+            } else if (active === false) {
+                elements.accessibilityBadge.textContent = 'Disattivato';
+                elements.accessibilityBadge.style.color = 'var(--warning)';
+            } else {
+                elements.accessibilityBadge.textContent = 'Non verificato';
+                elements.accessibilityBadge.style.color = 'var(--subtle)';
+            }
+        }
+
+        if (elements.accessibilityNotice) {
+            if (active === false) {
+                elements.accessibilityNotice.textContent = 'Servizio Accessibilità TV disattivato: JARVIS può aprire le app, ma per navigare e verificare le schermate abilita JARVIS in Impostazioni → Accessibilità sulla TV.';
+                elements.accessibilityNotice.classList.remove('hidden');
+            } else {
+                elements.accessibilityNotice.textContent = '';
+                elements.accessibilityNotice.classList.add('hidden');
+            }
+        }
+    }
+
     // Check TV connection status
     async function checkConnection() {
         const t0 = performance.now();
+        let timeoutId = null;
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 3500);
+            timeoutId = setTimeout(() => controller.abort(), 3500);
 
             const headers = {};
             if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
@@ -248,23 +286,30 @@
                 signal: controller.signal
             });
             clearTimeout(timeoutId);
+            timeoutId = null;
 
             state.pingMs = Math.round(performance.now() - t0);
 
             if (res.ok) {
                 const data = await res.json();
+                updateAccessibilityStatus(data);
                 if (data.authenticated) {
                     setConnectionState('connected', 'Connesso');
                 } else {
                     setConnectionState('pairing', 'Da associare');
                 }
             } else if (res.status === 401) {
+                updateAccessibilityStatus(null);
                 handleSessionExpired();
             } else {
+                updateAccessibilityStatus(null);
                 setConnectionState('disconnected', 'TV offline');
             }
         } catch (e) {
+            updateAccessibilityStatus(null);
             setConnectionState('disconnected', 'Non raggiungibile');
+        } finally {
+            if (timeoutId !== null) clearTimeout(timeoutId);
         }
     }
 
@@ -341,9 +386,11 @@
                 elements.jarvisLiveTranscript.classList.add('active');
                 if (elements.btnConvoTalkAgain) elements.btnConvoTalkAgain.classList.add('hidden');
             } else {
-                elements.btnVoiceAi.classList.add('listening');
-                elements.aiActiveLabel.textContent = 'In ascolto...';
-                elements.aiActiveState.classList.remove('hidden');
+                convoSession.lastTranscript = '';
+                clearTimeout(convoSession.vadTimer);
+                if (elements.btnVoiceAi) elements.btnVoiceAi.classList.add('listening');
+                if (elements.aiActiveLabel) elements.aiActiveLabel.textContent = 'In ascolto...';
+                if (elements.aiActiveState) elements.aiActiveState.classList.remove('hidden');
             }
             triggerHaptic(20);
             resetInactivityTimer();
@@ -354,7 +401,7 @@
             resetInactivityTimer();
 
             // P1-02: Atomically lock turn to avoid duplicate submissions
-            if (!convoSession.active || convoSession.turnLocked) {
+            if (convoSession.turnLocked) {
                 return;
             }
 
@@ -370,10 +417,12 @@
                 }
             }
 
-            const currentText = (final || interim).trim();
+            const finalTrimmed = final.trim();
+            const interimTrimmed = interim.trim();
+            const currentText = finalTrimmed || interimTrimmed;
             if (currentText) {
                 convoSession.lastTranscript = currentText;
-                if (elements.jarvisLiveTranscript) {
+                if (convoSession.active && elements.jarvisLiveTranscript) {
                     elements.jarvisLiveTranscript.textContent = `«${currentText}»`;
                     elements.jarvisLiveTranscript.classList.add('active');
                 }
@@ -383,14 +432,31 @@
             }
 
             // Lock and commit once final phrase or VAD pause is hit
-            if (final) {
-                convoSession.turnLocked = true;
-                commitTurn(final, ++convoSession.currentTurnId);
-            } else if (interim) {
-                convoSession.vadTimer = setTimeout(() => {
-                    if (!convoSession.active || convoSession.turnLocked) return;
+            if (convoSession.active) {
+                if (finalTrimmed) {
                     convoSession.turnLocked = true;
-                    commitTurn(interim, ++convoSession.currentTurnId);
+                    commitTurn(finalTrimmed, ++convoSession.currentTurnId);
+                } else if (interimTrimmed) {
+                    convoSession.vadTimer = setTimeout(() => {
+                        if (!convoSession.active || convoSession.turnLocked) return;
+                        convoSession.turnLocked = true;
+                        commitTurn(interimTrimmed, ++convoSession.currentTurnId);
+                    }, convoSession.silenceTimeoutMs);
+                }
+            } else if (finalTrimmed) {
+                convoSession.turnLocked = true;
+                convoSession.lastTranscript = '';
+                stopListening();
+                try { recognizer.stop(); } catch (ignored) {}
+                askAi(finalTrimmed, true);
+            } else if (interimTrimmed) {
+                convoSession.vadTimer = setTimeout(() => {
+                    if (convoSession.active || convoSession.turnLocked) return;
+                    convoSession.turnLocked = true;
+                    convoSession.lastTranscript = '';
+                    stopListening();
+                    try { recognizer.stop(); } catch (ignored) {}
+                    askAi(interimTrimmed, true);
                 }, convoSession.silenceTimeoutMs);
             }
         };
@@ -402,21 +468,32 @@
                     setJarvisState(JarvisConvoState.READY, 'Tocca a te', 'ready');
                     elements.jarvisLiveTranscript.textContent = 'Non ho sentito nulla. Tocca per parlare o termina.';
                     if (elements.btnConvoTalkAgain) elements.btnConvoTalkAgain.classList.remove('hidden');
+                } else {
+                    convoSession.lastTranscript = '';
+                    clearTimeout(convoSession.vadTimer);
+                    stopListening();
+                    showToast('Nessuna voce rilevata.', true);
                 }
             } else if (event.error !== 'aborted') {
-                setJarvisState(JarvisConvoState.ERROR, 'Errore microfono', 'error');
                 if (event.error === 'not-allowed') {
                     showToast('Microfono: not-allowed (Accesso negato. Su iOS: verifica permessi sito e abilita la Root CA in Generali > Info > Attendibilità certificati)', true);
                 } else {
                     showToast(`Microfono: ${event.error}`, true);
                 }
-                stopConversation();
+                if (convoSession.active) {
+                    setJarvisState(JarvisConvoState.ERROR, 'Errore microfono', 'error');
+                    stopConversation();
+                } else {
+                    convoSession.lastTranscript = '';
+                    clearTimeout(convoSession.vadTimer);
+                    stopListening();
+                }
             }
         };
 
         recognizer.onend = () => {
             state.isListening = false;
-            elements.btnVoiceAi.classList.remove('listening');
+            if (elements.btnVoiceAi) elements.btnVoiceAi.classList.remove('listening');
 
             // P1-02: Guard against duplicate calls
             if (convoSession.active && !convoSession.turnLocked && convoSession.state === JarvisConvoState.LISTENING) {
@@ -426,6 +503,18 @@
                 } else {
                     setJarvisState(JarvisConvoState.READY, 'Tocca a te', 'ready');
                     if (elements.btnConvoTalkAgain) elements.btnConvoTalkAgain.classList.remove('hidden');
+                }
+            } else if (!convoSession.active) {
+                clearTimeout(convoSession.vadTimer);
+                if (!convoSession.turnLocked && convoSession.lastTranscript) {
+                    const phrase = convoSession.lastTranscript;
+                    convoSession.lastTranscript = '';
+                    convoSession.turnLocked = true;
+                    stopListening();
+                    askAi(phrase, true);
+                } else {
+                    convoSession.lastTranscript = '';
+                    stopListening();
                 }
             }
         };
@@ -480,12 +569,24 @@
     }
 
     async function cancelBackendAiTask() {
+        const hadPhoneSpeech = Boolean(convoSession.phoneSpeechPromise || convoSession.activePhoneUtterance);
         stopPhoneSpeech();
-        const hadInFlight = Boolean(convoSession.aiAbortController);
+        const wasSpeakingInConvo = Boolean(convoSession.active
+            && (convoSession.state === JarvisConvoState.SPEAKING || hadPhoneSpeech));
+        const hadInFlight = Boolean(convoSession.aiAbortController) || wasSpeakingInConvo || hadPhoneSpeech;
+        convoSession.userCancelRequested = true;
         if (convoSession.aiAbortController) {
-            convoSession.userCancelRequested = true;
             try { convoSession.aiAbortController.abort(); } catch (e) {}
             convoSession.aiAbortController = null;
+        }
+        if (wasSpeakingInConvo) {
+            convoSession.currentTurnId++;
+            convoSession.turnLocked = false;
+            setJarvisState(JarvisConvoState.READY, 'Risposta interrotta — tocca per parlare', 'ready');
+            if (elements.btnConvoTalkAgain) {
+                elements.btnConvoTalkAgain.classList.remove('hidden');
+            }
+            resetInactivityTimer();
         }
         if (elements.aiActiveState) {
             elements.aiActiveState.classList.add('hidden');
@@ -591,7 +692,10 @@
         const continuation = convoSession.lastTurnContinuation || (ok ? 'SPEAK_AND_RESUME' : 'TERMINAL_RECOVERABLE');
         if (continuation === 'SPEAK_AND_RESUME') {
             const phoneSpeechTurn = convoSession.phoneSpeechPromise;
-            if (phoneSpeechTurn) await phoneSpeechTurn;
+            if (phoneSpeechTurn) {
+                setJarvisState(JarvisConvoState.SPEAKING, 'Risposta vocale sul telefono...', 'speaking');
+                await phoneSpeechTurn;
+            }
             if (!convoSession.active || effectiveTurnId !== convoSession.currentTurnId) {
                 return;
             }
@@ -615,9 +719,11 @@
     async function handleTvSpeechTurn(phoneAlreadySpoken = false, turnId = convoSession.currentTurnId) {
         if (!convoSession.active || turnId !== convoSession.currentTurnId) return;
 
-        setJarvisState(JarvisConvoState.SPEAKING,
-            phoneAlreadySpoken ? 'Risposta vocale locale completata' : 'La TV sta rispondendo...',
-            'speaking');
+        if (!phoneAlreadySpoken || convoSession.state !== JarvisConvoState.SPEAKING) {
+            setJarvisState(JarvisConvoState.SPEAKING,
+                phoneAlreadySpoken ? 'Risposta vocale locale completata' : 'La TV sta rispondendo...',
+                'speaking');
+        }
 
         let pollCount = 0;
         let speechSeen = false;
@@ -627,11 +733,22 @@
             await new Promise(r => setTimeout(r, 400));
             if (!convoSession.active || turnId !== convoSession.currentTurnId) return;
 
+            let pollTimeoutId = null;
             try {
+                const pollAbortController = new AbortController();
+                pollTimeoutId = setTimeout(() => pollAbortController.abort(), 3000);
                 const res = await fetch(getApiUrl('/api/ai/speech_status'), {
-                    headers: { 'Authorization': `Bearer ${state.token}` }
+                    headers: { 'Authorization': `Bearer ${state.token}` },
+                    signal: pollAbortController.signal
                 });
+                clearTimeout(pollTimeoutId);
+                pollTimeoutId = null;
                 if (!convoSession.active || turnId !== convoSession.currentTurnId) return;
+                if (res.status === 401) {
+                    handleSessionExpired();
+                    stopConversation();
+                    return;
+                }
                 if (res.ok) {
                     const data = await res.json();
                     const sState = data.speech_state || (data.speaking ? 'PLAYING' : 'IDLE');
@@ -642,7 +759,9 @@
                         break;
                     }
                 }
-            } catch (ignored) {}
+            } catch (ignored) {} finally {
+                if (pollTimeoutId !== null) clearTimeout(pollTimeoutId);
+            }
 
             pollCount++;
             // If after 10 checks (4s) speech was never seen, assume local silent execution
@@ -685,7 +804,9 @@
         }
 
         if (state.isListening) {
-            state.speechRecognition.stop();
+            convoSession.lastTranscript = '';
+            clearTimeout(convoSession.vadTimer);
+            try { state.speechRecognition.stop(); } catch (ignored) {}
             stopListening();
         } else {
             try {
@@ -698,8 +819,14 @@
 
     function stopListening() {
         state.isListening = false;
-        elements.btnVoiceAi.classList.remove('listening');
-        if (!elements.aiActiveLabel.textContent.includes('Elaborazione')) {
+        if (!convoSession.active) {
+            clearTimeout(convoSession.vadTimer);
+        }
+        if (elements.btnVoiceAi) {
+            elements.btnVoiceAi.classList.remove('listening');
+        }
+        if (elements.aiActiveLabel && elements.aiActiveState
+                && !elements.aiActiveLabel.textContent.includes('Elaborazione')) {
             elements.aiActiveState.classList.add('hidden');
         }
     }
@@ -734,6 +861,7 @@
     }
 
     function stopPhoneSpeech() {
+        convoSession.activePhoneUtterance = null;
         if (convoSession.phoneSpeechResolve) {
             convoSession.phoneSpeechResolve();
             convoSession.phoneSpeechResolve = null;
@@ -750,17 +878,29 @@
         stopPhoneSpeech();
         const utterance = new window.SpeechSynthesisUtterance(text.slice(0, 1800));
         utterance.voice = voice;
-        utterance.lang = 'it-IT';
+        utterance.lang = (voice && voice.lang) ? voice.lang : 'it-IT';
         utterance.rate = 0.97;
-        convoSession.phoneSpeechPromise = new Promise(resolve => {
+        convoSession.activePhoneUtterance = utterance;
+        let finishedEarly = false;
+        let currentPromise = null;
+        currentPromise = new Promise(resolve => {
             let done = false;
             let watchdog;
             const finish = () => {
                 if (done) return;
                 done = true;
+                finishedEarly = true;
                 clearTimeout(watchdog);
+                utterance.onend = null;
+                utterance.onerror = null;
+                if (convoSession.activePhoneUtterance === utterance) {
+                    convoSession.activePhoneUtterance = null;
+                }
                 if (convoSession.phoneSpeechResolve === finish) {
                     convoSession.phoneSpeechResolve = null;
+                }
+                if (convoSession.phoneSpeechPromise === currentPromise) {
+                    convoSession.phoneSpeechPromise = null;
                 }
                 resolve();
             };
@@ -772,7 +912,8 @@
             try { window.speechSynthesis.speak(utterance); }
             catch (error) { finish(); }
         });
-        return true;
+        convoSession.phoneSpeechPromise = finishedEarly ? null : currentPromise;
+        return !finishedEarly;
     }
 
     // =========================================================================
@@ -886,8 +1027,12 @@
                 displayAiResponse(data, query);
                 // The owner may turn phone audio off while a cloud task is pending.
                 // Never restart mobile speech after the opt-in has been revoked.
-                if (usePhoneSpeech && state.phoneVoiceEnabled && data.status !== 'CANCELLED'
-                        && !convoSession.userCancelRequested && typeof data.reply === 'string') {
+                const phoneSpeechSuppressed = data.status === 'CANCELLED'
+                    || data.status === 'PRIVACY_BLOCKED'
+                    || data.status === 'BUDGET_EXCEEDED'
+                    || convoSession.userCancelRequested;
+                if (usePhoneSpeech && state.phoneVoiceEnabled && !phoneSpeechSuppressed
+                        && typeof data.reply === 'string' && data.reply.trim().length > 0) {
                     if (!speakPhoneReply(data.reply)) {
                         showToast('Voce locale non disponibile; risposta mostrata a schermo.', true);
                     }
@@ -1010,8 +1155,13 @@
                     && data.execution_outcome === 'COMMAND_SENT'
                     && data.verified !== true && data.success !== true) {
                 elements.aiBadgeStatus.className = 'ai-badge-status unverified';
-                elements.aiBadgeStatus.textContent = '⚠️ Eseguito (Non Verificato)';
-                showToast('Comando inviato (Non verificato)');
+                const visualHint = data.needs_visual_confirmation === true;
+                elements.aiBadgeStatus.textContent = visualHint
+                    ? '⚠️ Non Verificato — Conferma Visiva'
+                    : '⚠️ Eseguito (Non Verificato)';
+                showToast(visualHint
+                    ? 'Verifica sulla TV se il comando è riuscito'
+                    : 'Comando inviato (Non verificato)');
                 if (elements.aiRetryBox) elements.aiRetryBox.classList.add('hidden');
             } else if (data.status === 'BUDGET_EXCEEDED') {
                 elements.aiBadgeStatus.className = 'ai-badge-status blocked';
@@ -1922,6 +2072,11 @@
 
         if (elements.btnConvoTalkAgain) {
             elements.btnConvoTalkAgain.addEventListener('click', () => {
+                if (!state.speechRecognition) return;
+                convoSession.turnLocked = false;
+                convoSession.lastTranscript = '';
+                clearTimeout(convoSession.vadTimer);
+                resetInactivityTimer();
                 try {
                     state.speechRecognition.start();
                 } catch (e) {
@@ -2082,8 +2237,12 @@
                 if (!state.phoneVoiceEnabled) stopPhoneSpeech();
                 updatePhoneVoiceStatus();
             });
-            if (window.speechSynthesis && window.speechSynthesis.addEventListener) {
-                window.speechSynthesis.addEventListener('voiceschanged', updatePhoneVoiceStatus);
+            if (window.speechSynthesis) {
+                if (typeof window.speechSynthesis.addEventListener === 'function') {
+                    window.speechSynthesis.addEventListener('voiceschanged', updatePhoneVoiceStatus);
+                } else if ('onvoiceschanged' in window.speechSynthesis) {
+                    window.speechSynthesis.onvoiceschanged = updatePhoneVoiceStatus;
+                }
             }
             updatePhoneVoiceStatus();
         }

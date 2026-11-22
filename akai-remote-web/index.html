@@ -73,6 +73,8 @@
 
                     <!-- Honest Voice Context Notice (Secure Context / Offline STT Requirements) -->
                     <div id="voice-env-notice" class="voice-env-notice hidden" role="alert"></div>
+                    <!-- Read-only Accessibility Service Notice from GET /api/status -->
+                    <div id="accessibility-notice" class="voice-env-notice hidden" role="status"></div>
 
                     <div class="orb-space">
                         <div class="halo"></div>
@@ -459,6 +461,10 @@
                         <div class="token-status-box">
                             <span class="token-label">Stato Sessione Dispositivo:</span>
                             <span id="session-badge" class="session-badge">Nessun token</span>
+                        </div>
+                        <div class="token-status-box">
+                            <span class="token-label">Servizio Accessibilità TV:</span>
+                            <span id="accessibility-badge" class="session-badge">Non verificato</span>
                         </div>
                         <div class="settings-actions">
                             <button id="btn-save-settings" class="btn-primary-action">Salva & Riconnetti</button>
