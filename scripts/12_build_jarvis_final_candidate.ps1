@@ -285,7 +285,17 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $baseApk)) {
 # 5. Compilazione Java
 Write-Host "[5/8] Compilazione classi Java (sorgenti + R.java)..."
 $javaFiles = Get-ChildItem -Path $javaDir, $genDir -Filter "*.java" -Recurse | Select-Object -ExpandProperty FullName
-& $javac -encoding UTF-8 -source 1.8 -target 1.8 -bootclasspath $platformJar -cp $platformJar -d $classesDir $javaFiles
+$javacArgFile = Join-Path $buildDir "javac-args.txt"
+$javacArgsList = [System.Collections.Generic.List[string]]::new()
+foreach ($opt in @('-encoding', 'UTF-8', '-source', '1.8', '-target', '1.8', '-bootclasspath')) { [void]$javacArgsList.Add($opt) }
+[void]$javacArgsList.Add('"' + $platformJar.Replace('\', '/') + '"')
+[void]$javacArgsList.Add('-cp')
+[void]$javacArgsList.Add('"' + $platformJar.Replace('\', '/') + '"')
+[void]$javacArgsList.Add('-d')
+[void]$javacArgsList.Add('"' + $classesDir.Replace('\', '/') + '"')
+foreach ($jf in $javaFiles) { [void]$javacArgsList.Add('"' + $jf.Replace('\', '/') + '"') }
+[IO.File]::WriteAllLines($javacArgFile, $javacArgsList, [Text.UTF8Encoding]::new($false))
+& $javac "@$javacArgFile"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRORE durante javac." -ForegroundColor Red
     exit 1
@@ -293,9 +303,18 @@ if ($LASTEXITCODE -ne 0) {
 
 # 6. Generazione Dalvik Executable (classes.dex)
 Write-Host "[6/8] Generazione Dalvik Executable (classes.dex) con d8..."
-$classFiles = Get-ChildItem -Path $classesDir -Filter "*.class" -Recurse | Select-Object -ExpandProperty FullName
-$d8Args = @("-cp", $d8Jar, "com.android.tools.r8.D8", "--min-api", "21", "--lib", $platformJar, "--output", $dexDir) + $classFiles
-& $java $d8Args
+$relClassFiles = @(Get-ChildItem -Path $classesDir -Filter "*.class" -Recurse | ForEach-Object {
+    $_.FullName.Substring($classesDir.Length).TrimStart('\', '/')
+})
+$d8ArgFile = Join-Path $buildDir "d8-inputs.txt"
+[IO.File]::WriteAllLines($d8ArgFile, $relClassFiles, [Text.UTF8Encoding]::new($false))
+Push-Location $classesDir
+try {
+    $d8Args = @("-cp", $d8Jar, "com.android.tools.r8.D8", "--min-api", "21", "--lib", $platformJar, "--output", $dexDir, "@$d8ArgFile")
+    & $java $d8Args
+} finally {
+    Pop-Location
+}
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $dexDir "classes.dex"))) { throw "D8 fallito: classes.dex mancante" }
 
 # 7. Packaging completo (classes.dex + lib/armeabi-v7a + assets)
