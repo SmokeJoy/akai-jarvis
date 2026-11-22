@@ -305,6 +305,12 @@ public class TvController {
         return intent;
     }
 
+    /**
+     * Dispatches a TIF-aligned TV input intent after verifying resolution via PackageManager.
+     * Note: a successful return (`CommandResult(true, ...)`) semantically means only `COMMAND_SENT`
+     * (intent resolved and passed to `startActivity`), NEVER final `STATE_VERIFIED`.
+     * Android 9 public API 28 `TvInputManager` exposes no active-input query for third-party apps.
+     */
     private CommandResult executeTvInputAction(String action, String label) {
         PackageManager pm = context.getPackageManager();
         if (pm == null) {

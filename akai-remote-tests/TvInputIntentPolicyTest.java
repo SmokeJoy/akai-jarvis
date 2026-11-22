@@ -140,6 +140,55 @@ public class TvInputIntentPolicyTest {
                 "it.akai.customhome.v8",
                 Arrays.asList("Chiudi app", "YouTube")), "Non-system launcher text should not falsely match");
 
-        System.out.println("TvInputIntentPolicyTest PASS: 16 TIF URI, discovery, candidate order and OEM ANR/crash assertions OK.");
+        // 7. Fail-closed TV input UI evidence helpers (DTV / HDMI / InputsPanelActivity)
+        assertTrue(TvInputIntentPolicy.isInputsPanelActivity(TvInputIntentPolicy.TV_CENTER_INPUTS_ACTIVITY),
+                "Full InputsPanelActivity matches");
+        assertTrue(TvInputIntentPolicy.isInputsPanelActivity("InputsPanelActivity"),
+                "Simple InputsPanelActivity matches");
+        assertTrue(TvInputIntentPolicy.isInputsPanelActivity(".nav.inputpanel.InputsPanelActivity"),
+                "Relative .InputsPanelActivity matches");
+        assertTrue(!TvInputIntentPolicy.isInputsPanelActivity(TvInputIntentPolicy.TV_CENTER_MAIN_ACTIVITY),
+                "TurnkeyUiMainActivity is not InputsPanelActivity");
+        assertTrue(!TvInputIntentPolicy.isInputsPanelActivity(null), "null activity rejected");
+
+        assertTrue(TvInputIntentPolicy.hasExternalSourceLabel(Arrays.asList("HDMI 1", "1080p")), "HDMI 1 is external");
+        assertTrue(TvInputIntentPolicy.hasExternalSourceLabel(Arrays.asList("ComposItO / AV 1")), "Composite/AV is external");
+        assertTrue(!TvInputIntentPolicy.hasExternalSourceLabel(Arrays.asList("Rai 1 HD", "Nessun segnale")), "DTV/no signal not external");
+
+        assertTrue(TvInputIntentPolicy.hasInputsPanelUiCues(Arrays.asList("Ingressi", "TV", "HDMI 1", "HDMI 2")),
+                "Inputs panel header + >=2 sources");
+        assertTrue(TvInputIntentPolicy.hasInputsPanelUiCues(Arrays.asList("Input Source", "DTV", "HDMI 3")),
+                "English input source list");
+        assertTrue(!TvInputIntentPolicy.hasInputsPanelUiCues(Arrays.asList("Ingressi")),
+                "Single header word alone insufficient");
+        assertTrue(!TvInputIntentPolicy.hasInputsPanelUiCues(Arrays.asList("HDMI 1", "HDMI 2")),
+                "Ports without panel header insufficient");
+
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Rai 1 HD", "DTV")), "DTV + Rai 1 positive");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("CH 001")), "CH 001 positive");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Canale 5")), "Canale 5 positive");
+        assertTrue(TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("DVB-T2")), "DVB-T2 positive");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Collections.<String>emptyList()), "Empty DTV denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Nessun segnale")), "Nessun segnale denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("No signal")), "No signal denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("1080p 60Hz")), "Resolution OSD alone denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("LiveTV")), "LiveTV title alone denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("TV")), "Generic TV alone denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Uscita digitale")), "Uscita digitale denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Digitale")), "Bare Digitale denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Canale")), "Bare Canale denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("HDMI 1", "DTV")), "DTV conflicting with HDMI 1 denied");
+        assertTrue(!TvInputIntentPolicy.hasPositiveDtvEvidence(Arrays.asList("Ingressi", "DTV", "HDMI 1")), "Open inputs menu denied as DTV");
+
+        assertTrue(TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Arrays.asList("HDMI 1", "1080p 60Hz")), "HDMI 1 positive");
+        assertTrue(TvInputIntentPolicy.hasPositiveHdmiPortEvidence(2, Arrays.asList("HDMI2")), "HDMI2 positive");
+        assertTrue(!TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Arrays.asList("HDMI 10")), "HDMI 10 rejected for port 1");
+        assertTrue(!TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Arrays.asList("HDMI 1", "HDMI 2")), "Ambiguous multiple HDMI rejected");
+        assertTrue(!TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Arrays.asList("Ingressi", "HDMI 1", "HDMI 2")), "Open inputs panel rejected for HDMI 1");
+        assertTrue(!TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Arrays.asList("HDMI 1", "DTV")), "Mixed HDMI 1 + DTV rejected");
+        assertTrue(!TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Arrays.asList("Nessun segnale")), "Nessun segnale rejected for HDMI");
+        assertTrue(!TvInputIntentPolicy.hasPositiveHdmiPortEvidence(1, Collections.<String>emptyList()), "Empty rejected for HDMI");
+
+        System.out.println("TvInputIntentPolicyTest PASS: TIF URI, discovery, candidate order, OEM ANR and fail-closed UI evidence assertions OK.");
     }
 }

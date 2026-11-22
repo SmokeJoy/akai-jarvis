@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Pure Java 8 Android TV Input Framework (TIF) intent and OEM anomaly policy.
@@ -30,6 +31,9 @@ public final class TvInputIntentPolicy {
     public static final String DEFAULT_HDMI1_INPUT_ID = "com.mediatek.tvinput/.hdmi.HDMIInputService/HW6";
     public static final String DEFAULT_HDMI2_INPUT_ID = "com.mediatek.tvinput/.hdmi.HDMIInputService/HW7";
     public static final String DEFAULT_HDMI3_INPUT_ID = "com.mediatek.tvinput/.hdmi.HDMIInputService/HW8";
+
+    private static final Pattern DTV_CHANNEL_NUM_PATTERN =
+            Pattern.compile("(?:^| )(?:ch|canale|dtv) [0-9]{1,3}(?: |$)");
 
     private TvInputIntentPolicy() {}
 
@@ -256,6 +260,143 @@ public final class TvInputIntentPolicy {
         String lower = raw.toLowerCase(Locale.ITALIAN).trim();
         String norm = Normalizer.normalize(lower, Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
         return norm.replaceAll("[^a-z0-9]+", " ").replaceAll("\\s+", " ").trim();
+    }
+
+    private static boolean hasWholePhrase(String normalizedText, String phrase) {
+        if (normalizedText == null || normalizedText.isEmpty() || phrase == null || phrase.isEmpty()) {
+            return false;
+        }
+        return (" " + normalizedText + " ").contains(" " + phrase + " ");
+    }
+
+    private static boolean hasAnyWholePhrase(String normalizedText, String... phrases) {
+        for (String p : phrases) {
+            if (hasWholePhrase(normalizedText, p)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean isInputsPanelActivity(String activityClass) {
+        if (!notBlank(activityClass)) {
+            return false;
+        }
+        String trimmed = activityClass.trim();
+        return TV_CENTER_INPUTS_ACTIVITY.equals(trimmed)
+                || "InputsPanelActivity".equals(trimmed)
+                || trimmed.endsWith(".InputsPanelActivity");
+    }
+
+    public static boolean hasExternalSourceLabel(List<String> visibleTexts) {
+        if (visibleTexts == null || visibleTexts.isEmpty()) {
+            return false;
+        }
+        for (String raw : visibleTexts) {
+            String norm = normalizeText(raw);
+            if (hasAnyWholePhrase(norm,
+                    "hdmi", "hdmi 1", "hdmi1", "hdmi 2", "hdmi2", "hdmi 3", "hdmi3",
+                    "av", "av 1", "av1", "composito", "composite", "component", "scart", "vga")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean hasInputsPanelUiCues(List<String> visibleTexts) {
+        if (visibleTexts == null || visibleTexts.isEmpty()) {
+            return false;
+        }
+        boolean hasHeader = false;
+        boolean sawDtv = false;
+        boolean sawHdmi1 = false;
+        boolean sawHdmi2 = false;
+        boolean sawHdmi3 = false;
+        boolean sawAvOther = false;
+        for (String raw : visibleTexts) {
+            String norm = normalizeText(raw);
+            if (norm.isEmpty()) continue;
+            if (hasAnyWholePhrase(norm,
+                    "ingressi", "sorgenti", "inputs", "input source", "input list",
+                    "seleziona ingresso", "selezione ingressi", "lista ingressi",
+                    "sorgente ingresso", "elenco ingressi", "source list")) {
+                hasHeader = true;
+            }
+            if (hasAnyWholePhrase(norm, "dtv", "digitale terrestre", "tv", "antenna", "canali tv")) {
+                sawDtv = true;
+            }
+            if (hasAnyWholePhrase(norm, "hdmi 1", "hdmi1")) {
+                sawHdmi1 = true;
+            }
+            if (hasAnyWholePhrase(norm, "hdmi 2", "hdmi2")) {
+                sawHdmi2 = true;
+            }
+            if (hasAnyWholePhrase(norm, "hdmi 3", "hdmi3")) {
+                sawHdmi3 = true;
+            }
+            if (hasAnyWholePhrase(norm, "av", "av 1", "av1", "composito", "composite", "component", "scart", "vga")) {
+                sawAvOther = true;
+            }
+        }
+        int distinctSources = (sawDtv ? 1 : 0) + (sawHdmi1 ? 1 : 0) + (sawHdmi2 ? 1 : 0)
+                + (sawHdmi3 ? 1 : 0) + (sawAvOther ? 1 : 0);
+        return hasHeader && distinctSources >= 2;
+    }
+
+    public static boolean hasPositiveDtvEvidence(List<String> visibleTexts) {
+        if (visibleTexts == null || visibleTexts.isEmpty()) {
+            return false;
+        }
+        if (hasExternalSourceLabel(visibleTexts) || hasInputsPanelUiCues(visibleTexts)) {
+            return false;
+        }
+        for (String raw : visibleTexts) {
+            String norm = normalizeText(raw);
+            if (norm.isEmpty()) continue;
+            if (hasAnyWholePhrase(norm,
+                    "dtv", "dvb", "dvb t", "dvbt", "dvb t2", "dvbt2",
+                    "digitale terrestre", "tuner", "tv digitale", "antenna tv",
+                    "lcn", "guida tv", "epg", "televideo")) {
+                return true;
+            }
+            if (hasAnyWholePhrase(norm,
+                    "rai 1", "rai1", "rai 2", "rai2", "rai 3", "rai3",
+                    "rete 4", "rete4", "canale 5", "canale5",
+                    "italia 1", "italia1", "la 7", "la7",
+                    "tv8", "rai news", "tgcom24")) {
+                return true;
+            }
+            if (DTV_CHANNEL_NUM_PATTERN.matcher(norm).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean hasPositiveHdmiPortEvidence(int portNumber, List<String> visibleTexts) {
+        if (portNumber < 1 || portNumber > 3 || visibleTexts == null || visibleTexts.isEmpty()) {
+            return false;
+        }
+        if (hasInputsPanelUiCues(visibleTexts)) {
+            return false;
+        }
+        boolean matchedTarget = false;
+        for (String raw : visibleTexts) {
+            String norm = normalizeText(raw);
+            if (norm.isEmpty()) continue;
+            if (hasAnyWholePhrase(norm, "dtv", "dvb t", "dvbt", "dvb t2", "dvbt2", "digitale terrestre")) {
+                return false;
+            }
+            for (int other = 1; other <= 3; other++) {
+                if (other != portNumber && hasAnyWholePhrase(norm, "hdmi " + other, "hdmi" + other)) {
+                    return false;
+                }
+            }
+            if (hasAnyWholePhrase(norm, "hdmi " + portNumber, "hdmi" + portNumber)) {
+                matchedTarget = true;
+            }
+        }
+        return matchedTarget;
     }
 
     public static String detectOemDialogAnomaly(String foregroundPackage, List<String> visibleTexts) {

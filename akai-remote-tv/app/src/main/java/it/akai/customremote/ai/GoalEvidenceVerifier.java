@@ -13,6 +13,9 @@ import java.util.Locale;
  * A true result here must ALSO pass the plan's success_condition.
  */
 public final class GoalEvidenceVerifier {
+    public static final long MAX_TV_INPUT_EVIDENCE_AGE_MS = 15000L;
+    private static final long MAX_CLOCK_SKEW_MS = 5000L;
+
     private GoalEvidenceVerifier() {}
 
     public static final class Verdict {
@@ -82,7 +85,13 @@ public final class GoalEvidenceVerifier {
      */
     public static Verdict verify(String goal, String successCondition,
                                  ScreenPerceptionEngine.PerceptionSnapshot snapshot) {
-        Verdict observed = verify(goal, snapshot);
+        return verify(goal, successCondition, snapshot, System.currentTimeMillis(), 0L);
+    }
+
+    public static Verdict verify(String goal, String successCondition,
+                                 ScreenPerceptionEngine.PerceptionSnapshot snapshot,
+                                 long nowMs, long minTimestampMs) {
+        Verdict observed = verify(goal, snapshot, nowMs, minTimestampMs);
         if (!observed.satisfied) return observed;
         String q = normalize(goal);
         boolean compound = has(q, "poi") || (has(q, "e")
@@ -128,7 +137,27 @@ public final class GoalEvidenceVerifier {
         return observed;
     }
 
+    private static Verdict checkTvInputFreshness(ScreenPerceptionEngine.PerceptionSnapshot snapshot,
+                                                 long nowMs, long minTimestampMs) {
+        if (snapshot.timestamp <= 0L) {
+            return denied("tv_input", "Snapshot TV privo di timestamp valido: conferma visiva richiesta");
+        }
+        if (minTimestampMs > 0L && snapshot.timestamp < minTimestampMs) {
+            return denied("tv_input", "Evidenza TV precedente al comando inviato (snapshot stantio): conferma visiva richiesta");
+        }
+        if ((nowMs - snapshot.timestamp) > MAX_TV_INPUT_EVIDENCE_AGE_MS
+                || (snapshot.timestamp - nowMs) > MAX_CLOCK_SKEW_MS) {
+            return denied("tv_input", "Evidenza OSD/Accessibilita' TV scaduta: conferma visiva richiesta al proprietario");
+        }
+        return null;
+    }
+
     public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot) {
+        return verify(goal, snapshot, System.currentTimeMillis(), 0L);
+    }
+
+    public static Verdict verify(String goal, ScreenPerceptionEngine.PerceptionSnapshot snapshot,
+                                 long nowMs, long minTimestampMs) {
         if (snapshot == null || snapshot.hasSensitiveFields) {
             return denied("unknown", "Schermata non osservabile o protetta");
         }
@@ -184,8 +213,10 @@ public final class GoalEvidenceVerifier {
                     : denied("settings_section", "La sola voce Audio non dimostra che la sezione sia aperta");
         }
 
-        // Physical TV inputs (DTV / HDMI 1-3 / Source Panel) verified independently
-        // via tvcenter foreground package and non-stale OSD cues; a sent intent alone never proves switch.
+        // Physical TV inputs (DTV / HDMI 1-3 / Source Panel):
+        // Android 9 public API 28 TvInputManager does NOT expose the currently active input/tuner of LiveTV.
+        // Verification MUST fail closed whenever fresh independent UI/Activity proof is absent: never certify
+        // generic tvcenter foreground alone, empty visibleTexts, or "Nessun segnale" / expired OSD banners.
         int requestedHdmiPort = -1;
         if (has(q, "hdmi 1") || has(q, "hdmi1")) requestedHdmiPort = 1;
         else if (has(q, "hdmi 2") || has(q, "hdmi2")) requestedHdmiPort = 2;
@@ -194,32 +225,50 @@ public final class GoalEvidenceVerifier {
             if (!TvInputIntentPolicy.isTvCenterPackage(pkg)) {
                 return denied("tv_input", "LiveTV (tvcenter) non e' in primo piano per HDMI " + requestedHdmiPort);
             }
-            if (hasVisibleChannelLabel(snapshot, "hdmi " + requestedHdmiPort, "hdmi" + requestedHdmiPort)) {
-                return allowed("tv_input", "LiveTV in primo piano con conferma OSD HDMI " + requestedHdmiPort);
+            Verdict stale = checkTvInputFreshness(snapshot, nowMs, minTimestampMs);
+            if (stale != null) return stale;
+            if (TvInputIntentPolicy.isInputsPanelActivity(snapshot.foregroundActivity)) {
+                return denied("tv_input", "Pannello ingressi ancora aperto: selezione HDMI " + requestedHdmiPort + " non ancora confermata");
             }
-            return denied("tv_input", "LiveTV in primo piano ma etichetta HDMI " + requestedHdmiPort + " non confermabile dai nodi UI");
+            if (TvInputIntentPolicy.hasPositiveHdmiPortEvidence(requestedHdmiPort, snapshot.visibleTexts)) {
+                return allowed("tv_input", "LiveTV in primo piano con conferma OSD fresca HDMI " + requestedHdmiPort);
+            }
+            return denied("tv_input", "LiveTV in primo piano ma nessuna prova OSD fresca e univoca per HDMI " + requestedHdmiPort + ": conferma visiva richiesta");
         }
         if (has(q, "digitale terrestre") || has(q, "dtv") || has(q, "antenna")
                 || has(q, "canali tv") || "tv".equals(q)) {
             if (!TvInputIntentPolicy.isTvCenterPackage(pkg)) {
                 return denied("tv_input", "LiveTV (tvcenter) non e' in primo piano per Digitale Terrestre");
             }
-            boolean hdmiBannerVisible = hasVisibleChannelLabel(snapshot, "hdmi 1", "hdmi1")
-                    || hasVisibleChannelLabel(snapshot, "hdmi 2", "hdmi2")
-                    || hasVisibleChannelLabel(snapshot, "hdmi 3", "hdmi3");
-            boolean dtvHintVisible = hasVisibleChannelLabel(snapshot, "dtv", "dtv")
-                    || hasVisibleChannelLabel(snapshot, "digitale", "digitale")
-                    || hasVisibleChannelLabel(snapshot, "tuner", "tuner")
-                    || hasVisibleChannelLabel(snapshot, "canale", "canale");
-            if (hdmiBannerVisible && !dtvHintVisible) {
-                return denied("tv_input", "LiveTV mostra un ingresso HDMI anziche' Digitale Terrestre");
+            Verdict stale = checkTvInputFreshness(snapshot, nowMs, minTimestampMs);
+            if (stale != null) return stale;
+            if (TvInputIntentPolicy.isInputsPanelActivity(snapshot.foregroundActivity)) {
+                return denied("tv_input", "Pannello ingressi ancora aperto: passaggio a Digitale Terrestre non confermato");
             }
-            return allowed("tv_input", "LiveTV (tvcenter) osservata in primo piano senza dialoghi errore/ANR OEM");
+            if (TvInputIntentPolicy.hasExternalSourceLabel(snapshot.visibleTexts)) {
+                return denied("tv_input", "LiveTV mostra una sorgente esterna (HDMI/AV) anziche' Digitale Terrestre");
+            }
+            if (TvInputIntentPolicy.hasPositiveDtvEvidence(snapshot.visibleTexts)) {
+                return allowed("tv_input", "LiveTV in primo piano con conferma OSD fresca del tuner Digitale Terrestre");
+            }
+            return denied("tv_input", "LiveTV in primo piano ma Android 9 non espone prova DTV/tuner fresca nei nodi UI: stato non verificato, conferma visiva richiesta");
         }
         if (has(q, "ingressi") || has(q, "sorgenti") || has(q, "cambia ingresso")) {
-            return TvInputIntentPolicy.isTvCenterPackage(pkg)
-                    ? allowed("tv_input", "Pannello ingressi LiveTV in primo piano")
-                    : denied("tv_input", "Pannello ingressi LiveTV non e' in primo piano");
+            if (!TvInputIntentPolicy.isTvCenterPackage(pkg)) {
+                return denied("tv_input", "Pannello ingressi LiveTV non e' in primo piano");
+            }
+            Verdict stale = checkTvInputFreshness(snapshot, nowMs, minTimestampMs);
+            if (stale != null) return stale;
+            if (TvInputIntentPolicy.isInputsPanelActivity(snapshot.foregroundActivity)) {
+                return allowed("tv_input", "Activity InputsPanelActivity confermata in primo piano");
+            }
+            if (snapshot.foregroundActivity != null && !snapshot.foregroundActivity.trim().isEmpty()) {
+                return denied("tv_input", "LiveTV in primo piano su activity diversa da InputsPanelActivity (" + snapshot.foregroundActivity + "): pannello ingressi non verificato");
+            }
+            if (TvInputIntentPolicy.hasInputsPanelUiCues(snapshot.visibleTexts)) {
+                return allowed("tv_input", "Pannello selezione ingressi confermato da elenco sorgenti visibile");
+            }
+            return denied("tv_input", "LiveTV in primo piano senza conferma InputsPanelActivity o lista sorgenti: conferma visiva richiesta");
         }
 
         // For clear app-opening goals, a model-provided different pkg_is

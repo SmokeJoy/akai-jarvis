@@ -280,6 +280,10 @@ public class AkaiAiController {
     }
 
     private WaitObservation waitForConditionOrUiChange(String goalQuery, String successCondition, long maxWaitMs, long pollIntervalMs, TaskToken token) {
+        return waitForConditionOrUiChange(goalQuery, successCondition, maxWaitMs, pollIntervalMs, token, 0L);
+    }
+
+    private WaitObservation waitForConditionOrUiChange(String goalQuery, String successCondition, long maxWaitMs, long pollIntervalMs, TaskToken token, long minEvidenceTimestampMs) {
         long waited = 0L;
         int snaps = 0;
         boolean hasCondition = successCondition != null && !successCondition.trim().isEmpty();
@@ -287,7 +291,7 @@ public class AkaiAiController {
         ScreenPerceptionEngine.PerceptionSnapshot snap = bridge.capture(context);
         snaps++;
         boolean verified = hasCondition && ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition)
-                && GoalEvidenceVerifier.verify(goalQuery, successCondition, snap).satisfied;
+                && GoalEvidenceVerifier.verify(goalQuery, successCondition, snap, System.currentTimeMillis(), minEvidenceTimestampMs).satisfied;
 
         while (hasCondition && !verified && waited < maxWaitMs && !isTokenCancelled(token)) {
             long step = pollIntervalMs > 0 ? Math.min(pollIntervalMs, maxWaitMs - waited) : Math.min(50L, maxWaitMs - waited);
@@ -299,9 +303,22 @@ public class AkaiAiController {
             snap = bridge.capture(context);
             snaps++;
             verified = ScreenPerceptionEngine.evaluateSuccessCondition(snap, successCondition)
-                    && GoalEvidenceVerifier.verify(goalQuery, successCondition, snap).satisfied;
+                    && GoalEvidenceVerifier.verify(goalQuery, successCondition, snap, System.currentTimeMillis(), minEvidenceTimestampMs).satisfied;
         }
         return new WaitObservation(snap, verified, waited, snaps);
+    }
+
+    private static String resolveVisualConfirmationPrompt(GoalEvidenceVerifier.Verdict evidence) {
+        if (evidence == null || evidence.satisfied) {
+            return null;
+        }
+        if ("tv_input".equals(evidence.goalKind)) {
+            return "Comando cambio ingresso inviato alla TV, ma Android 9 non espone una conferma indipendente dell'ingresso attivo. Puoi confermare visivamente sullo schermo TV se il cambio e' avvenuto?";
+        }
+        if ("oem_dialog".equals(evidence.goalKind)) {
+            return "Comando inviato, ma la TV mostra un dialogo di errore o blocco di sistema. Controlla visivamente lo schermo TV.";
+        }
+        return null;
     }
 
     private long waitForHomePackage(long maxWaitMs, long pollIntervalMs, TaskToken token) {
@@ -1036,6 +1053,7 @@ public class AkaiAiController {
                 } catch (Exception ignored) {}
             }
 
+            long actionDispatchedAtMs = System.currentTimeMillis();
             StepwiseResult stepRes = executeActionsStepwise(parsed.actions, myToken);
             TvController.CommandResult cmdRes = stepRes.commandResult;
             snapshotCount += stepRes.snapshotCount;
@@ -1061,7 +1079,7 @@ public class AkaiAiController {
             boolean verified = false;
             ScreenPerceptionEngine.PerceptionSnapshot finalSnap = preSnap;
             if (cmdRes.success) {
-                WaitObservation obs = waitForConditionOrUiChange(query, hasCondition ? parsed.successCondition : null, 1200L, sDefaultPollIntervalMs, myToken);
+                WaitObservation obs = waitForConditionOrUiChange(query, hasCondition ? parsed.successCondition : null, 1200L, sDefaultPollIntervalMs, myToken, actionDispatchedAtMs);
                 snapshotCount += obs.snapshotCount;
                 waitElapsedMs += obs.elapsedMs;
                 finalSnap = obs.snapshot;
@@ -1080,6 +1098,13 @@ public class AkaiAiController {
                 }
             }
 
+            GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(
+                    query, parsed.successCondition, finalSnap, System.currentTimeMillis(), actionDispatchedAtMs);
+            String visualConfirmPrompt = (cmdRes.success && !verified)
+                    ? resolveVisualConfirmationPrompt(evidence)
+                    : null;
+            boolean needsVisualConfirmation = visualConfirmPrompt != null;
+
             String executionOutcome = !cmdRes.success ? OUTCOME_FAILED : (verified ? OUTCOME_STATE_VERIFIED : OUTCOME_COMMAND_SENT);
             String status = (cmdRes.success && verified) ? "SUCCESS_VERIFIED" : (cmdRes.success ? "COMPLETED_UNVERIFIED" : "ERROR");
             String replyMsg;
@@ -1095,6 +1120,8 @@ public class AkaiAiController {
                 }
             } else if (cmdRes.success && !hasCondition) {
                 replyMsg = "Comando inviato alla TV, ma non posso confermare il risultato: nessuna verifica disponibile per questa azione.";
+            } else if (cmdRes.success && visualConfirmPrompt != null) {
+                replyMsg = visualConfirmPrompt;
             } else if (cmdRes.success) {
                 replyMsg = "Comando inviato, ma la condizione richiesta non risulta verificata sullo schermo.";
             } else {
@@ -1111,7 +1138,7 @@ public class AkaiAiController {
                 result.put("cost_eur", 0.0);
                 result.put("verified", verified);
                 result.put("execution_outcome", executionOutcome);
-                GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(query, parsed.successCondition, finalSnap);
+                result.put("needs_visual_confirmation", needsVisualConfirmation);
                 result.put("goal_kind", evidence.goalKind);
                 result.put("goal_evidence_reason", evidence.reason);
                 result.put("replan_count", 0);
@@ -1421,6 +1448,7 @@ public class AkaiAiController {
         // PASSO 3: ESECUZIONE STEPWISE, BOUNDED WAIT, REFLECTOR & MAX 1 REPLAN
         // ---------------------------------------------------------------------
         Log.i(TAG, "Executing planned actions (" + candidateActions.length() + " steps)...");
+        long actionDispatchedAtMs = System.currentTimeMillis();
         StepwiseResult stepExec = executeActionsStepwise(candidateActions, myToken);
         TvController.CommandResult execRes = stepExec.commandResult;
         snapshotCount += stepExec.snapshotCount;
@@ -1431,7 +1459,7 @@ public class AkaiAiController {
         boolean verified = false;
         if (!stepExec.cancelled && !isTokenCancelled(myToken)) {
             if (execRes.success) {
-                WaitObservation firstObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                WaitObservation firstObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken, actionDispatchedAtMs);
                 postSnap = firstObs.snapshot;
                 verified = firstObs.verified;
                 snapshotCount += firstObs.snapshotCount;
@@ -1507,6 +1535,7 @@ public class AkaiAiController {
                     if (retryRes.reply != null && !retryRes.reply.isEmpty()) {
                         planReply = retryRes.reply;
                     }
+                    actionDispatchedAtMs = System.currentTimeMillis();
                     StepwiseResult replanStepExec = executeActionsStepwise(candidateActions, myToken);
                     execRes = replanStepExec.commandResult;
                     snapshotCount += replanStepExec.snapshotCount;
@@ -1516,7 +1545,7 @@ public class AkaiAiController {
                         postSnap = replanStepExec.lastSnapshot;
                         verified = false;
                     } else if (execRes.success) {
-                        WaitObservation retryObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken);
+                        WaitObservation retryObs = waitForConditionOrUiChange(query, candidateCondition, 1500L, sDefaultPollIntervalMs, myToken, actionDispatchedAtMs);
                         postSnap = retryObs.snapshot;
                         verified = retryObs.verified;
                         snapshotCount += retryObs.snapshotCount;
@@ -1585,12 +1614,21 @@ public class AkaiAiController {
             memoryEngine.incrementStat("local_executions_zero_token", 1);
         }
 
+        GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(
+                query, candidateCondition, postSnap, System.currentTimeMillis(), actionDispatchedAtMs);
+        String visualConfirmPrompt = (execRes.success && !verified)
+                ? resolveVisualConfirmationPrompt(evidence)
+                : null;
+        boolean needsVisualConfirmation = visualConfirmPrompt != null;
+
         String status = OUTCOME_STATE_VERIFIED.equals(executionOutcome)
                 ? "SUCCESS_VERIFIED"
                 : (OUTCOME_COMMAND_SENT.equals(executionOutcome) ? "COMPLETED_UNVERIFIED" : "ERROR");
         String finalReply = planReply != null ? planReply : "Procedura completata.";
         if (!execRes.success) {
             finalReply = "Non sono riuscito a completare l'operazione: " + execRes.message;
+        } else if (!verified && visualConfirmPrompt != null) {
+            finalReply = visualConfirmPrompt;
         } else if (!verified) {
             finalReply = "Azioni inviate, ma il risultato non è stato verificato con certezza sullo schermo.";
         }
@@ -1611,7 +1649,7 @@ public class AkaiAiController {
             }
             result.put("verified", verified);
             result.put("execution_outcome", executionOutcome);
-            GoalEvidenceVerifier.Verdict evidence = GoalEvidenceVerifier.verify(query, candidateCondition, postSnap);
+            result.put("needs_visual_confirmation", needsVisualConfirmation);
             result.put("goal_kind", evidence.goalKind);
             result.put("goal_evidence_reason", evidence.reason);
             result.put("replan_count", replanCount);

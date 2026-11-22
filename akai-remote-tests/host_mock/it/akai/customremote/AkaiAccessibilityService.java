@@ -10,4 +10,7 @@ public class AkaiAccessibilityService {
     public Context getApplicationContext() { return null; }
     public AccessibilityNodeInfo getRootInActiveWindow() { return null; }
     public List<AccessibilityWindowInfo> getWindows() { return null; }
+    public String getLastWindowPackage() { return null; }
+    public String getLastWindowClass() { return null; }
+    public long getLastWindowEventAtMs() { return 0L; }
 }
