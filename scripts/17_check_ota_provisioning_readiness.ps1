@@ -304,12 +304,20 @@ $apkBundledKeySha256 = $null
 $apkBundledChannelPresent = $false
 $apkBundledChannelUrl = $null
 $apkBinaryProven = $false
+$realToolsVerified = $false
+$useMocks = (-not [string]::IsNullOrWhiteSpace($MockApksignerReportPath)) -or
+            (-not [string]::IsNullOrWhiteSpace($MockAaptBadgingPath)) -or
+            (-not [string]::IsNullOrWhiteSpace($MockAaptXmltreePath))
 $apkArtifactClass = "UNCHECKED"
 $apkActualPackageName = $null
 $apkActualVersionCode = $null
 $apkActualVersionName = $null
 $apkActualDebuggable = $null
 $apkActualSignerSha256 = $null
+
+if ($useMocks -and [string]::IsNullOrWhiteSpace($ApkPath)) {
+    [void]$reasons.Add("APK_MOCK_EVIDENCE_NOT_AUTHORITATIVE")
+}
 
 if ([string]::IsNullOrWhiteSpace($ApkPath)) {
     if (-not $InventoryOnly) {
@@ -398,22 +406,25 @@ if ([string]::IsNullOrWhiteSpace($ApkPath)) {
         }
 
         # Verifica binaria autoritativa dell'APK (apksigner + aapt badging + aapt xmltree).
-        # Un JSON handoff non basta mai a certificare otaReady=true.
+        # Un JSON handoff o un report mock non bastano MAI a certificare otaReady=true.
         $signerReport = $null
         $badgingReport = $null
         $xmltreeReport = $null
-        $useMocks = (-not [string]::IsNullOrWhiteSpace($MockApksignerReportPath)) -or
-                    (-not [string]::IsNullOrWhiteSpace($MockAaptBadgingPath)) -or
-                    (-not [string]::IsNullOrWhiteSpace($MockAaptXmltreePath))
 
         if ($useMocks) {
-            if ((Test-Path -LiteralPath $MockApksignerReportPath -PathType Leaf) -and
+            # Qualsiasi parametro -Mock* impedisce incondizionatamente otaReady=true e apkBinaryProven=true.
+            [void]$reasons.Add("APK_MOCK_EVIDENCE_NOT_AUTHORITATIVE")
+            if ((-not [string]::IsNullOrWhiteSpace($MockApksignerReportPath)) -and
+                (-not [string]::IsNullOrWhiteSpace($MockAaptBadgingPath)) -and
+                (-not [string]::IsNullOrWhiteSpace($MockAaptXmltreePath)) -and
+                (Test-Path -LiteralPath $MockApksignerReportPath -PathType Leaf) -and
                 (Test-Path -LiteralPath $MockAaptBadgingPath -PathType Leaf) -and
                 (Test-Path -LiteralPath $MockAaptXmltreePath -PathType Leaf)) {
                 $signerReport = Get-Content -LiteralPath $MockApksignerReportPath -Raw -Encoding UTF8
                 $badgingReport = Get-Content -LiteralPath $MockAaptBadgingPath -Raw -Encoding UTF8
                 $xmltreeReport = Get-Content -LiteralPath $MockAaptXmltreePath -Raw -Encoding UTF8
             } else {
+                $apkArtifactClass = "REJECTED_INCOMPLETE_MOCK_EVIDENCE"
                 [void]$reasons.Add("APK_AUTHORITATIVE_MOCK_EVIDENCE_MISSING")
             }
         } else {
@@ -438,6 +449,7 @@ if ([string]::IsNullOrWhiteSpace($ApkPath)) {
                 }
 
                 if ($sExit -eq 0 -and $bExit -eq 0 -and $xExit -eq 0) {
+                    $realToolsVerified = $true
                     $signerReport = $sOut
                     $badgingReport = $bOut
                     $xmltreeReport = $xOut
@@ -531,17 +543,25 @@ if ([string]::IsNullOrWhiteSpace($ApkPath)) {
             }
 
             if ($binaryErrors.Count -eq 0) {
-                $apkBinaryProven = $true
-                $apkArtifactClass = "OWNER_SIGNED_APK_VERIFIED"
+                if ((-not $useMocks) -and $realToolsVerified) {
+                    $apkBinaryProven = $true
+                    $apkArtifactClass = "OWNER_SIGNED_APK_VERIFIED"
+                } else {
+                    $apkBinaryProven = $false
+                    $apkArtifactClass = "MOCK_EVIDENCE_NON_AUTHORITATIVE"
+                }
             } else {
+                $apkBinaryProven = $false
                 $apkArtifactClass = "REJECTED_APK_BINARY_MISMATCH"
             }
         }
     }
 }
 
-$inventoryReady = ($reasons.Count -eq 0) -and $trustKeyPresent -and $channelConfigured
+$inventoryReady = ($reasons.Count -eq 0) -and (-not $useMocks) -and $trustKeyPresent -and $channelConfigured
 $otaReady = (-not $InventoryOnly) -and
+            (-not $useMocks) -and
+            $realToolsVerified -and
             ($reasons.Count -eq 0) -and
             $trustKeyPresent -and
             $channelConfigured -and
@@ -556,6 +576,8 @@ $status = if ($InventoryOnly) {
     if ($inventoryReady) { "OTA_TRUST_INVENTORY_ONLY" } else { "OTA_TRUST_INVENTORY_INCOMPLETE" }
 } elseif ($otaReady) {
     "OTA_PROVISIONED_READY"
+} elseif ($useMocks) {
+    "OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE"
 } elseif ($apkArtifactClass -eq "SYNTHETIC_HOST_FIXTURE" -and ($reasons.Count -eq 1) -and ($reasons[0] -eq "APK_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED")) {
     "OTA_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED_APK"
 } else {
@@ -566,6 +588,8 @@ $verdict = [ordered]@{
     otaReady = $otaReady
     inventoryOnly = [bool]$InventoryOnly
     inventoryReady = $inventoryReady
+    mockEvidenceInjected = [bool]$useMocks
+    realToolsVerified = [bool]$realToolsVerified
     status = $status
     channelProfile = $ChannelProfile
     trustDirectoryPresent = $trustDirExists

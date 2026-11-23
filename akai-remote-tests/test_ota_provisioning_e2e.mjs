@@ -475,24 +475,66 @@ public class OtaProvisioningE2ERunner {
   const psExecArgs = process.platform === 'win32' ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'] : ['-NoProfile', '-File'];
   const script17 = path.join(repoRoot, 'scripts', '17_check_ota_provisioning_readiness.ps1');
 
-  // 3a. Positivo Release con prova autoritativa APK (exit 0 + OTA_PROVISIONED_READY)
-  const readyOut = execFileSync(ps, [
-    ...psExecArgs, script17,
-    '-ApkPath', provisionedApk,
-    '-BuildManifestPath', readyBuildManifest,
-    '-OtaReleasePublicKeyPath', pubDerPath,
-    '-OtaReleaseManifestUrl', manifestUrl,
-    '-MockApksignerReportPath', mockSignerOwner,
-    '-MockAaptBadgingPath', mockBadgingRelV5,
-    '-MockAaptXmltreePath', mockXmlRelease
-  ], { encoding: 'utf8' });
-  const readyJson = JSON.parse(readyOut);
-  if (readyJson.otaReady !== true ||
-      readyJson.status !== 'OTA_PROVISIONED_READY' ||
-      readyJson.apkBinaryProven !== true ||
-      readyJson.apkArtifactClass !== 'OWNER_SIGNED_APK_VERIFIED' ||
-      readyJson.nextRecommendedReleaseVersionCode !== 6) {
-    throw new Error('Script 17 did not report strict OTA_PROVISIONED_READY: ' + readyOut);
+  // 3a. Negative test P1 (#7089748886): Synthetic ZIP + valid trust/channel + complete build manifest
+  //     + forged matching apksigner/aapt mock outputs MUST NEVER produce otaReady=true,
+  //     apkBinaryProven=true, or exit 0. It must exit 1 with status=OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE.
+  let rejectedMockRelease = false;
+  try {
+    execFileSync(ps, [
+      ...psExecArgs, script17,
+      '-ApkPath', provisionedApk,
+      '-BuildManifestPath', readyBuildManifest,
+      '-OtaReleasePublicKeyPath', pubDerPath,
+      '-OtaReleaseManifestUrl', manifestUrl,
+      '-MockApksignerReportPath', mockSignerOwner,
+      '-MockAaptBadgingPath', mockBadgingRelV5,
+      '-MockAaptXmltreePath', mockXmlRelease
+    ], { encoding: 'utf8', stdio: 'pipe' });
+  } catch (err) {
+    const out = (err.stdout || '').toString();
+    const parsed = JSON.parse(out);
+    if (err.status === 1 &&
+        parsed.otaReady === false &&
+        parsed.apkBinaryProven === false &&
+        parsed.mockEvidenceInjected === true &&
+        parsed.realToolsVerified === false &&
+        parsed.status === 'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE' &&
+        parsed.apkArtifactClass === 'MOCK_EVIDENCE_NON_AUTHORITATIVE' &&
+        parsed.reasons.length === 1 &&
+        parsed.reasons[0] === 'APK_MOCK_EVIDENCE_NOT_AUTHORITATIVE' &&
+        parsed.nextRecommendedReleaseVersionCode === 6) {
+      rejectedMockRelease = true;
+    }
+  }
+  if (!rejectedMockRelease) {
+    throw new Error('Script 17 failed to block forged matching mock reports from producing otaReady=true');
+  }
+
+  // 3a-bis. Partial/missing mock report paths must also fail closed with APK_AUTHORITATIVE_MOCK_EVIDENCE_MISSING
+  let rejectedPartialMock = false;
+  try {
+    execFileSync(ps, [
+      ...psExecArgs, script17,
+      '-ApkPath', provisionedApk,
+      '-BuildManifestPath', readyBuildManifest,
+      '-OtaReleasePublicKeyPath', pubDerPath,
+      '-OtaReleaseManifestUrl', manifestUrl,
+      '-MockApksignerReportPath', mockSignerOwner
+    ], { encoding: 'utf8', stdio: 'pipe' });
+  } catch (err) {
+    const parsed = JSON.parse((err.stdout || '').toString());
+    if (err.status === 1 &&
+        parsed.otaReady === false &&
+        parsed.apkBinaryProven === false &&
+        parsed.status === 'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE' &&
+        parsed.apkArtifactClass === 'REJECTED_INCOMPLETE_MOCK_EVIDENCE' &&
+        parsed.reasons.includes('APK_MOCK_EVIDENCE_NOT_AUTHORITATIVE') &&
+        parsed.reasons.includes('APK_AUTHORITATIVE_MOCK_EVIDENCE_MISSING')) {
+      rejectedPartialMock = true;
+    }
+  }
+  if (!rejectedPartialMock) {
+    throw new Error('Script 17 failed to reject partial mock evidence paths with exit 1');
   }
 
   // 3b. Modalita' esplicita -InventoryOnly: exit 0 ma otaReady=false e status=OTA_TRUST_INVENTORY_ONLY
@@ -533,24 +575,36 @@ public class OtaProvisioningE2ERunner {
   }
 
   // 4. Verifica ChannelProfile Staging + RescueVersionCode=8 => nextRecommendedReleaseVersionCode=9
-  const stagingOut = execFileSync(ps, [
-    ...psExecArgs, script17,
-    '-ApkPath', provisionedApk,
-    '-BuildManifestPath', readyStagingManifest,
-    '-OtaReleasePublicKeyPath', pubDerPath,
-    '-OtaReleaseManifestUrl', manifestUrl,
-    '-ChannelProfile', 'Staging',
-    '-RescueVersionCode', '8',
-    '-MockApksignerReportPath', mockSignerOwner,
-    '-MockAaptBadgingPath', mockBadgingStageV7,
-    '-MockAaptXmltreePath', mockXmlStaging
-  ], { encoding: 'utf8' });
-  const stagingJson = JSON.parse(stagingOut);
-  if (stagingJson.otaReady !== true ||
-      stagingJson.status !== 'OTA_PROVISIONED_READY' ||
-      stagingJson.apkBinaryProven !== true ||
-      stagingJson.nextRecommendedReleaseVersionCode !== 9) {
-    throw new Error('Script 17 did not compute nextRecommendedReleaseVersionCode=9 for RescueVersionCode=8: ' + stagingOut);
+  //    Con mock reports deve comunque uscire con exit 1, otaReady=false, apkBinaryProven=false,
+  //    status=OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE e calcolare nextRecommendedReleaseVersionCode=9.
+  let rejectedMockStaging = false;
+  try {
+    execFileSync(ps, [
+      ...psExecArgs, script17,
+      '-ApkPath', provisionedApk,
+      '-BuildManifestPath', readyStagingManifest,
+      '-OtaReleasePublicKeyPath', pubDerPath,
+      '-OtaReleaseManifestUrl', manifestUrl,
+      '-ChannelProfile', 'Staging',
+      '-RescueVersionCode', '8',
+      '-MockApksignerReportPath', mockSignerOwner,
+      '-MockAaptBadgingPath', mockBadgingStageV7,
+      '-MockAaptXmltreePath', mockXmlStaging
+    ], { encoding: 'utf8', stdio: 'pipe' });
+  } catch (err) {
+    const stagingJson = JSON.parse((err.stdout || '').toString());
+    if (err.status === 1 &&
+        stagingJson.otaReady === false &&
+        stagingJson.apkBinaryProven === false &&
+        stagingJson.status === 'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE' &&
+        stagingJson.reasons.length === 1 &&
+        stagingJson.reasons[0] === 'APK_MOCK_EVIDENCE_NOT_AUTHORITATIVE' &&
+        stagingJson.nextRecommendedReleaseVersionCode === 9) {
+      rejectedMockStaging = true;
+    }
+  }
+  if (!rejectedMockStaging) {
+    throw new Error('Script 17 did not enforce non-authoritative mock exit 1 with nextRecommendedReleaseVersionCode=9 for Staging');
   }
 
   // 5. Verifica rifiuto URL locali/IP privati su Script 17
@@ -644,7 +698,7 @@ public class OtaProvisioningE2ERunner {
   }
 
   // (5) Forged metadata: JSON manifest claims Release v5 debuggable=false signerA,
-  //     but authoritative apksigner/aapt binary inspection shows version/debuggable/signer/apkSha256 mismatch
+  //     but apksigner/aapt binary inspection shows version/debuggable/signer/apkSha256 mismatch
   expectScript17Rejection(
     [
       '-ApkPath', provisionedApk,
@@ -653,7 +707,8 @@ public class OtaProvisioningE2ERunner {
       '-MockAaptBadgingPath', mockBadgingForgedV4,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
-    'APK_BINARY_VERSION_CODE_MISMATCH_WITH_MANIFEST'
+    'APK_BINARY_VERSION_CODE_MISMATCH_WITH_MANIFEST',
+    'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE'
   );
   expectScript17Rejection(
     [
@@ -663,7 +718,8 @@ public class OtaProvisioningE2ERunner {
       '-MockAaptBadgingPath', mockBadgingRelV5,
       '-MockAaptXmltreePath', mockXmlStaging
     ],
-    'APK_BINARY_RELEASE_DEBUGGABLE_FORBIDDEN'
+    'APK_BINARY_RELEASE_DEBUGGABLE_FORBIDDEN',
+    'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE'
   );
   expectScript17Rejection(
     [
@@ -673,7 +729,8 @@ public class OtaProvisioningE2ERunner {
       '-MockAaptBadgingPath', mockBadgingRelV5,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
-    'APK_BINARY_SIGNER_MISMATCH'
+    'APK_BINARY_SIGNER_MISMATCH',
+    'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE'
   );
   const forgedApkShaMan = path.join(workDir, 'build_manifest_forged_apksha.json');
   fs.writeFileSync(forgedApkShaMan, JSON.stringify({
@@ -688,7 +745,8 @@ public class OtaProvisioningE2ERunner {
       '-MockAaptBadgingPath', mockBadgingRelV5,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
-    'BUILD_MANIFEST_APK_SHA256_MISMATCH'
+    'BUILD_MANIFEST_APK_SHA256_MISMATCH',
+    'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE'
   );
 
   // (6) Wrong embedded key or wrong embedded channel inside APK
@@ -719,7 +777,8 @@ public class OtaProvisioningE2ERunner {
       '-MockAaptBadgingPath', mockBadgingRelV5,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
-    'APK_PUBLIC_KEY_MISMATCH_WITH_TRUST_DIR'
+    'APK_PUBLIC_KEY_MISMATCH_WITH_TRUST_DIR',
+    'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE'
   );
   expectScript17Rejection(
     [
@@ -729,6 +788,15 @@ public class OtaProvisioningE2ERunner {
       '-MockAaptBadgingPath', mockBadgingRelV5,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
+    'APK_CHANNEL_URL_MISMATCH',
+    'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE'
+  );
+  expectScript17Rejection(
+    ['-ApkPath', wrongBundledKeyApk, '-BuildManifestPath', readyBuildManifest],
+    'APK_PUBLIC_KEY_MISMATCH_WITH_TRUST_DIR'
+  );
+  expectScript17Rejection(
+    ['-ApkPath', wrongBundledChannelApk, '-BuildManifestPath', readyBuildManifest],
     'APK_CHANNEL_URL_MISMATCH'
   );
   expectScript17Rejection(
