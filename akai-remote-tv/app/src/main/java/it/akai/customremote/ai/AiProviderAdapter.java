@@ -747,6 +747,10 @@ public class AiProviderAdapter {
         public static VisionCloudResult blocked(String code) {
             return new VisionCloudResult(false, "BLOCKED", null, code, 0, 0.0);
         }
+
+        public static VisionCloudResult describedForTest(String description, int tokens, double estimatedCostEur) {
+            return new VisionCloudResult(true, "UNVERIFIED_VISUAL_DESCRIPTION", description, null, tokens, estimatedCostEur);
+        }
     }
 
     /**

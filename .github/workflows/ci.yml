@@ -249,6 +249,7 @@ jobs:
             akai-remote-tests/host_mock/android/content/pm/*.java \
             akai-remote-tests/host_mock/android/graphics/*.java \
             akai-remote-tests/host_mock/android/media/*.java \
+            akai-remote-tests/host_mock/android/os/*.java \
             akai-remote-tests/host_mock/android/security/keystore/*.java \
             akai-remote-tests/host_mock/android/util/*.java \
             akai-remote-tests/host_mock/android/view/accessibility/*.java \
@@ -278,6 +279,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FrameSequenceGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ProcedureGoalMatcher.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationProvider.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisionSessionCoordinator.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualStepPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
@@ -292,7 +294,8 @@ jobs:
             akai-remote-tests/KeystoreCredentialHealthTest.java \
             akai-remote-tests/TvInputGoalVerificationTest.java \
             akai-remote-tests/DtvChannelTuningCoordinatorTest.java \
-            akai-remote-tests/VisualSingleStepRecoveryTest.java
+            akai-remote-tests/VisualSingleStepRecoveryTest.java \
+            akai-remote-tests/VisionSessionHandoffTest.java
 
           java -cp test_bin it.akai.customremote.UnitTests
           java -cp test_bin it.akai.customremote.AgentSkillGateTest
@@ -301,7 +304,8 @@ jobs:
           java -cp test_bin it.akai.customremote.TvInputGoalVerificationTest
           java -cp test_bin it.akai.customremote.DtvChannelTuningCoordinatorTest
           java -cp test_bin it.akai.customremote.VisualSingleStepRecoveryTest
-          echo "All 40 Java unit tests + Keystore + TvInputGoalVerificationTest + DtvChannelTuningCoordinatorTest + VisualSingleStepRecoveryTest passed with 100% success."
+          java -cp test_bin it.akai.customremote.VisionSessionHandoffTest
+          echo "All 40 Java unit tests + Keystore + TvInputGoalVerificationTest + DtvChannelTuningCoordinatorTest + VisualSingleStepRecoveryTest + VisionSessionHandoffTest passed with 100% success."
 
       - name: 4b. V4 OTA archive/manifest signature and exact upgrade policy gates (JDK 8)
         run: |

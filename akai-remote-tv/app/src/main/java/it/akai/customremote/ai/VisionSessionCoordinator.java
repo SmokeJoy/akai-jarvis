@@ -6,8 +6,6 @@ import android.os.SystemClock;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 import it.akai.customremote.VisualProjectionService;
 
@@ -18,9 +16,99 @@ import it.akai.customremote.VisualProjectionService;
  */
 public final class VisionSessionCoordinator {
     private static final long FRAME_WAIT_MS = 4300L;
+    private static volatile Runnable sNextOfferPreLockHookForTest;
+    private static volatile Runnable sNextOfferPreCountDownHookForTest;
 
     public interface Cancellation {
         boolean isCancelled();
+    }
+
+    public static void setNextOfferHooksForTest(Runnable preLockHook, Runnable preCountDownHook) {
+        sNextOfferPreLockHookForTest = preLockHook;
+        sNextOfferPreCountDownHookForTest = preCountDownHook;
+    }
+
+    public static void scrubFrame(VisualProjectionService.FrameResult frame) {
+        if (frame != null && frame.jpeg != null) {
+            Arrays.fill(frame.jpeg, (byte) 0);
+        }
+    }
+
+    /**
+     * Linearizable single-frame handoff between the MediaProjection worker callback
+     * and the waiting coordinator thread. Publish, duplicate-callback rejection, and
+     * timeout/cancel close+scrub share one intrinsic lock so a racing or preempted
+     * callback can never retain an un-zeroed JPEG buffer after timeout/return.
+     */
+    public static final class FrameHandoff {
+        private final CountDownLatch latch = new CountDownLatch(1);
+        private final Runnable preLockHook;
+        private final Runnable preCountDownHook;
+        private VisualProjectionService.FrameResult slot;
+        private boolean delivered;
+        private boolean closed;
+
+        public FrameHandoff() {
+            this(sNextOfferPreLockHookForTest, sNextOfferPreCountDownHookForTest);
+            sNextOfferPreLockHookForTest = null;
+            sNextOfferPreCountDownHookForTest = null;
+        }
+
+        public FrameHandoff(Runnable preLockHook, Runnable preCountDownHook) {
+            this.preLockHook = preLockHook;
+            this.preCountDownHook = preCountDownHook;
+        }
+
+        public boolean offer(VisualProjectionService.FrameResult frame) {
+            if (preLockHook != null) {
+                preLockHook.run();
+            }
+            final boolean accepted;
+            synchronized (this) {
+                if (closed || delivered) {
+                    accepted = false;
+                } else {
+                    delivered = true;
+                    slot = frame;
+                    accepted = true;
+                }
+            }
+            if (accepted) {
+                if (preCountDownHook != null) {
+                    preCountDownHook.run();
+                }
+                latch.countDown();
+            } else {
+                scrubFrame(frame);
+            }
+            return accepted;
+        }
+
+        public boolean awaitSlice(long timeoutMs) throws InterruptedException {
+            return latch.await(timeoutMs, TimeUnit.MILLISECONDS);
+        }
+
+        public VisualProjectionService.FrameResult finishOrClose(boolean consume) {
+            final VisualProjectionService.FrameResult taken;
+            synchronized (this) {
+                closed = true;
+                taken = slot;
+                slot = null;
+            }
+            if (!consume) {
+                scrubFrame(taken);
+                return null;
+            }
+            return taken;
+        }
+
+        public synchronized boolean isClosed() {
+            return closed;
+        }
+
+        public synchronized boolean hasRetainedFrame() {
+            return slot != null;
+        }
     }
 
     public static final class Observation {
@@ -71,53 +159,47 @@ public final class VisionSessionCoordinator {
             return Observation.denied("NO_SAFE_UI_CONTEXT");
         }
 
-        final AtomicBoolean accepting = new AtomicBoolean(true);
-        final AtomicReference<VisualProjectionService.FrameResult> received =
-                new AtomicReference<>();
-        final CountDownLatch latch = new CountDownLatch(1);
+        final FrameHandoff handoff = new FrameHandoff();
 
         boolean accepted = VisualProjectionService.requestFrame(selectedProvider,
                 new VisualProjectionService.FrameCallback() {
                     @Override public void onFrame(VisualProjectionService.FrameResult frame) {
-                        if (!accepting.compareAndSet(true, false)) {
-                            if (frame != null && frame.jpeg != null) Arrays.fill(frame.jpeg, (byte) 0);
-                            return;
-                        }
-                        received.set(frame);
-                        latch.countDown();
+                        handoff.offer(frame);
                     }
                 });
-        if (!accepted) return Observation.denied("CAPTURE_SERVICE_UNAVAILABLE");
+        if (!accepted) {
+            handoff.finishOrClose(false);
+            return Observation.denied("CAPTURE_SERVICE_UNAVAILABLE");
+        }
 
         long begun = SystemClock.elapsedRealtime();
         boolean ready = false;
+        VisualProjectionService.FrameResult frame = null;
         try {
-            while (SystemClock.elapsedRealtime() - begun < FRAME_WAIT_MS) {
-                if (cancel != null && cancel.isCancelled()) break;
-                if (latch.await(100L, TimeUnit.MILLISECONDS)) {
-                    ready = true;
-                    break;
+            try {
+                while (SystemClock.elapsedRealtime() - begun < FRAME_WAIT_MS) {
+                    if (cancel != null && cancel.isCancelled()) break;
+                    if (handoff.awaitSlice(100L)) {
+                        ready = true;
+                        break;
+                    }
                 }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            } finally {
+                boolean mayConsume = ready
+                        && !(cancel != null && cancel.isCancelled())
+                        && !Thread.currentThread().isInterrupted();
+                frame = handoff.finishOrClose(mayConsume);
             }
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-        } finally {
-            if (!ready) accepting.set(false);
-        }
-        if (!ready) {
-            VisualProjectionService.FrameResult late = received.getAndSet(null);
-            if (late != null && late.jpeg != null) Arrays.fill(late.jpeg, (byte) 0);
-            return Observation.denied(
-                    ((cancel != null && cancel.isCancelled()) || Thread.currentThread().isInterrupted())
-                            ? "TASK_CANCELLED" : "FRAME_TIMEOUT");
-        }
-
-        VisualProjectionService.FrameResult frame = received.getAndSet(null);
-        if (frame == null || !frame.ok()) {
-            return Observation.denied(frame == null ? "FRAME_MISSING" : frame.error);
-        }
-        try {
-            if (cancel != null && cancel.isCancelled()) return Observation.denied("TASK_CANCELLED");
+            if (!ready || (cancel != null && cancel.isCancelled()) || Thread.currentThread().isInterrupted()) {
+                return Observation.denied(
+                        ((cancel != null && cancel.isCancelled()) || Thread.currentThread().isInterrupted())
+                                ? "TASK_CANCELLED" : "FRAME_TIMEOUT");
+            }
+            if (frame == null || !frame.ok()) {
+                return Observation.denied(frame == null ? "FRAME_MISSING" : frame.error);
+            }
             if (!selectedProvider.equals(frame.provider)
                     || !expectedPackage.equals(frame.foregroundPackage)
                     || !expectedUi.equals(frame.redactedUiContext)) {
@@ -126,6 +208,7 @@ public final class VisionSessionCoordinator {
             // STOP may race the frame callback or the wait above. Avoid starting
             // a billable cloud request after the user revoked visual capture.
             if ((cancel != null && cancel.isCancelled())
+                    || Thread.currentThread().isInterrupted()
                     || !VisualObservationProvider.active()
                     || !VisualProjectionService.isSessionActive()
                     || !adapter.hasCloudContextConsent()) {
@@ -150,7 +233,7 @@ public final class VisionSessionCoordinator {
                     frame.redactedUiContext, frame.observedAtMs,
                     described.tokens, described.estimatedCostEur);
         } finally {
-            Arrays.fill(frame.jpeg, (byte) 0);
+            scrubFrame(frame);
         }
     }
 }

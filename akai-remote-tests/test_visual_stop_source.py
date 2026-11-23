@@ -92,6 +92,18 @@ class VisualStopSourceTest(unittest.TestCase):
         self.assertIn("!VisualProjectionService.isSessionActive()", after_upload)
         self.assertIn("!adapter.hasCloudContextConsent()", after_upload)
         self.assertIn('Observation.denied("SESSION_REVOKED_DURING_OBSERVATION")', after_upload)
+        self.assertIn("public static final class FrameHandoff", coordinator)
+        self.assertIn("frame = handoff.finishOrClose(mayConsume);", coordinator)
+        self.assertLess(
+            coordinator.index("try {\n            try {\n                while (SystemClock.elapsedRealtime() - begun < FRAME_WAIT_MS)")
+            if "try {\n            try {\n                while (SystemClock.elapsedRealtime() - begun < FRAME_WAIT_MS)" in coordinator
+            else coordinator.index("while (SystemClock.elapsedRealtime() - begun < FRAME_WAIT_MS)"),
+            coordinator.index("if (frame == null || !frame.ok())"),
+        )
+        self.assertLess(
+            coordinator.index("if (frame == null || !frame.ok())"),
+            coordinator.rindex("scrubFrame(frame);"),
+        )
 
     def test_reflector_visual_retry_uses_bridge_and_blocks_sensitive_screen(self):
         controller = (ROOT / "akai-remote-tv/app/src/main/java/it/akai/customremote/ai/"

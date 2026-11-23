@@ -72,7 +72,7 @@ public final class VisualProjectionService extends Service {
         public final String redactedUiContext;
         public final long observedAtMs;
         public final String error;
-        private FrameResult(byte[] jpeg, int width, int height, String provider,
+        public FrameResult(byte[] jpeg, int width, int height, String provider,
                 String foregroundPackage, String redactedUiContext,
                 long observedAtMs, String error) {
             this.jpeg = jpeg;
@@ -85,7 +85,7 @@ public final class VisualProjectionService extends Service {
             this.error = error;
         }
         public boolean ok() { return jpeg != null && jpeg.length > 0 && error == null; }
-        static FrameResult denied(String reason) {
+        public static FrameResult denied(String reason) {
             return new FrameResult(null, 0, 0, null, null, null, 0L, reason);
         }
     }
@@ -485,6 +485,9 @@ public final class VisualProjectionService extends Service {
     // Serialize completion with owner STOP: a late worker must never deliver
     // a successful frame after the session has been revoked.
     private synchronized void finishRequest(FrameResult result) {
+        if ((closed || projectionRevoked) && result != null && result.jpeg != null) {
+            java.util.Arrays.fill(result.jpeg, (byte) 0);
+        }
         if (closed || projectionRevoked) return;
         FrameCallback deliver = pending;
         pending = null;
@@ -503,7 +506,13 @@ public final class VisualProjectionService extends Service {
         if (deliver != null) {
             try {
                 deliver.onFrame(result);
-            } catch (RuntimeException ignored) {}
+            } catch (RuntimeException ignored) {
+                if (result != null && result.jpeg != null) {
+                    java.util.Arrays.fill(result.jpeg, (byte) 0);
+                }
+            }
+        } else if (result != null && result.jpeg != null) {
+            java.util.Arrays.fill(result.jpeg, (byte) 0);
         }
         if (gate != null && !gate.isActive()) {
             stopCapture();
