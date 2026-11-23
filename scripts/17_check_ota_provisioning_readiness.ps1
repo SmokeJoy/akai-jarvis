@@ -1,9 +1,17 @@
 # ==============================================================================
 # AKAI Custom TV - Script 17: CHECK READ-ONLY OTA RELEASE PROVISIONING READINESS
-# Verifica rigorosamente in sola lettura se la trust root OTA offline e l'APK
-# candidato risultano provisionati con chiave pubblica pinned + manifest URL HTTPS.
-# Non genera ne' scrive mai chiavi reali; exit 1 finche' OTA non e' pronto.
-# Zero comandi ADB.
+# Verifica rigorosamente in sola lettura se la trust root OTA offline, il
+# build/handoff manifest e l'APK candidato risultano provisionati con chiave
+# pubblica pinned + manifest URL HTTPS + prova binaria autoritativa (apksigner +
+# aapt dump badging + aapt dump xmltree).
+# - Non si fida mai del solo JSON auto-dichiarato per certificare otaReady=true.
+# - Fixture sintetiche host/CI (non firmate col certificato originale owner)
+#   vengono classificate come OTA_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED_APK
+#   con otaReady=false ed exit 1.
+# - La modalita' esplicita -InventoryOnly riporta lo stato dell'inventario
+#   leggero (OTA_TRUST_INVENTORY_ONLY / OTA_TRUST_INVENTORY_INCOMPLETE) con
+#   otaReady=false, non utilizzabile come gate di deploy.
+# Non genera ne' scrive mai chiavi reali; zero comandi ADB.
 # ==============================================================================
 
 param(
@@ -14,12 +22,22 @@ param(
     [ValidateSet('Release', 'Staging')]
     [string]$ChannelProfile = 'Release',
     [ValidateRange(0, 2147483646)]
-    [int]$RescueVersionCode = 0
+    [int]$RescueVersionCode = 0,
+    [switch]$InventoryOnly = $false,
+    # Solo per test unitari/E2E: consente di iniettare report apksigner/aapt
+    # simulati o di forzare il test dei parser autoritativi senza keystore owner.
+    [string]$MockApksignerReportPath = $null,
+    [string]$MockAaptBadgingPath = $null,
+    [string]$MockAaptXmltreePath = $null
 )
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+$expectedPackage = "it.akai.customremote"
+$expectedOwnerSigner = "21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed"
+$repoRoot = Split-Path -Parent $PSScriptRoot
 
 function Get-Sha256Lower {
     param([byte[]]$Bytes)
@@ -44,7 +62,7 @@ function Test-StrictOtaManifestUrl {
     if ($uri.Scheme -ne "https" -or -not $uri.IsDefaultPort) { return $null }
     if (-not [string]::IsNullOrEmpty($uri.UserInfo) -or -not [string]::IsNullOrEmpty($uri.Query) -or -not [string]::IsNullOrEmpty($uri.Fragment)) { return $null }
     $rawPath = $uri.AbsolutePath
-    if (-not $rawPath.EndsWith(".manifest", [StringComparison]::Ordinal)) { return $null }
+    if ($rawPath.Contains("//") -or (-not $rawPath.EndsWith(".manifest", [StringComparison]::Ordinal))) { return $null }
     if ([string]::IsNullOrWhiteSpace($uri.DnsSafeHost)) { return $null }
     $h = $uri.DnsSafeHost.ToLowerInvariant()
     $ipObj = $null
@@ -54,6 +72,47 @@ function Test-StrictOtaManifestUrl {
     if ([System.Net.IPAddress]::TryParse($h.Trim('[', ']'), [ref]$ipObj)) { return $null }
     if ($h.StartsWith(".") -or $h.EndsWith(".") -or $h.Contains("..") -or -not $h.Contains(".")) { return $null }
     return $uri
+}
+
+function Find-JavaExecutable {
+    $candidates = @()
+    if ($env:JAVA_HOME) {
+        $candidates += (Join-Path $env:JAVA_HOME "bin\java.exe")
+        $candidates += (Join-Path $env:JAVA_HOME "bin/java")
+    }
+    $candidates += (Join-Path $repoRoot "tools\jdk-17\bin\java.exe")
+    $candidates += (Join-Path $repoRoot "tools/jdk-17/bin/java")
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
+    }
+    $cmd = Get-Command java -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    return $null
+}
+
+function Find-AndroidBuildTool {
+    param([string[]]$RelativeNames)
+    $sdkRoots = @()
+    if ($env:ANDROID_SDK_ROOT) { $sdkRoots += $env:ANDROID_SDK_ROOT }
+    if ($env:ANDROID_HOME) { $sdkRoots += $env:ANDROID_HOME }
+    $sdkRoots += (Join-Path $repoRoot "tools\android-sdk")
+    foreach ($root in $sdkRoots) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        $btDir = Join-Path $root "build-tools"
+        if (-not (Test-Path -LiteralPath $btDir -PathType Container)) { continue }
+        $versions = @(Get-ChildItem -LiteralPath $btDir -Directory -ErrorAction SilentlyContinue |
+            Sort-Object {
+                $v = $null
+                if ([version]::TryParse($_.Name, [ref]$v)) { $v } else { [version]"0.0.0" }
+            } -Descending)
+        foreach ($ver in $versions) {
+            foreach ($rel in $RelativeNames) {
+                $cand = Join-Path $ver.FullName $rel
+                if (Test-Path -LiteralPath $cand -PathType Leaf) { return $cand }
+            }
+        }
+    }
+    return $null
 }
 
 $reasons = [System.Collections.Generic.List[string]]::new()
@@ -89,18 +148,43 @@ if ($resolvedKeyPath -and (Test-Path -LiteralPath $resolvedKeyPath -PathType Lea
 }
 
 $effectiveUrl = $OtaReleaseManifestUrl
+$manifestChecked = $false
 $manifestVersionCode = $null
+$manifestVersionName = $null
+$manifestBuildProfile = $null
+$manifestDebuggable = $null
+$manifestSignerSha256 = $null
+$manifestApkSha256 = $null
 $manifestOtaProvisioned = $null
 $nextRecommendedReleaseVersionCode = 6
 
 $manFloor = 0
-if (-not [string]::IsNullOrWhiteSpace($BuildManifestPath)) {
-    if (-not (Test-Path -LiteralPath $BuildManifestPath -PathType Leaf)) {
-        [void]$reasons.Add("MISSING_BUILD_MANIFEST")
-    } else {
+if ([string]::IsNullOrWhiteSpace($BuildManifestPath)) {
+    if (-not $InventoryOnly) {
+        [void]$reasons.Add("MISSING_BUILD_MANIFEST_PATH")
+    }
+} elseif (-not (Test-Path -LiteralPath $BuildManifestPath -PathType Leaf)) {
+    [void]$reasons.Add("MISSING_BUILD_MANIFEST")
+} else {
+    $manifestChecked = $true
+    $man = $null
+    try {
         $man = Get-Content -LiteralPath $BuildManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($man.versionCode) {
-            $manifestVersionCode = [int]$man.versionCode
+    } catch {
+        [void]$reasons.Add("INVALID_BUILD_MANIFEST_JSON")
+    }
+
+    if ($null -ne $man) {
+        $manProps = @($man.PSObject.Properties | Select-Object -ExpandProperty Name)
+
+        # 1. versionCode (obbligatorio e intero)
+        $vcParsed = 0
+        if (($manProps -notcontains "versionCode") -or ($null -eq $man.versionCode) -or
+            (-not [int]::TryParse([string]$man.versionCode, [ref]$vcParsed)) -or
+            ([string]$man.versionCode -notmatch '^\d+$')) {
+            [void]$reasons.Add("BUILD_MANIFEST_MISSING_VERSION_CODE")
+        } else {
+            $manifestVersionCode = $vcParsed
             $manFloor = $manifestVersionCode + 1
             if ($ChannelProfile -eq 'Staging') {
                 if ($manifestVersionCode -lt 5 -or $manifestVersionCode -gt 99) {
@@ -110,47 +194,88 @@ if (-not [string]::IsNullOrWhiteSpace($BuildManifestPath)) {
                 [void]$reasons.Add("RELEASE_VERSION_CODE_TOO_LOW")
             }
         }
-        if (-not [string]::IsNullOrWhiteSpace([string]$man.buildProfile)) {
-            $prof = [string]$man.buildProfile
+
+        if (($manProps -contains "versionName") -and (-not [string]::IsNullOrWhiteSpace([string]$man.versionName))) {
+            $manifestVersionName = ([string]$man.versionName).Trim()
+        }
+
+        if (($manProps -contains "packageName") -and (-not [string]::IsNullOrWhiteSpace([string]$man.packageName))) {
+            if (([string]$man.packageName).Trim() -ne $expectedPackage) {
+                [void]$reasons.Add("BUILD_MANIFEST_PACKAGE_MISMATCH")
+            }
+        }
+
+        # 2. buildProfile (obbligatorio)
+        if (($manProps -notcontains "buildProfile") -or [string]::IsNullOrWhiteSpace([string]$man.buildProfile)) {
+            [void]$reasons.Add("BUILD_MANIFEST_MISSING_BUILD_PROFILE")
+        } else {
+            $manifestBuildProfile = ([string]$man.buildProfile).Trim()
             if ($ChannelProfile -eq 'Staging') {
-                if ($prof -ne 'Diagnostic') {
+                if ($manifestBuildProfile -ne 'Diagnostic') {
                     [void]$reasons.Add("STAGING_BUILD_MANIFEST_PROFILE_MISMATCH")
                 }
-            } elseif ($ChannelProfile -eq 'Release' -and $prof -ne 'Release') {
+            } elseif ($ChannelProfile -eq 'Release' -and $manifestBuildProfile -ne 'Release') {
                 [void]$reasons.Add("RELEASE_BUILD_MANIFEST_PROFILE_MISMATCH")
             }
         }
-        if ($null -ne $man.debuggable) {
-            $isDbg = [bool]$man.debuggable
-            if ($ChannelProfile -eq 'Staging' -and (-not $isDbg)) {
+
+        # 3. debuggable (obbligatorio e booleano esplicito)
+        if (($manProps -notcontains "debuggable") -or ($null -eq $man.debuggable) -or ($man.debuggable -isnot [bool])) {
+            [void]$reasons.Add("BUILD_MANIFEST_MISSING_DEBUGGABLE")
+        } else {
+            $manifestDebuggable = [bool]$man.debuggable
+            if ($ChannelProfile -eq 'Staging' -and (-not $manifestDebuggable)) {
                 [void]$reasons.Add("STAGING_BUILD_MANIFEST_NOT_DEBUGGABLE")
-            } elseif ($ChannelProfile -eq 'Release' -and $isDbg) {
+            } elseif ($ChannelProfile -eq 'Release' -and $manifestDebuggable) {
                 [void]$reasons.Add("RELEASE_BUILD_MANIFEST_DEBUGGABLE_FORBIDDEN")
             }
         }
-        if (-not [string]::IsNullOrWhiteSpace([string]$man.signerSha256)) {
-            $expectedSigner = "21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed"
-            if (([string]$man.signerSha256).Trim().ToLowerInvariant() -ne $expectedSigner) {
+
+        # 4. signerSha256 (obbligatorio e uguale al certificato owner pinnato)
+        if (($manProps -notcontains "signerSha256") -or [string]::IsNullOrWhiteSpace([string]$man.signerSha256)) {
+            [void]$reasons.Add("BUILD_MANIFEST_MISSING_SIGNER_SHA256")
+        } else {
+            $manifestSignerSha256 = ([string]$man.signerSha256).Trim().ToLowerInvariant()
+            if ($manifestSignerSha256 -ne $expectedOwnerSigner) {
                 [void]$reasons.Add("BUILD_MANIFEST_SIGNER_MISMATCH")
             }
         }
-        if ($ChannelProfile -eq 'Staging' -and $RescueVersionCode -gt 0 -and $null -ne $manifestVersionCode -and $RescueVersionCode -le $manifestVersionCode) {
-            [void]$reasons.Add("STAGING_RESCUE_VERSION_NOT_ABOVE_CANDIDATE")
-        }
-        if ($null -ne $man.otaProvisioned) {
-            $manifestOtaProvisioned = [bool]$man.otaProvisioned
+
+        # 5. otaProvisioned / otaPublicTrustProvisioned (obbligatorio e booleano)
+        $hasOtaProvField = ($manProps -contains "otaProvisioned") -or ($manProps -contains "otaPublicTrustProvisioned")
+        $rawOtaProv = if ($manProps -contains "otaProvisioned") { $man.otaProvisioned } elseif ($manProps -contains "otaPublicTrustProvisioned") { $man.otaPublicTrustProvisioned } else { $null }
+        if ((-not $hasOtaProvField) -or ($null -eq $rawOtaProv) -or ($rawOtaProv -isnot [bool])) {
+            [void]$reasons.Add("BUILD_MANIFEST_MISSING_OTA_PROVISIONED")
+        } else {
+            $manifestOtaProvisioned = [bool]$rawOtaProv
             if (-not $manifestOtaProvisioned) {
                 [void]$reasons.Add("BUILD_MANIFEST_OTA_NOT_PROVISIONED")
             }
         }
-        if ([string]::IsNullOrWhiteSpace($effectiveUrl) -and $man.otaReleaseManifestUrl) {
+
+        # 6. RescueVersionCode floor per Staging e Release
+        if ($RescueVersionCode -gt 0 -and $null -ne $manifestVersionCode) {
+            if ($ChannelProfile -eq 'Staging' -and $RescueVersionCode -le $manifestVersionCode) {
+                [void]$reasons.Add("STAGING_RESCUE_VERSION_NOT_ABOVE_CANDIDATE")
+            } elseif ($ChannelProfile -eq 'Release' -and $manifestVersionCode -le $RescueVersionCode) {
+                [void]$reasons.Add("RELEASE_VERSION_NOT_ABOVE_RESCUE")
+            }
+        }
+
+        if (($manProps -contains "apkSha256") -and (-not [string]::IsNullOrWhiteSpace([string]$man.apkSha256))) {
+            $manifestApkSha256 = ([string]$man.apkSha256).Trim().ToLowerInvariant()
+        }
+
+        if ([string]::IsNullOrWhiteSpace($effectiveUrl) -and ($manProps -contains "otaReleaseManifestUrl") -and $man.otaReleaseManifestUrl) {
             $effectiveUrl = [string]$man.otaReleaseManifestUrl
         }
-        if ($trustKeySha256 -and $man.otaReleasePublicKeySha256 -and ([string]$man.otaReleasePublicKeySha256).ToLowerInvariant() -ne $trustKeySha256) {
+        if ($trustKeySha256 -and ($manProps -contains "otaReleasePublicKeySha256") -and $man.otaReleasePublicKeySha256 -and
+            ([string]$man.otaReleasePublicKeySha256).Trim().ToLowerInvariant() -ne $trustKeySha256) {
             [void]$reasons.Add("BUILD_MANIFEST_PUBLIC_KEY_MISMATCH")
         }
     }
 }
+
 $rescueFloor = if ($RescueVersionCode -gt 0) { $RescueVersionCode + 1 } else { 0 }
 $nextRecommendedReleaseVersionCode = [Math]::Max(6, [Math]::Max($manFloor, $rescueFloor))
 
@@ -160,6 +285,12 @@ if (-not [string]::IsNullOrWhiteSpace($effectiveUrl)) {
     if ($null -ne $uri) {
         $channelConfigured = $true
         $effectiveUrl = $uri.AbsoluteUri
+        if ($manifestChecked -and $null -ne $man -and ($man.PSObject.Properties.Name -contains "otaChannelHost") -and
+            (-not [string]::IsNullOrWhiteSpace([string]$man.otaChannelHost))) {
+            if (([string]$man.otaChannelHost).Trim().ToLowerInvariant() -ne $uri.DnsSafeHost.ToLowerInvariant()) {
+                [void]$reasons.Add("BUILD_MANIFEST_CHANNEL_HOST_MISMATCH")
+            }
+        }
     } else {
         [void]$reasons.Add("INVALID_OTA_MANIFEST_URL_REQUIRES_PUBLIC_HTTPS")
     }
@@ -172,14 +303,38 @@ $apkBundledKeyPresent = $false
 $apkBundledKeySha256 = $null
 $apkBundledChannelPresent = $false
 $apkBundledChannelUrl = $null
+$apkBinaryProven = $false
+$apkArtifactClass = "UNCHECKED"
+$apkActualPackageName = $null
+$apkActualVersionCode = $null
+$apkActualVersionName = $null
+$apkActualDebuggable = $null
+$apkActualSignerSha256 = $null
 
-if (-not [string]::IsNullOrWhiteSpace($ApkPath)) {
+if ([string]::IsNullOrWhiteSpace($ApkPath)) {
+    if (-not $InventoryOnly) {
+        [void]$reasons.Add("MISSING_APK_PATH")
+    }
+} else {
     $apkChecked = $true
     if (-not (Test-Path -LiteralPath $ApkPath -PathType Leaf)) {
         [void]$reasons.Add("MISSING_APK_FILE")
     } else {
-        $zip = [System.IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($ApkPath))
+        $fullApkPath = [IO.Path]::GetFullPath($ApkPath)
+        $apkBytes = [IO.File]::ReadAllBytes($fullApkPath)
+        $actualApkFileSha256 = Get-Sha256Lower -Bytes $apkBytes
+        if ($manifestApkSha256 -and ($actualApkFileSha256 -ne $manifestApkSha256)) {
+            [void]$reasons.Add("BUILD_MANIFEST_APK_SHA256_MISMATCH")
+        }
+
+        $hasManifestEntry = $false
+        $hasDexEntry = $false
+        $zip = $null
         try {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($fullApkPath)
+            $hasManifestEntry = ($null -ne $zip.GetEntry("AndroidManifest.xml"))
+            $hasDexEntry = ($null -ne $zip.GetEntry("classes.dex"))
+
             $keyEntry = $zip.GetEntry("assets/ota-release-public.der")
             if ($null -ne $keyEntry -and $keyEntry.Length -ge 200) {
                 $ms = New-Object System.IO.MemoryStream
@@ -229,8 +384,10 @@ if (-not [string]::IsNullOrWhiteSpace($ApkPath)) {
             } else {
                 [void]$reasons.Add("APK_MISSING_OTA_RELEASE_CHANNEL_TXT")
             }
+        } catch {
+            [void]$reasons.Add("APK_ARCHIVE_CORRUPT_OR_NOT_ZIP")
         } finally {
-            $zip.Dispose()
+            if ($null -ne $zip) { $zip.Dispose() }
         }
 
         if ($trustKeySha256 -and $apkBundledKeySha256 -and $apkBundledKeySha256 -ne $trustKeySha256) {
@@ -239,28 +396,208 @@ if (-not [string]::IsNullOrWhiteSpace($ApkPath)) {
         if ($channelConfigured -and $apkBundledChannelUrl -and $apkBundledChannelUrl -ne $effectiveUrl) {
             [void]$reasons.Add("APK_CHANNEL_URL_MISMATCH")
         }
+
+        # Verifica binaria autoritativa dell'APK (apksigner + aapt badging + aapt xmltree).
+        # Un JSON handoff non basta mai a certificare otaReady=true.
+        $signerReport = $null
+        $badgingReport = $null
+        $xmltreeReport = $null
+        $useMocks = (-not [string]::IsNullOrWhiteSpace($MockApksignerReportPath)) -or
+                    (-not [string]::IsNullOrWhiteSpace($MockAaptBadgingPath)) -or
+                    (-not [string]::IsNullOrWhiteSpace($MockAaptXmltreePath))
+
+        if ($useMocks) {
+            if ((Test-Path -LiteralPath $MockApksignerReportPath -PathType Leaf) -and
+                (Test-Path -LiteralPath $MockAaptBadgingPath -PathType Leaf) -and
+                (Test-Path -LiteralPath $MockAaptXmltreePath -PathType Leaf)) {
+                $signerReport = Get-Content -LiteralPath $MockApksignerReportPath -Raw -Encoding UTF8
+                $badgingReport = Get-Content -LiteralPath $MockAaptBadgingPath -Raw -Encoding UTF8
+                $xmltreeReport = Get-Content -LiteralPath $MockAaptXmltreePath -Raw -Encoding UTF8
+            } else {
+                [void]$reasons.Add("APK_AUTHORITATIVE_MOCK_EVIDENCE_MISSING")
+            }
+        } else {
+            $javaExe = Find-JavaExecutable
+            $apksignerJar = Find-AndroidBuildTool -RelativeNames @("lib\apksigner.jar", "lib/apksigner.jar")
+            $aaptExe = Find-AndroidBuildTool -RelativeNames @("aapt.exe", "aapt")
+
+            if (-not $javaExe -or -not $apksignerJar -or -not $aaptExe) {
+                [void]$reasons.Add("ANDROID_SDK_AUTHORITATIVE_TOOLS_UNAVAILABLE")
+            } else {
+                $prevEap = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    $sOut = (& $javaExe -jar $apksignerJar verify --verbose --print-certs $fullApkPath 2>&1 | Out-String)
+                    $sExit = $LASTEXITCODE
+                    $bOut = (& $aaptExe dump badging $fullApkPath 2>&1 | Out-String)
+                    $bExit = $LASTEXITCODE
+                    $xOut = (& $aaptExe dump xmltree $fullApkPath AndroidManifest.xml 2>&1 | Out-String)
+                    $xExit = $LASTEXITCODE
+                } finally {
+                    $ErrorActionPreference = $prevEap
+                }
+
+                if ($sExit -eq 0 -and $bExit -eq 0 -and $xExit -eq 0) {
+                    $signerReport = $sOut
+                    $badgingReport = $bOut
+                    $xmltreeReport = $xOut
+                } else {
+                    if ($hasManifestEntry -and $hasDexEntry -and $apkBundledKeyPresent -and $apkBundledChannelPresent) {
+                        $apkArtifactClass = "SYNTHETIC_HOST_FIXTURE"
+                        [void]$reasons.Add("APK_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED")
+                    } else {
+                        $apkArtifactClass = "UNVERIFIED_OR_UNSIGNED_APK"
+                        [void]$reasons.Add("APK_AUTHORITATIVE_TOOL_VERIFICATION_FAILED")
+                    }
+                }
+            }
+        }
+
+        if ($null -ne $signerReport -and $null -ne $badgingReport -and $null -ne $xmltreeReport) {
+            $binaryErrors = [System.Collections.Generic.List[string]]::new()
+
+            $signerMatches = [regex]::Matches($signerReport, '(?im)Signer #([0-9]+) certificate SHA-256 digest:\s*([0-9a-f]{64})\s*$')
+            if ($signerMatches.Count -ne 1 -or $signerMatches[0].Groups[1].Value -ne '1') {
+                [void]$binaryErrors.Add("APK_BINARY_SIGNER_DIGEST_INVALID")
+            } else {
+                $apkActualSignerSha256 = $signerMatches[0].Groups[2].Value.ToLowerInvariant()
+                if ($apkActualSignerSha256 -ne $expectedOwnerSigner) {
+                    [void]$binaryErrors.Add("APK_BINARY_SIGNER_MISMATCH")
+                }
+                if ($manifestSignerSha256 -and ($apkActualSignerSha256 -ne $manifestSignerSha256)) {
+                    [void]$binaryErrors.Add("APK_BINARY_SIGNER_MISMATCH_WITH_MANIFEST")
+                }
+            }
+
+            $countMatches = [regex]::Matches($signerReport, '(?im)^Number of signers:\s*([0-9]+)\s*$')
+            if ($countMatches.Count -ne 1 -or $countMatches[0].Groups[1].Value -ne '1') {
+                [void]$binaryErrors.Add("APK_BINARY_SIGNER_COUNT_INVALID")
+            }
+
+            $v2Matches = [regex]::Matches($signerReport, '(?im)^Verified using v2 scheme \(APK Signature Scheme v2\):\s*(true|false)\s*$')
+            if ($v2Matches.Count -ne 1 -or $v2Matches[0].Groups[1].Value.ToLowerInvariant() -ne 'true') {
+                [void]$binaryErrors.Add("APK_BINARY_V2_SIGNATURE_UNVERIFIED")
+            }
+
+            $pkgMatches = [regex]::Matches($badgingReport, "(?m)^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'\s+versionName='([^']+)'(?:\s+[^\r\n]*)?$")
+            if ($pkgMatches.Count -ne 1) {
+                [void]$binaryErrors.Add("APK_BINARY_BADGING_PACKAGE_INVALID")
+            } else {
+                $apkActualPackageName = $pkgMatches[0].Groups[1].Value
+                $apkActualVersionCode = [int]$pkgMatches[0].Groups[2].Value
+                $apkActualVersionName = $pkgMatches[0].Groups[3].Value
+                if ($apkActualPackageName -ne $expectedPackage) {
+                    [void]$binaryErrors.Add("APK_BINARY_PACKAGE_NAME_MISMATCH")
+                }
+                if ($null -ne $manifestVersionCode -and $apkActualVersionCode -ne $manifestVersionCode) {
+                    [void]$binaryErrors.Add("APK_BINARY_VERSION_CODE_MISMATCH_WITH_MANIFEST")
+                }
+                if ($manifestVersionName -and $apkActualVersionName -ne $manifestVersionName) {
+                    [void]$binaryErrors.Add("APK_BINARY_VERSION_NAME_MISMATCH_WITH_MANIFEST")
+                }
+            }
+
+            $sdkMatches = [regex]::Matches($badgingReport, "(?m)^sdkVersion:\s*'([^']*)'\s*$")
+            $targetMatches = [regex]::Matches($badgingReport, "(?m)^targetSdkVersion:\s*'([^']*)'\s*$")
+            $nativeMatches = [regex]::Matches($badgingReport, "(?m)^native-code:\s*(.*)$")
+            if ($sdkMatches.Count -ne 1 -or $sdkMatches[0].Groups[1].Value -ne '21' -or
+                $targetMatches.Count -ne 1 -or $targetMatches[0].Groups[1].Value -ne '28') {
+                [void]$binaryErrors.Add("APK_BINARY_SDK_LEVEL_MISMATCH")
+            }
+            if ($nativeMatches.Count -ne 1 -or $nativeMatches[0].Groups[1].Value.Trim() -ne "'armeabi-v7a'") {
+                [void]$binaryErrors.Add("APK_BINARY_ABI_MISMATCH")
+            }
+
+            $dbgAttrMatches = [regex]::Matches($xmltreeReport, '(?im)^\s*A:\s+android:debuggable(?:\(0x[0-9a-f]+\))?\s*=')
+            $isCompiledDbgTrue = $xmltreeReport -match '(?im)A:\s+android:debuggable(?:\(0x[0-9a-f]+\))?\s*=\s*\(type 0x12\)0xffffffff(?:\s|$)'
+            $isCompiledDbgFalse = $xmltreeReport -match '(?im)A:\s+android:debuggable(?:\(0x[0-9a-f]+\))?\s*=\s*\(type 0x12\)0x0(?:\s|$)'
+
+            if ($dbgAttrMatches.Count -ne 1 -or ((-not $isCompiledDbgTrue) -and (-not $isCompiledDbgFalse))) {
+                [void]$binaryErrors.Add("APK_BINARY_DEBUGGABLE_FLAG_AMBIGUOUS")
+            } else {
+                $apkActualDebuggable = [bool]$isCompiledDbgTrue
+                if ($ChannelProfile -eq 'Staging' -and (-not $apkActualDebuggable)) {
+                    [void]$binaryErrors.Add("APK_BINARY_STAGING_NOT_DEBUGGABLE")
+                } elseif ($ChannelProfile -eq 'Release' -and $apkActualDebuggable) {
+                    [void]$binaryErrors.Add("APK_BINARY_RELEASE_DEBUGGABLE_FORBIDDEN")
+                }
+                if ($null -ne $manifestDebuggable -and ($apkActualDebuggable -ne $manifestDebuggable)) {
+                    [void]$binaryErrors.Add("APK_BINARY_DEBUGGABLE_MISMATCH_WITH_MANIFEST")
+                }
+            }
+
+            foreach ($be in $binaryErrors) {
+                [void]$reasons.Add($be)
+            }
+
+            if ($binaryErrors.Count -eq 0) {
+                $apkBinaryProven = $true
+                $apkArtifactClass = "OWNER_SIGNED_APK_VERIFIED"
+            } else {
+                $apkArtifactClass = "REJECTED_APK_BINARY_MISMATCH"
+            }
+        }
     }
 }
 
-$otaReady = ($reasons.Count -eq 0) -and $trustKeyPresent -and $channelConfigured -and ((-not $apkChecked) -or ($apkBundledKeyPresent -and $apkBundledChannelPresent))
+$inventoryReady = ($reasons.Count -eq 0) -and $trustKeyPresent -and $channelConfigured
+$otaReady = (-not $InventoryOnly) -and
+            ($reasons.Count -eq 0) -and
+            $trustKeyPresent -and
+            $channelConfigured -and
+            $manifestChecked -and
+            ($manifestOtaProvisioned -eq $true) -and
+            $apkChecked -and
+            $apkBundledKeyPresent -and
+            $apkBundledChannelPresent -and
+            $apkBinaryProven
+
+$status = if ($InventoryOnly) {
+    if ($inventoryReady) { "OTA_TRUST_INVENTORY_ONLY" } else { "OTA_TRUST_INVENTORY_INCOMPLETE" }
+} elseif ($otaReady) {
+    "OTA_PROVISIONED_READY"
+} elseif ($apkArtifactClass -eq "SYNTHETIC_HOST_FIXTURE" -and ($reasons.Count -eq 1) -and ($reasons[0] -eq "APK_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED")) {
+    "OTA_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED_APK"
+} else {
+    "OTA_UNPROVISIONED_NOT_READY"
+}
+
 $verdict = [ordered]@{
     otaReady = $otaReady
-    status = if ($otaReady) { "OTA_PROVISIONED_READY" } else { "OTA_UNPROVISIONED_NOT_READY" }
+    inventoryOnly = [bool]$InventoryOnly
+    inventoryReady = $inventoryReady
+    status = $status
+    channelProfile = $ChannelProfile
     trustDirectoryPresent = $trustDirExists
     trustKeyPresent = $trustKeyPresent
     trustKeySha256 = $trustKeySha256
     channelConfigured = $channelConfigured
+    manifestChecked = $manifestChecked
     manifestVersionCode = $manifestVersionCode
+    manifestBuildProfile = $manifestBuildProfile
+    manifestDebuggable = $manifestDebuggable
+    manifestSignerSha256 = $manifestSignerSha256
     manifestOtaProvisioned = $manifestOtaProvisioned
     apkChecked = $apkChecked
+    apkArtifactClass = $apkArtifactClass
+    apkBinaryProven = $apkBinaryProven
     apkBundledKeyPresent = $apkBundledKeyPresent
     apkBundledKeySha256 = $apkBundledKeySha256
     apkBundledChannelPresent = $apkBundledChannelPresent
+    apkActualPackageName = $apkActualPackageName
+    apkActualVersionCode = $apkActualVersionCode
+    apkActualVersionName = $apkActualVersionName
+    apkActualDebuggable = $apkActualDebuggable
+    apkActualSignerSha256 = $apkActualSignerSha256
     nextRecommendedReleaseVersionCode = $nextRecommendedReleaseVersionCode
     reasons = @($reasons)
 }
 
 Write-Output ($verdict | ConvertTo-Json -Depth 4)
+if ($InventoryOnly) {
+    if (-not $inventoryReady) { exit 1 }
+    exit 0
+}
 if (-not $otaReady) {
     exit 1
 }
