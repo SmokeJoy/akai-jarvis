@@ -519,6 +519,67 @@ public class OtaProvisioningE2ERunner {
     ['-BuildManifestPath', diagProfileManifest, '-ChannelProfile', 'Release'],
     'RELEASE_BUILD_MANIFEST_PROFILE_MISMATCH'
   );
+  expectScript17Rejection(
+    ['-BuildManifestPath', diagProfileManifest, '-ChannelProfile', 'Staging', '-RescueVersionCode', '7'],
+    'STAGING_RESCUE_VERSION_NOT_ABOVE_CANDIDATE'
+  );
+
+  const nonDebuggableStagingMan = path.join(workDir, 'build_manifest_stage_nodbg.json');
+  fs.writeFileSync(nonDebuggableStagingMan, JSON.stringify({
+    versionCode: 7,
+    buildProfile: 'Diagnostic',
+    debuggable: false,
+    otaProvisioned: true,
+    otaReleaseManifestUrl: manifestUrl,
+    otaReleasePublicKeySha256: pubSha
+  }));
+  expectScript17Rejection(
+    ['-BuildManifestPath', nonDebuggableStagingMan, '-ChannelProfile', 'Staging'],
+    'STAGING_BUILD_MANIFEST_NOT_DEBUGGABLE'
+  );
+
+  const debuggableReleaseMan = path.join(workDir, 'build_manifest_rel_dbg.json');
+  fs.writeFileSync(debuggableReleaseMan, JSON.stringify({
+    versionCode: 9,
+    buildProfile: 'Release',
+    debuggable: true,
+    otaProvisioned: true,
+    otaReleaseManifestUrl: manifestUrl,
+    otaReleasePublicKeySha256: pubSha
+  }));
+  expectScript17Rejection(
+    ['-BuildManifestPath', debuggableReleaseMan, '-ChannelProfile', 'Release'],
+    'RELEASE_BUILD_MANIFEST_DEBUGGABLE_FORBIDDEN'
+  );
+
+  const wrongSignerMan = path.join(workDir, 'build_manifest_wrong_signer.json');
+  fs.writeFileSync(wrongSignerMan, JSON.stringify({
+    versionCode: 9,
+    buildProfile: 'Release',
+    debuggable: false,
+    signerSha256: signerB,
+    otaProvisioned: true,
+    otaReleaseManifestUrl: manifestUrl,
+    otaReleasePublicKeySha256: pubSha
+  }));
+  expectScript17Rejection(
+    ['-BuildManifestPath', wrongSignerMan, '-ChannelProfile', 'Release'],
+    'BUILD_MANIFEST_SIGNER_MISMATCH'
+  );
+
+  const lowStageVcMan = path.join(workDir, 'build_manifest_low_stage_vc.json');
+  fs.writeFileSync(lowStageVcMan, JSON.stringify({
+    versionCode: 4,
+    buildProfile: 'Diagnostic',
+    debuggable: true,
+    otaProvisioned: true,
+    otaReleaseManifestUrl: manifestUrl,
+    otaReleasePublicKeySha256: pubSha
+  }));
+  expectScript17Rejection(
+    ['-BuildManifestPath', lowStageVcMan, '-ChannelProfile', 'Staging'],
+    'STAGING_VERSION_CODE_OUT_OF_RANGE'
+  );
 
   console.log('PASS: OTA Provisioning E2E (Java trust/channel/manifest/downgrade + Script 17 readiness, Staging & CRLF/DER/profile guards) OK');
 } finally {

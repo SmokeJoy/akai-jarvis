@@ -79,8 +79,19 @@ export function validateMonotonicVersionPlan(plan) {
 }
 
 export function validateHttpsStagingUrl(raw, extension) {
-  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 480 || /[^\x21-\x7e]/.test(raw)) {
+  if (typeof raw !== 'string' || raw.length < 20 || raw.length > 480 || /[^\x21-\x7e]/.test(raw)) {
     throw new Error('STAGING_URL_REJECTED_FORMAT');
+  }
+  const rawLower = raw.toLowerCase();
+  if (
+    raw.includes('\\') ||
+    raw.includes('/../') ||
+    raw.endsWith('/..') ||
+    rawLower.includes('%2e') ||
+    rawLower.includes('%2f') ||
+    rawLower.includes('%5c')
+  ) {
+    throw new Error('STAGING_URL_REJECTED_PATH_TRAVERSAL');
   }
   const url = new URL(raw);
   if (
@@ -92,6 +103,7 @@ export function validateHttpsStagingUrl(raw, extension) {
     url.hash ||
     url.search ||
     !url.pathname.startsWith('/') ||
+    url.pathname.includes('//') ||
     !url.pathname.endsWith(extension)
   ) {
     throw new Error('STAGING_URL_REJECTED_HTTPS_PIN_' + extension);
@@ -107,8 +119,10 @@ export function validateHttpsStagingUrl(raw, extension) {
     host.startsWith('[') ||
     host.includes(':') ||
     /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ||
-    !host.includes('.') ||
-    host.endsWith('.')
+    host.startsWith('.') ||
+    host.endsWith('.') ||
+    host.includes('..') ||
+    !host.includes('.')
   ) {
     throw new Error('STAGING_URL_REJECTED_PRIVATE_OR_LOCAL_HOST');
   }
@@ -324,6 +338,9 @@ function runCli() {
         passphrase: password,
       },
     });
+    if (publicKey.length < 200 || publicKey.length > 1024 || publicKey[0] !== 0x30) {
+      throw new Error('Unusable RSA staging public key SPKI DER');
+    }
     writeFileSync(privPath, privateKey, { mode: 0o600, flag: 'wx' });
     writeFileSync(pubPath, publicKey, { mode: 0o600, flag: 'wx' });
     const fp = createHash('sha256').update(publicKey).digest('hex');
@@ -396,6 +413,9 @@ function runCli() {
   }
   const secretPem = readFileSync(privPath, 'utf8');
   const publicDer = readFileSync(pubPath);
+  if (publicDer.length < 200 || publicDer.length > 1024 || publicDer[0] !== 0x30) {
+    throw new Error('Staging public SPKI DER outside 200..1024 byte ASN.1 bounds.');
+  }
   const privateKey = createPrivateKey({ key: secretPem, format: 'pem', passphrase: password });
   const pubActual = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
   if (!pubActual.equals(publicDer)) {

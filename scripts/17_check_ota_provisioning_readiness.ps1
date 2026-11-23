@@ -102,6 +102,13 @@ if (-not [string]::IsNullOrWhiteSpace($BuildManifestPath)) {
         if ($man.versionCode) {
             $manifestVersionCode = [int]$man.versionCode
             $manFloor = $manifestVersionCode + 1
+            if ($ChannelProfile -eq 'Staging') {
+                if ($manifestVersionCode -lt 5 -or $manifestVersionCode -gt 99) {
+                    [void]$reasons.Add("STAGING_VERSION_CODE_OUT_OF_RANGE")
+                }
+            } elseif ($ChannelProfile -eq 'Release' -and $manifestVersionCode -lt 5) {
+                [void]$reasons.Add("RELEASE_VERSION_CODE_TOO_LOW")
+            }
         }
         if (-not [string]::IsNullOrWhiteSpace([string]$man.buildProfile)) {
             $prof = [string]$man.buildProfile
@@ -109,12 +116,26 @@ if (-not [string]::IsNullOrWhiteSpace($BuildManifestPath)) {
                 if ($prof -ne 'Diagnostic') {
                     [void]$reasons.Add("STAGING_BUILD_MANIFEST_PROFILE_MISMATCH")
                 }
-                if ($man.versionCode -and [int]$man.versionCode -gt 99) {
-                    [void]$reasons.Add("STAGING_VERSION_CODE_OUT_OF_RANGE")
-                }
             } elseif ($ChannelProfile -eq 'Release' -and $prof -ne 'Release') {
                 [void]$reasons.Add("RELEASE_BUILD_MANIFEST_PROFILE_MISMATCH")
             }
+        }
+        if ($null -ne $man.debuggable) {
+            $isDbg = [bool]$man.debuggable
+            if ($ChannelProfile -eq 'Staging' -and (-not $isDbg)) {
+                [void]$reasons.Add("STAGING_BUILD_MANIFEST_NOT_DEBUGGABLE")
+            } elseif ($ChannelProfile -eq 'Release' -and $isDbg) {
+                [void]$reasons.Add("RELEASE_BUILD_MANIFEST_DEBUGGABLE_FORBIDDEN")
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$man.signerSha256)) {
+            $expectedSigner = "21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed"
+            if (([string]$man.signerSha256).Trim().ToLowerInvariant() -ne $expectedSigner) {
+                [void]$reasons.Add("BUILD_MANIFEST_SIGNER_MISMATCH")
+            }
+        }
+        if ($ChannelProfile -eq 'Staging' -and $RescueVersionCode -gt 0 -and $null -ne $manifestVersionCode -and $RescueVersionCode -le $manifestVersionCode) {
+            [void]$reasons.Add("STAGING_RESCUE_VERSION_NOT_ABOVE_CANDIDATE")
         }
         if ($null -ne $man.otaProvisioned) {
             $manifestOtaProvisioned = [bool]$man.otaProvisioned

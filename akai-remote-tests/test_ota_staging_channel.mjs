@@ -179,10 +179,20 @@ for (const badHost of [
   'https://[::1]/a.manifest',
   'https://jarvis.local/a.manifest',
   'https://router.lan/a.manifest',
+  'https://.staging.example/a.manifest',
+  'https://staging..example/a.manifest',
 ]) {
-  assert.throws(() => validateHttpsStagingUrl(badHost, '.manifest'), /STAGING_URL_REJECTED_PRIVATE_OR_LOCAL_HOST/, badHost);
+  assert.throws(() => validateHttpsStagingUrl(badHost, '.manifest'), /STAGING_URL_REJECTED_/, badHost);
 }
-testCount += 10;
+for (const badTraversal of [
+  'https://staging.example/releases/../a.manifest',
+  'https://staging.example/releases/%2e%2e/a.manifest',
+  'https://staging.example/releases\\a.manifest',
+  'https://staging.example/releases//a.manifest',
+]) {
+  assert.throws(() => validateHttpsStagingUrl(badTraversal, '.manifest'), /STAGING_URL_REJECTED_/, badTraversal);
+}
+testCount += 16;
 
 // 4. Java OtaSignedReleaseManifest + OtaCandidateGate E2E using ephemeral in-memory staging RSA-3072 keys
 const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'akai_ota_staging_test_'));
