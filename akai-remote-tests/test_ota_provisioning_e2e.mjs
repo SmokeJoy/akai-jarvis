@@ -391,7 +391,7 @@ public class OtaProvisioningE2ERunner {
   const readyBuildManifest = path.join(workDir, 'build_manifest_ready.json');
   fs.writeFileSync(readyBuildManifest, JSON.stringify({
     packageName: 'it.akai.customremote',
-    versionCode: 5,
+    versionCode: 9,
     versionName: '1.3.0-final',
     buildProfile: 'Release',
     debuggable: false,
@@ -440,9 +440,9 @@ public class OtaProvisioningE2ERunner {
     'Signer #1 certificate SHA-256 digest: ' + signerB + '\n'
   );
 
-  const mockBadgingRelV5 = path.join(workDir, 'mock_badging_rel_v5.txt');
-  fs.writeFileSync(mockBadgingRelV5,
-    "package: name='it.akai.customremote' versionCode='5' versionName='1.3.0-final' platformBuildVersionName='9'\n" +
+  const mockBadgingRelV9 = path.join(workDir, 'mock_badging_rel_v9.txt');
+  fs.writeFileSync(mockBadgingRelV9,
+    "package: name='it.akai.customremote' versionCode='9' versionName='1.3.0-final' platformBuildVersionName='9'\n" +
     "sdkVersion:'21'\n" +
     "targetSdkVersion:'28'\n" +
     "native-code: 'armeabi-v7a'\n"
@@ -475,7 +475,7 @@ public class OtaProvisioningE2ERunner {
   const psExecArgs = process.platform === 'win32' ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'] : ['-NoProfile', '-File'];
   const script17 = path.join(repoRoot, 'scripts', '17_check_ota_provisioning_readiness.ps1');
 
-  // 3a. Negative test P1 (#7089748886): Synthetic ZIP + valid trust/channel + complete build manifest
+  // 3a. Negative test P1 (#7089748886 + #7090527341): Synthetic ZIP + valid trust/channel + complete build manifest (v9 > Rescue v7)
   //     + forged matching apksigner/aapt mock outputs MUST NEVER produce otaReady=true,
   //     apkBinaryProven=true, or exit 0. It must exit 1 with status=OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE.
   let rejectedMockRelease = false;
@@ -486,8 +486,10 @@ public class OtaProvisioningE2ERunner {
       '-BuildManifestPath', readyBuildManifest,
       '-OtaReleasePublicKeyPath', pubDerPath,
       '-OtaReleaseManifestUrl', manifestUrl,
+      '-RescueVersionCode', '7',
+      '-MaxInstalledOrPreparedVersionCode', '7',
       '-MockApksignerReportPath', mockSignerOwner,
-      '-MockAaptBadgingPath', mockBadgingRelV5,
+      '-MockAaptBadgingPath', mockBadgingRelV9,
       '-MockAaptXmltreePath', mockXmlRelease
     ], { encoding: 'utf8', stdio: 'pipe' });
   } catch (err) {
@@ -498,11 +500,14 @@ public class OtaProvisioningE2ERunner {
         parsed.apkBinaryProven === false &&
         parsed.mockEvidenceInjected === true &&
         parsed.realToolsVerified === false &&
+        parsed.rescueFloorProven === true &&
+        parsed.rescueVersionCode === 7 &&
+        parsed.effectiveVersionFloor === 7 &&
         parsed.status === 'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE' &&
         parsed.apkArtifactClass === 'MOCK_EVIDENCE_NON_AUTHORITATIVE' &&
         parsed.reasons.length === 1 &&
         parsed.reasons[0] === 'APK_MOCK_EVIDENCE_NOT_AUTHORITATIVE' &&
-        parsed.nextRecommendedReleaseVersionCode === 6) {
+        parsed.nextRecommendedReleaseVersionCode === 10) {
       rejectedMockRelease = true;
     }
   }
@@ -519,6 +524,7 @@ public class OtaProvisioningE2ERunner {
       '-BuildManifestPath', readyBuildManifest,
       '-OtaReleasePublicKeyPath', pubDerPath,
       '-OtaReleaseManifestUrl', manifestUrl,
+      '-RescueVersionCode', '7',
       '-MockApksignerReportPath', mockSignerOwner
     ], { encoding: 'utf8', stdio: 'pipe' });
   } catch (err) {
@@ -537,7 +543,8 @@ public class OtaProvisioningE2ERunner {
     throw new Error('Script 17 failed to reject partial mock evidence paths with exit 1');
   }
 
-  // 3b. Modalita' esplicita -InventoryOnly: exit 0 ma otaReady=false e status=OTA_TRUST_INVENTORY_ONLY
+  // 3b. Modalita' esplicita -InventoryOnly: exit 0 senza -RescueVersionCode, ma otaReady=false,
+  //     rescueFloorProven=false, nextRecommendedReleaseVersionCode=null e status=OTA_TRUST_INVENTORY_ONLY
   const invOut = execFileSync(ps, [
     ...psExecArgs, script17,
     '-InventoryOnly',
@@ -548,8 +555,10 @@ public class OtaProvisioningE2ERunner {
   if (invJson.otaReady !== false ||
       invJson.inventoryOnly !== true ||
       invJson.inventoryReady !== true ||
+      invJson.rescueFloorProven !== false ||
+      invJson.nextRecommendedReleaseVersionCode !== null ||
       invJson.status !== 'OTA_TRUST_INVENTORY_ONLY') {
-    throw new Error('Script 17 -InventoryOnly must never report otaReady=true or READY: ' + invOut);
+    throw new Error('Script 17 -InventoryOnly must never report otaReady=true, READY, or a guessed version floor: ' + invOut);
   }
 
   let rejectedUnprov = false;
@@ -660,19 +669,26 @@ public class OtaProvisioningE2ERunner {
     }
   };
 
-  // (1) Key + URL only (both -ApkPath and -BuildManifestPath omitted without -InventoryOnly)
+  // (1) Key + URL only (both -ApkPath and -BuildManifestPath and -RescueVersionCode omitted without -InventoryOnly)
   expectScript17Rejection([], 'MISSING_APK_PATH');
   expectScript17Rejection([], 'MISSING_BUILD_MANIFEST_PATH');
+  expectScript17Rejection([], 'OTA_RESCUE_VERSION_FLOOR_UNKNOWN');
 
-  // (2) APK omitted (-BuildManifestPath provided, -ApkPath omitted)
-  expectScript17Rejection(['-BuildManifestPath', readyBuildManifest], 'MISSING_APK_PATH');
+  // (1-bis) Omitted or invalid/zero -RescueVersionCode in Release and Staging
+  expectScript17Rejection(['-ApkPath', provisionedApk, '-BuildManifestPath', readyBuildManifest], 'OTA_RESCUE_VERSION_FLOOR_UNKNOWN');
+  expectScript17Rejection(['-ApkPath', provisionedApk, '-BuildManifestPath', readyBuildManifest, '-RescueVersionCode', '0'], 'OTA_RESCUE_VERSION_FLOOR_UNKNOWN');
+  expectScript17Rejection(['-ApkPath', provisionedApk, '-BuildManifestPath', readyBuildManifest, '-RescueVersionCode', '4'], 'OTA_RESCUE_VERSION_FLOOR_UNKNOWN');
+  expectScript17Rejection(['-ApkPath', provisionedApk, '-BuildManifestPath', readyStagingManifest, '-ChannelProfile', 'Staging'], 'OTA_RESCUE_VERSION_FLOOR_UNKNOWN');
 
-  // (3) Manifest omitted (-ApkPath provided, -BuildManifestPath omitted)
-  expectScript17Rejection(['-ApkPath', provisionedApk], 'MISSING_BUILD_MANIFEST_PATH');
+  // (2) APK omitted (-BuildManifestPath and -RescueVersionCode provided, -ApkPath omitted)
+  expectScript17Rejection(['-BuildManifestPath', readyBuildManifest, '-RescueVersionCode', '7'], 'MISSING_APK_PATH');
+
+  // (3) Manifest omitted (-ApkPath and -RescueVersionCode provided, -BuildManifestPath omitted)
+  expectScript17Rejection(['-ApkPath', provisionedApk, '-RescueVersionCode', '7'], 'MISSING_BUILD_MANIFEST_PATH');
 
   // (4) Omitted mandatory manifest fields: otaProvisioned, buildProfile, debuggable, signerSha256, versionCode
   const baseCompleteMan = {
-    versionCode: 5,
+    versionCode: 9,
     buildProfile: 'Release',
     debuggable: false,
     signerSha256: signerA,
@@ -692,17 +708,18 @@ public class OtaProvisioningE2ERunner {
     const partialPath = path.join(workDir, `build_manifest_omit_${omittedField}.json`);
     fs.writeFileSync(partialPath, JSON.stringify(partialObj));
     expectScript17Rejection(
-      ['-ApkPath', provisionedApk, '-BuildManifestPath', partialPath],
+      ['-ApkPath', provisionedApk, '-BuildManifestPath', partialPath, '-RescueVersionCode', '7'],
       expectedReason
     );
   }
 
-  // (5) Forged metadata: JSON manifest claims Release v5 debuggable=false signerA,
+  // (5) Forged metadata: JSON manifest claims Release v9 debuggable=false signerA,
   //     but apksigner/aapt binary inspection shows version/debuggable/signer/apkSha256 mismatch
   expectScript17Rejection(
     [
       '-ApkPath', provisionedApk,
       '-BuildManifestPath', readyBuildManifest,
+      '-RescueVersionCode', '7',
       '-MockApksignerReportPath', mockSignerOwner,
       '-MockAaptBadgingPath', mockBadgingForgedV4,
       '-MockAaptXmltreePath', mockXmlRelease
@@ -714,8 +731,9 @@ public class OtaProvisioningE2ERunner {
     [
       '-ApkPath', provisionedApk,
       '-BuildManifestPath', readyBuildManifest,
+      '-RescueVersionCode', '7',
       '-MockApksignerReportPath', mockSignerOwner,
-      '-MockAaptBadgingPath', mockBadgingRelV5,
+      '-MockAaptBadgingPath', mockBadgingRelV9,
       '-MockAaptXmltreePath', mockXmlStaging
     ],
     'APK_BINARY_RELEASE_DEBUGGABLE_FORBIDDEN',
@@ -725,8 +743,9 @@ public class OtaProvisioningE2ERunner {
     [
       '-ApkPath', provisionedApk,
       '-BuildManifestPath', readyBuildManifest,
+      '-RescueVersionCode', '7',
       '-MockApksignerReportPath', mockSignerWrong,
-      '-MockAaptBadgingPath', mockBadgingRelV5,
+      '-MockAaptBadgingPath', mockBadgingRelV9,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
     'APK_BINARY_SIGNER_MISMATCH',
@@ -741,8 +760,9 @@ public class OtaProvisioningE2ERunner {
     [
       '-ApkPath', provisionedApk,
       '-BuildManifestPath', forgedApkShaMan,
+      '-RescueVersionCode', '7',
       '-MockApksignerReportPath', mockSignerOwner,
-      '-MockAaptBadgingPath', mockBadgingRelV5,
+      '-MockAaptBadgingPath', mockBadgingRelV9,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
     'BUILD_MANIFEST_APK_SHA256_MISMATCH',
@@ -773,8 +793,9 @@ public class OtaProvisioningE2ERunner {
     [
       '-ApkPath', wrongBundledKeyApk,
       '-BuildManifestPath', readyBuildManifest,
+      '-RescueVersionCode', '7',
       '-MockApksignerReportPath', mockSignerOwner,
-      '-MockAaptBadgingPath', mockBadgingRelV5,
+      '-MockAaptBadgingPath', mockBadgingRelV9,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
     'APK_PUBLIC_KEY_MISMATCH_WITH_TRUST_DIR',
@@ -784,31 +805,32 @@ public class OtaProvisioningE2ERunner {
     [
       '-ApkPath', wrongBundledChannelApk,
       '-BuildManifestPath', readyBuildManifest,
+      '-RescueVersionCode', '7',
       '-MockApksignerReportPath', mockSignerOwner,
-      '-MockAaptBadgingPath', mockBadgingRelV5,
+      '-MockAaptBadgingPath', mockBadgingRelV9,
       '-MockAaptXmltreePath', mockXmlRelease
     ],
     'APK_CHANNEL_URL_MISMATCH',
     'OTA_MOCK_EVIDENCE_NOT_AUTHORITATIVE'
   );
   expectScript17Rejection(
-    ['-ApkPath', wrongBundledKeyApk, '-BuildManifestPath', readyBuildManifest],
+    ['-ApkPath', wrongBundledKeyApk, '-BuildManifestPath', readyBuildManifest, '-RescueVersionCode', '7'],
     'APK_PUBLIC_KEY_MISMATCH_WITH_TRUST_DIR'
   );
   expectScript17Rejection(
-    ['-ApkPath', wrongBundledChannelApk, '-BuildManifestPath', readyBuildManifest],
+    ['-ApkPath', wrongBundledChannelApk, '-BuildManifestPath', readyBuildManifest, '-RescueVersionCode', '7'],
     'APK_CHANNEL_URL_MISMATCH'
   );
   expectScript17Rejection(
-    ['-ApkPath', crlfChannelApk, '-BuildManifestPath', readyBuildManifest],
+    ['-ApkPath', crlfChannelApk, '-BuildManifestPath', readyBuildManifest, '-RescueVersionCode', '7'],
     'APK_INVALID_BUNDLED_OTA_CHANNEL_FORMAT'
   );
   expectScript17Rejection(
-    ['-ApkPath', oversizedDerApk, '-BuildManifestPath', readyBuildManifest],
+    ['-ApkPath', oversizedDerApk, '-BuildManifestPath', readyBuildManifest, '-RescueVersionCode', '7'],
     'APK_INVALID_BUNDLED_OTA_KEY'
   );
 
-  // (7) Valid synthetic host fixture (provisionedApk + readyBuildManifest, without real owner APK signature):
+  // (7) Valid synthetic host fixture (provisionedApk + readyBuildManifest + explicit -RescueVersionCode 7, without real owner APK signature):
   //     When real Android SDK tools run against the synthetic ZIP fixture, it must be classified
   //     as OTA_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED_APK (or ANDROID_SDK_AUTHORITATIVE_TOOLS_UNAVAILABLE if no SDK),
   //     NEVER OTA_PROVISIONED_READY and ALWAYS exit 1 with otaReady=false.
@@ -819,13 +841,16 @@ public class OtaProvisioningE2ERunner {
       '-ApkPath', provisionedApk,
       '-BuildManifestPath', readyBuildManifest,
       '-OtaReleasePublicKeyPath', pubDerPath,
-      '-OtaReleaseManifestUrl', manifestUrl
+      '-OtaReleaseManifestUrl', manifestUrl,
+      '-RescueVersionCode', '7'
     ], { encoding: 'utf8', stdio: 'pipe' });
   } catch (err) {
     const parsedSyn = JSON.parse((err.stdout || '').toString());
     if (err.status === 1 &&
         parsedSyn.otaReady === false &&
         parsedSyn.apkBinaryProven === false &&
+        parsedSyn.rescueFloorProven === true &&
+        parsedSyn.rescueVersionCode === 7 &&
         ((parsedSyn.status === 'OTA_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED_APK' &&
           parsedSyn.apkArtifactClass === 'SYNTHETIC_HOST_FIXTURE' &&
           parsedSyn.reasons.includes('APK_SYNTHETIC_FIXTURE_NOT_OWNER_SIGNED')) ||
@@ -859,11 +884,11 @@ public class OtaProvisioningE2ERunner {
     otaReleasePublicKeySha256: pubSha
   }));
   expectScript17Rejection(
-    ['-ApkPath', provisionedApk, '-BuildManifestPath', releaseProfileManifest, '-ChannelProfile', 'Staging'],
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', releaseProfileManifest, '-ChannelProfile', 'Staging', '-RescueVersionCode', '10'],
     'STAGING_BUILD_MANIFEST_PROFILE_MISMATCH'
   );
   expectScript17Rejection(
-    ['-ApkPath', provisionedApk, '-BuildManifestPath', diagProfileManifest, '-ChannelProfile', 'Release'],
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', diagProfileManifest, '-ChannelProfile', 'Release', '-RescueVersionCode', '5'],
     'RELEASE_BUILD_MANIFEST_PROFILE_MISMATCH'
   );
   expectScript17Rejection(
@@ -871,8 +896,20 @@ public class OtaProvisioningE2ERunner {
     'STAGING_RESCUE_VERSION_NOT_ABOVE_CANDIDATE'
   );
   expectScript17Rejection(
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', diagProfileManifest, '-ChannelProfile', 'Staging', '-RescueVersionCode', '6'],
+    'STAGING_RESCUE_VERSION_NOT_ABOVE_CANDIDATE'
+  );
+  expectScript17Rejection(
     ['-ApkPath', provisionedApk, '-BuildManifestPath', releaseProfileManifest, '-ChannelProfile', 'Release', '-RescueVersionCode', '9'],
     'RELEASE_VERSION_NOT_ABOVE_RESCUE'
+  );
+  expectScript17Rejection(
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', releaseProfileManifest, '-ChannelProfile', 'Release', '-RescueVersionCode', '10'],
+    'RELEASE_VERSION_NOT_ABOVE_RESCUE'
+  );
+  expectScript17Rejection(
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', releaseProfileManifest, '-ChannelProfile', 'Release', '-RescueVersionCode', '7', '-MaxInstalledOrPreparedVersionCode', '9'],
+    'RELEASE_VERSION_NOT_ABOVE_MAX_INSTALLED'
   );
 
   const nonDebuggableStagingMan = path.join(workDir, 'build_manifest_stage_nodbg.json');
@@ -886,7 +923,7 @@ public class OtaProvisioningE2ERunner {
     otaReleasePublicKeySha256: pubSha
   }));
   expectScript17Rejection(
-    ['-ApkPath', provisionedApk, '-BuildManifestPath', nonDebuggableStagingMan, '-ChannelProfile', 'Staging'],
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', nonDebuggableStagingMan, '-ChannelProfile', 'Staging', '-RescueVersionCode', '8'],
     'STAGING_BUILD_MANIFEST_NOT_DEBUGGABLE'
   );
 
@@ -901,7 +938,7 @@ public class OtaProvisioningE2ERunner {
     otaReleasePublicKeySha256: pubSha
   }));
   expectScript17Rejection(
-    ['-ApkPath', provisionedApk, '-BuildManifestPath', debuggableReleaseMan, '-ChannelProfile', 'Release'],
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', debuggableReleaseMan, '-ChannelProfile', 'Release', '-RescueVersionCode', '7'],
     'RELEASE_BUILD_MANIFEST_DEBUGGABLE_FORBIDDEN'
   );
 
@@ -916,7 +953,7 @@ public class OtaProvisioningE2ERunner {
     otaReleasePublicKeySha256: pubSha
   }));
   expectScript17Rejection(
-    ['-ApkPath', provisionedApk, '-BuildManifestPath', wrongSignerMan, '-ChannelProfile', 'Release'],
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', wrongSignerMan, '-ChannelProfile', 'Release', '-RescueVersionCode', '7'],
     'BUILD_MANIFEST_SIGNER_MISMATCH'
   );
 
@@ -931,7 +968,7 @@ public class OtaProvisioningE2ERunner {
     otaReleasePublicKeySha256: pubSha
   }));
   expectScript17Rejection(
-    ['-ApkPath', provisionedApk, '-BuildManifestPath', lowStageVcMan, '-ChannelProfile', 'Staging'],
+    ['-ApkPath', provisionedApk, '-BuildManifestPath', lowStageVcMan, '-ChannelProfile', 'Staging', '-RescueVersionCode', '8'],
     'STAGING_VERSION_CODE_OUT_OF_RANGE'
   );
 

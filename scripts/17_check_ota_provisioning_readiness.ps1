@@ -21,8 +21,8 @@ param(
     [string]$OtaReleaseManifestUrl = $null,
     [ValidateSet('Release', 'Staging')]
     [string]$ChannelProfile = 'Release',
-    [ValidateRange(0, 2147483646)]
     [int]$RescueVersionCode = 0,
+    [int]$MaxInstalledOrPreparedVersionCode = 0,
     [switch]$InventoryOnly = $false,
     # Solo per test unitari/E2E: consente di iniettare report apksigner/aapt
     # simulati o di forzare il test dei parser autoritativi senza keystore owner.
@@ -156,7 +156,20 @@ $manifestDebuggable = $null
 $manifestSignerSha256 = $null
 $manifestApkSha256 = $null
 $manifestOtaProvisioned = $null
-$nextRecommendedReleaseVersionCode = 6
+$nextRecommendedReleaseVersionCode = $null
+
+$rescueFloorProven = ($RescueVersionCode -ge 5 -and $RescueVersionCode -le 2147483646)
+if (-not $InventoryOnly -and (-not $rescueFloorProven)) {
+    [void]$reasons.Add("OTA_RESCUE_VERSION_FLOOR_UNKNOWN")
+} elseif ($InventoryOnly -and $RescueVersionCode -ne 0 -and (-not $rescueFloorProven)) {
+    [void]$reasons.Add("OTA_RESCUE_VERSION_FLOOR_UNKNOWN")
+}
+
+$maxInstalledFloorValid = ($MaxInstalledOrPreparedVersionCode -eq 0) -or
+                          ($MaxInstalledOrPreparedVersionCode -ge 3 -and $MaxInstalledOrPreparedVersionCode -le 2147483646)
+if (-not $maxInstalledFloorValid) {
+    [void]$reasons.Add("OTA_MAX_INSTALLED_VERSION_FLOOR_INVALID")
+}
 
 $manFloor = 0
 if ([string]::IsNullOrWhiteSpace($BuildManifestPath)) {
@@ -253,12 +266,17 @@ if ([string]::IsNullOrWhiteSpace($BuildManifestPath)) {
             }
         }
 
-        # 6. RescueVersionCode floor per Staging e Release
-        if ($RescueVersionCode -gt 0 -and $null -ne $manifestVersionCode) {
+        # 6. RescueVersionCode e MaxInstalledOrPreparedVersionCode floor per Staging e Release
+        if ($rescueFloorProven -and $null -ne $manifestVersionCode) {
             if ($ChannelProfile -eq 'Staging' -and $RescueVersionCode -le $manifestVersionCode) {
                 [void]$reasons.Add("STAGING_RESCUE_VERSION_NOT_ABOVE_CANDIDATE")
-            } elseif ($ChannelProfile -eq 'Release' -and $manifestVersionCode -le $RescueVersionCode) {
-                [void]$reasons.Add("RELEASE_VERSION_NOT_ABOVE_RESCUE")
+            } elseif ($ChannelProfile -eq 'Release') {
+                if ($manifestVersionCode -le $RescueVersionCode) {
+                    [void]$reasons.Add("RELEASE_VERSION_NOT_ABOVE_RESCUE")
+                }
+                if ($maxInstalledFloorValid -and $MaxInstalledOrPreparedVersionCode -gt 0 -and $manifestVersionCode -le $MaxInstalledOrPreparedVersionCode) {
+                    [void]$reasons.Add("RELEASE_VERSION_NOT_ABOVE_MAX_INSTALLED")
+                }
             }
         }
 
@@ -276,8 +294,16 @@ if ([string]::IsNullOrWhiteSpace($BuildManifestPath)) {
     }
 }
 
-$rescueFloor = if ($RescueVersionCode -gt 0) { $RescueVersionCode + 1 } else { 0 }
-$nextRecommendedReleaseVersionCode = [Math]::Max(6, [Math]::Max($manFloor, $rescueFloor))
+$effectiveVersionFloor = if ($rescueFloorProven) {
+    [Math]::Max($RescueVersionCode, $(if ($maxInstalledFloorValid -and $MaxInstalledOrPreparedVersionCode -gt 0) { $MaxInstalledOrPreparedVersionCode } else { 0 }))
+} else {
+    $null
+}
+$nextRecommendedReleaseVersionCode = if ($rescueFloorProven) {
+    [Math]::Max(6, [Math]::Max($manFloor, ($effectiveVersionFloor + 1)))
+} else {
+    $null
+}
 
 $channelConfigured = $false
 if (-not [string]::IsNullOrWhiteSpace($effectiveUrl)) {
@@ -562,6 +588,8 @@ $inventoryReady = ($reasons.Count -eq 0) -and (-not $useMocks) -and $trustKeyPre
 $otaReady = (-not $InventoryOnly) -and
             (-not $useMocks) -and
             $realToolsVerified -and
+            $rescueFloorProven -and
+            $maxInstalledFloorValid -and
             ($reasons.Count -eq 0) -and
             $trustKeyPresent -and
             $channelConfigured -and
@@ -590,6 +618,10 @@ $verdict = [ordered]@{
     inventoryReady = $inventoryReady
     mockEvidenceInjected = [bool]$useMocks
     realToolsVerified = [bool]$realToolsVerified
+    rescueFloorProven = [bool]$rescueFloorProven
+    rescueVersionCode = $(if ($rescueFloorProven) { $RescueVersionCode } else { $null })
+    maxInstalledOrPreparedVersionCode = $(if ($maxInstalledFloorValid -and $MaxInstalledOrPreparedVersionCode -gt 0) { $MaxInstalledOrPreparedVersionCode } else { $null })
+    effectiveVersionFloor = $effectiveVersionFloor
     status = $status
     channelProfile = $ChannelProfile
     trustDirectoryPresent = $trustDirExists
