@@ -72,13 +72,16 @@ jobs:
           node --check scripts/13_create_ota_release_trust.mjs
           node --check scripts/14_sign_ota_release_manifest.mjs
           node --check scripts/18_prepare_ota_staging.mjs
+          node --check scripts/19_issue_ota_recovery_evidence.mjs
           node --check scripts/lib/ota_release_apk_proof.mjs
+          node --check scripts/lib/ota_recovery_evidence.mjs
           node akai-remote-tests/test_ota_release_apk_proof.mjs
           node akai-remote-tests/test_ota_staging_channel.mjs
           # Never execute owner-offline cryptographic key generation in Actions.
           grep -q 'process.env.CI' scripts/13_create_ota_release_trust.mjs
           grep -q 'process.env.CI' scripts/14_sign_ota_release_manifest.mjs
           grep -q 'process.env.CI' scripts/18_prepare_ota_staging.mjs
+          grep -q 'process.env.CI' scripts/19_issue_ota_recovery_evidence.mjs
           grep -q 'aes-256-cbc' scripts/13_create_ota_release_trust.mjs
           grep -q 'aes-256-cbc' scripts/18_prepare_ota_staging.mjs
           grep -q 'AkaiJarvisOtaStagingTrust' scripts/18_prepare_ota_staging.mjs
@@ -346,6 +349,9 @@ jobs:
 
       - name: 4b2. Signed OTA Provisioning E2E (RSA-3072 trust, channel & A2 rescue v5->v6 upgrade + Script 17 readiness)
         run: node akai-remote-tests/test_ota_provisioning_e2e.mjs
+
+      - name: 4b2b. Host-only OTA recovery evidence workflow & Staging/Release cross-policy tests (no TV/keys)
+        run: node akai-remote-tests/test_ota_recovery_evidence_workflow.mjs
 
       - name: 4b3. On-TV owner-confirmed OTA UI & PackageInstaller wiring checks
         run: python3 akai-remote-tests/test_ota_owner_ui_wiring.py

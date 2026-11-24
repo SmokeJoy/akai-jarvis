@@ -2,18 +2,24 @@ package it.akai.customremote.ai;
 
 import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
+import java.util.Locale;
 
 /**
  * Pure-Java, fail-closed verification for local signed OTA backup & recovery
- * readiness receipts (jarvis-ota-evidence-v1).
+ * readiness receipts (jarvis-ota-evidence-v2).
  *
  * UI checkboxes alone prove owner acknowledgment, NEVER technical backup or
  * restore readiness. This gate enforces a detached RSA signature under the
- * bundled trust anchor plus strict binding to device UID, installed package/
- * version, backup digest, bounded validity window, A2 Rescue > candidate, and
- * non-destructive offline restore attestation.
+ * bundled trust anchor plus strict binding to channel profile (staging/release),
+ * device UID, installed version, backup digest, bounded validity window,
+ * coherent in-place Android 9 version ordering:
+ * - staging: installed < candidate < recoveryRescue
+ * - release: installed <= priorRescueFloor < candidate < recoveryRescue
+ * and non-destructive offline restore attestation.
  *
- * Host fixtures using ephemeral test keys remain NON_AUTHORITATIVE for TV.
+ * Note: verifying a signed receipt does NOT itself hash off-device backup files;
+ * archive digest + restore integrity MUST be established before signing (e.g.
+ * via scripts/16 + scripts/19) and/or locally via OtaRecoveryEvidenceStore.
  */
 public final class OtaRecoveryEvidenceGate {
     public static final int MAX_RECEIPT_BYTES = 4096;
@@ -23,13 +29,16 @@ public final class OtaRecoveryEvidenceGate {
     private static final String[] FIELD_NAMES = {
             "format",
             "package",
+            "channelProfile",
             "deviceUid",
             "installedVersionCode",
             "backupId",
             "backupCreatedEpochSec",
             "backupExpiresEpochSec",
             "backupArchiveSha256",
-            "rescueVersionCode",
+            "priorRescueFloorVersionCode",
+            "recoveryRescueVersionCode",
+            "rescueApkSha256",
             "offlineRestoreVerified",
             "nonDestructiveVerified"
     };
@@ -41,22 +50,32 @@ public final class OtaRecoveryEvidenceGate {
         public final boolean backupVerified;
         public final boolean recoveryVerified;
         public final String code;
+        public final String channelProfile;
         public final String backupId;
-        public final int rescueVersionCode;
+        public final String backupArchiveSha256;
+        public final int priorRescueFloorVersionCode;
+        public final int recoveryRescueVersionCode;
+        public final String rescueApkSha256;
 
         private Verdict(boolean accepted, boolean backupVerified, boolean recoveryVerified,
-                        String code, String backupId, int rescueVersionCode) {
+                        String code, String channelProfile, String backupId,
+                        String backupArchiveSha256, int priorRescueFloorVersionCode,
+                        int recoveryRescueVersionCode, String rescueApkSha256) {
             this.accepted = accepted;
             this.backupVerified = backupVerified;
             this.recoveryVerified = recoveryVerified;
             this.code = code;
+            this.channelProfile = channelProfile;
             this.backupId = backupId;
-            this.rescueVersionCode = rescueVersionCode;
+            this.backupArchiveSha256 = backupArchiveSha256;
+            this.priorRescueFloorVersionCode = priorRescueFloorVersionCode;
+            this.recoveryRescueVersionCode = recoveryRescueVersionCode;
+            this.rescueApkSha256 = rescueApkSha256;
         }
     }
 
     private static Verdict deny(String code) {
-        return new Verdict(false, false, false, code, null, 0);
+        return new Verdict(false, false, false, code, null, null, null, 0, 0, null);
     }
 
     static Verdict externalDeny(String code) {
@@ -68,6 +87,11 @@ public final class OtaRecoveryEvidenceGate {
         if (raw == null || !raw.matches("[1-9][0-9]{0,9}"))
             throw new IllegalArgumentException("INVALID_POSITIVE_INT");
         return Integer.parseInt(raw);
+    }
+
+    private static int parseNonNegativeInt(String raw) {
+        if ("0".equals(raw)) return 0;
+        return parsePositiveInt(raw);
     }
 
     private static long parsePositiveLong(String raw) {
@@ -119,32 +143,37 @@ public final class OtaRecoveryEvidenceGate {
                 fields[i] = lines[i].substring(prefix.length());
             }
 
-            if (!"jarvis-ota-evidence-v1".equals(fields[0])) {
+            if (!"jarvis-ota-evidence-v2".equals(fields[0])) {
                 return deny("EVIDENCE_FORMAT_UNSUPPORTED");
             }
             if (!OtaCandidateGate.PACKAGE.equals(fields[1])) {
                 return deny("EVIDENCE_PACKAGE_MISMATCH");
             }
+            String channelProfile = fields[2];
+            if (!"staging".equals(channelProfile) && !"release".equals(channelProfile)) {
+                return deny("EVIDENCE_CHANNEL_PROFILE_INVALID");
+            }
+
             if (localDeviceUid == null || !localDeviceUid.matches("[A-Za-z0-9._:-]{8,128}")) {
                 return deny("EVIDENCE_DEVICE_UID_UNAVAILABLE");
             }
-            if (!fields[2].matches("[A-Za-z0-9._:-]{8,128}") || !localDeviceUid.equals(fields[2])) {
+            if (!fields[3].matches("[A-Za-z0-9._:-]{8,128}") || !localDeviceUid.equals(fields[3])) {
                 return deny("EVIDENCE_DEVICE_UID_MISMATCH");
             }
 
-            int receiptInstalledVersion = parsePositiveInt(fields[3]);
+            int receiptInstalledVersion = parsePositiveInt(fields[4]);
             if (actualInstalledVersionCode < 1 ||
                     receiptInstalledVersion != actualInstalledVersionCode) {
                 return deny("EVIDENCE_INSTALLED_VERSION_MISMATCH");
             }
 
-            String backupId = fields[4];
+            String backupId = fields[5];
             if (!backupId.matches("[A-Za-z0-9._:-]{4,64}")) {
                 return deny("EVIDENCE_BACKUP_ID_INVALID");
             }
 
-            long createdEpochSec = parsePositiveLong(fields[5]);
-            long expiresEpochSec = parsePositiveLong(fields[6]);
+            long createdEpochSec = parsePositiveLong(fields[6]);
+            long expiresEpochSec = parsePositiveLong(fields[7]);
             if (nowEpochSec <= 0L) {
                 return deny("EVIDENCE_CLOCK_INVALID");
             }
@@ -161,19 +190,42 @@ public final class OtaRecoveryEvidenceGate {
                 return deny("EVIDENCE_EXPIRED");
             }
 
-            if (!fields[7].matches("[0-9a-fA-F]{64}")) {
+            if (!fields[8].matches("[0-9a-fA-F]{64}")) {
                 return deny("EVIDENCE_BACKUP_DIGEST_INVALID");
             }
+            String backupSha256 = fields[8].toLowerCase(Locale.ROOT);
 
-            int rescueVersionCode = parsePositiveInt(fields[8]);
-            if (rescueVersionCode < 5 ||
-                    candidateVersionCode <= actualInstalledVersionCode ||
-                    rescueVersionCode <= candidateVersionCode) {
-                return deny("EVIDENCE_RESCUE_NOT_ABOVE_CANDIDATE");
+            int priorRescueFloor = parseNonNegativeInt(fields[9]);
+            if (priorRescueFloor != 0 && priorRescueFloor < 5) {
+                return deny("EVIDENCE_PRIOR_RESCUE_FLOOR_INVALID");
+            }
+            int recoveryRescueVersion = parsePositiveInt(fields[10]);
+
+            if (!fields[11].matches("[0-9a-fA-F]{64}")) {
+                return deny("EVIDENCE_RESCUE_DIGEST_INVALID");
+            }
+            String rescueApkSha256 = fields[11].toLowerCase(Locale.ROOT);
+
+            if (candidateVersionCode <= actualInstalledVersionCode) {
+                return deny("EVIDENCE_CANDIDATE_NOT_ABOVE_INSTALLED");
             }
 
-            Boolean offlineRestore = parseStrictBoolean(fields[9]);
-            Boolean nonDestructive = parseStrictBoolean(fields[10]);
+            if ("release".equals(channelProfile)) {
+                if (priorRescueFloor < 5 || candidateVersionCode <= priorRescueFloor) {
+                    return deny("EVIDENCE_RELEASE_NOT_ABOVE_PRIOR_RESCUE");
+                }
+            } else {
+                if (priorRescueFloor != 0 && candidateVersionCode <= priorRescueFloor) {
+                    return deny("EVIDENCE_STAGING_NOT_ABOVE_PRIOR_RESCUE");
+                }
+            }
+
+            if (recoveryRescueVersion < 5 || recoveryRescueVersion <= candidateVersionCode) {
+                return deny("EVIDENCE_RECOVERY_RESCUE_NOT_ABOVE_CANDIDATE");
+            }
+
+            Boolean offlineRestore = parseStrictBoolean(fields[12]);
+            Boolean nonDestructive = parseStrictBoolean(fields[13]);
             if (offlineRestore == null || nonDestructive == null) {
                 return deny("EVIDENCE_FORMAT_INVALID");
             }
@@ -186,7 +238,8 @@ public final class OtaRecoveryEvidenceGate {
 
             return new Verdict(true, true, true,
                     "LOCAL_RECOVERY_EVIDENCE_VERIFIED_NOT_AUTHORIZED_ALONE",
-                    backupId, rescueVersionCode);
+                    channelProfile, backupId, backupSha256,
+                    priorRescueFloor, recoveryRescueVersion, rescueApkSha256);
         } catch (RuntimeException invalid) {
             return deny("EVIDENCE_FORMAT_INVALID");
         }

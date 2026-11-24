@@ -243,29 +243,33 @@ public final class OtaDeliveryIntegrationTest {
         return new SignedArtifact(versionCode, apkPath, apkBytes, apkSha256, manifestBytes, sigBytes);
     }
 
-    private static byte[] buildSignedEvidenceReceipt(KeyPair signingKey,
+    private static byte[] buildSignedEvidenceReceipt(String channelProfile,
                                                      String deviceUid,
                                                      int installedVersion,
                                                      String backupId,
                                                      long createdEpochSec,
                                                      long expiresEpochSec,
                                                      String backupArchiveSha256,
-                                                     int rescueVersionCode,
+                                                     int priorRescueFloorVersionCode,
+                                                     int recoveryRescueVersionCode,
+                                                     String rescueApkSha256,
                                                      boolean offlineRestoreVerified,
-                                                     boolean nonDestructiveVerified) throws Exception {
-        String text = "format=jarvis-ota-evidence-v1\n"
+                                                     boolean nonDestructiveVerified) {
+        String text = "format=jarvis-ota-evidence-v2\n"
                 + "package=" + OtaCandidateGate.PACKAGE + "\n"
+                + "channelProfile=" + channelProfile + "\n"
                 + "deviceUid=" + deviceUid + "\n"
                 + "installedVersionCode=" + installedVersion + "\n"
                 + "backupId=" + backupId + "\n"
                 + "backupCreatedEpochSec=" + createdEpochSec + "\n"
                 + "backupExpiresEpochSec=" + expiresEpochSec + "\n"
                 + "backupArchiveSha256=" + backupArchiveSha256 + "\n"
-                + "rescueVersionCode=" + rescueVersionCode + "\n"
+                + "priorRescueFloorVersionCode=" + priorRescueFloorVersionCode + "\n"
+                + "recoveryRescueVersionCode=" + recoveryRescueVersionCode + "\n"
+                + "rescueApkSha256=" + rescueApkSha256 + "\n"
                 + "offlineRestoreVerified=" + offlineRestoreVerified + "\n"
                 + "nonDestructiveVerified=" + nonDestructiveVerified + "\n";
-        byte[] bytes = text.getBytes(StandardCharsets.US_ASCII);
-        return bytes;
+        return text.getBytes(StandardCharsets.US_ASCII);
     }
 
     private static byte[] signDetachedRsa(byte[] payload, KeyPair signingKey) throws Exception {
@@ -283,6 +287,14 @@ public final class OtaDeliveryIntegrationTest {
         }
         Files.write(new File(dir, OtaRecoveryEvidenceStore.RECEIPT_FILENAME).toPath(), receiptBytes);
         Files.write(new File(dir, OtaRecoveryEvidenceStore.SIGNATURE_FILENAME).toPath(), sigBytes);
+    }
+
+    private static void writeLocalBackupArchive(File filesDir, byte[] archiveBytes) throws IOException {
+        File dir = new File(filesDir, OtaRecoveryEvidenceStore.EVIDENCE_SUBDIR);
+        if (!dir.isDirectory() && !dir.mkdirs()) {
+            throw new IOException("Could not create evidence dir");
+        }
+        Files.write(new File(dir, OtaRecoveryEvidenceStore.LOCAL_ARCHIVE_FILENAME).toPath(), archiveBytes);
     }
 
     private static void clearEvidenceFiles(File filesDir) {
@@ -1122,6 +1134,7 @@ public final class OtaDeliveryIntegrationTest {
 
                 // Enable unknown-sources so every cryptographic backup/recovery receipt gate runs directly
                 pmRestarted.canRequestInstalls = true;
+                final String rescueDigest = v8Artifact.apkSha256;
 
                 // 11b: two checkboxes checked (ownerConsent=true) but ZERO evidence receipt on disk
                 clearEvidenceFiles(clientFilesRestart);
@@ -1134,8 +1147,8 @@ public final class OtaDeliveryIntegrationTest {
 
                 // 11c: expired receipt rejected even with ownerConsent=true
                 byte[] expiredReceipt = buildSignedEvidenceReceipt(
-                        stagingManifestKey, deviceUid, 6, "bkp-expired",
-                        nowSec - 7200L, nowSec - 60L, v7Artifact.apkSha256, 9, true, true);
+                        "staging", deviceUid, 6, "bkp-expired",
+                        nowSec - 7200L, nowSec - 60L, v7Artifact.apkSha256, 0, 9, rescueDigest, true, true);
                 writeRawEvidenceFiles(clientFilesRestart, expiredReceipt,
                         signDetachedRsa(expiredReceipt, stagingManifestKey));
                 OtaOwnerPackageInstaller.Outcome expiredOutcome =
@@ -1147,8 +1160,8 @@ public final class OtaDeliveryIntegrationTest {
 
                 // 11d: receipt bound to a different device UID rejected
                 byte[] otherUidReceipt = buildSignedEvidenceReceipt(
-                        stagingManifestKey, wrongUid, 6, "bkp-other-uid",
-                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 9, true, true);
+                        "staging", wrongUid, 6, "bkp-other-uid",
+                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 0, 9, rescueDigest, true, true);
                 writeRawEvidenceFiles(clientFilesRestart, otherUidReceipt,
                         signDetachedRsa(otherUidReceipt, stagingManifestKey));
                 OtaOwnerPackageInstaller.Outcome uidMismatchOutcome =
@@ -1160,8 +1173,8 @@ public final class OtaDeliveryIntegrationTest {
 
                 // 11e: receipt bound to different installedVersionCode (5 vs actual 6) rejected
                 byte[] wrongVerReceipt = buildSignedEvidenceReceipt(
-                        stagingManifestKey, deviceUid, 5, "bkp-wrong-ver",
-                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 9, true, true);
+                        "staging", deviceUid, 5, "bkp-wrong-ver",
+                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 0, 9, rescueDigest, true, true);
                 writeRawEvidenceFiles(clientFilesRestart, wrongVerReceipt,
                         signDetachedRsa(wrongVerReceipt, stagingManifestKey));
                 OtaOwnerPackageInstaller.Outcome verMismatchOutcome =
@@ -1173,8 +1186,8 @@ public final class OtaDeliveryIntegrationTest {
 
                 // 11f: unattested offline restore rejected
                 byte[] noOfflineRestore = buildSignedEvidenceReceipt(
-                        stagingManifestKey, deviceUid, 6, "bkp-no-offline",
-                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 9, false, true);
+                        "staging", deviceUid, 6, "bkp-no-offline",
+                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 0, 9, rescueDigest, false, true);
                 writeRawEvidenceFiles(clientFilesRestart, noOfflineRestore,
                         signDetachedRsa(noOfflineRestore, stagingManifestKey));
                 OtaOwnerPackageInstaller.Outcome noOfflineOutcome =
@@ -1186,8 +1199,8 @@ public final class OtaDeliveryIntegrationTest {
 
                 // 11g: non-destructive restore false rejected
                 byte[] destructiveReceipt = buildSignedEvidenceReceipt(
-                        stagingManifestKey, deviceUid, 6, "bkp-destructive",
-                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 9, true, false);
+                        "staging", deviceUid, 6, "bkp-destructive",
+                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 0, 9, rescueDigest, true, false);
                 writeRawEvidenceFiles(clientFilesRestart, destructiveReceipt,
                         signDetachedRsa(destructiveReceipt, stagingManifestKey));
                 OtaOwnerPackageInstaller.Outcome destructiveOutcome =
@@ -1197,27 +1210,40 @@ public final class OtaDeliveryIntegrationTest {
                         && "EVIDENCE_NONDESTRUCTIVE_RESTORE_NOT_VERIFIED".equals(destructiveOutcome.code),
                         "Scenario 11g nonDestructive false: " + destructiveOutcome.code);
 
-                // 11h: rescueVersionCode <= candidateVersionCode (8 <= 8) rejected
+                // 11h: recoveryRescueVersionCode <= candidateVersionCode (8 <= 8) rejected
                 byte[] lowRescueReceipt = buildSignedEvidenceReceipt(
-                        stagingManifestKey, deviceUid, 6, "bkp-low-rescue",
-                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 8, true, true);
+                        "staging", deviceUid, 6, "bkp-low-rescue",
+                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 0, 8, rescueDigest, true, true);
                 writeRawEvidenceFiles(clientFilesRestart, lowRescueReceipt,
                         signDetachedRsa(lowRescueReceipt, stagingManifestKey));
                 OtaOwnerPackageInstaller.Outcome lowRescueOutcome =
                         OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(
                                 ctxRestarted, retryV8, true, stagingApkSignerSha, nowSec);
                 check(!lowRescueOutcome.submittedToAndroid
-                        && "EVIDENCE_RESCUE_NOT_ABOVE_CANDIDATE".equals(lowRescueOutcome.code),
+                        && "EVIDENCE_RECOVERY_RESCUE_NOT_ABOVE_CANDIDATE".equals(lowRescueOutcome.code),
                         "Scenario 11h rescue <= candidate: " + lowRescueOutcome.code);
 
+                // 11h2: Release receipt where candidate <= priorRescueFloor (8 <= 8) rejected
+                byte[] badReleaseFloor = buildSignedEvidenceReceipt(
+                        "release", deviceUid, 6, "bkp-rel-floor",
+                        nowSec - 300L, nowSec + 86400L, v7Artifact.apkSha256, 8, 9, rescueDigest, true, true);
+                writeRawEvidenceFiles(clientFilesRestart, badReleaseFloor,
+                        signDetachedRsa(badReleaseFloor, stagingManifestKey));
+                OtaOwnerPackageInstaller.Outcome badReleaseFloorOutcome =
+                        OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(
+                                ctxRestarted, retryV8, true, stagingApkSignerSha, nowSec);
+                check(!badReleaseFloorOutcome.submittedToAndroid
+                        && "EVIDENCE_RELEASE_NOT_ABOVE_PRIOR_RESCUE".equals(badReleaseFloorOutcome.code),
+                        "Scenario 11h2 release floor mismatch: " + badReleaseFloorOutcome.code);
+
                 // 11i: corrupted signature rejected (and import helper also refuses invalid sig)
-                byte[] validSyntheticReceipt = buildSignedEvidenceReceipt(
-                        stagingManifestKey, deviceUid, 6, "bkp-synthetic-host-01",
-                        nowSec - 300L, nowSec + 86400L * 7L, v7Artifact.apkSha256, 9, true, true);
-                byte[] validSyntheticSig = signDetachedRsa(validSyntheticReceipt, stagingManifestKey);
-                byte[] corruptReceiptSig = validSyntheticSig.clone();
+                byte[] validReleaseSyntheticReceipt = buildSignedEvidenceReceipt(
+                        "release", deviceUid, 6, "bkp-synthetic-rel-01",
+                        nowSec - 300L, nowSec + 86400L * 7L, v7Artifact.apkSha256, 7, 9, rescueDigest, true, true);
+                byte[] validReleaseSyntheticSig = signDetachedRsa(validReleaseSyntheticReceipt, stagingManifestKey);
+                byte[] corruptReceiptSig = validReleaseSyntheticSig.clone();
                 corruptReceiptSig[0] ^= 0x3c;
-                writeRawEvidenceFiles(clientFilesRestart, validSyntheticReceipt, corruptReceiptSig);
+                writeRawEvidenceFiles(clientFilesRestart, validReleaseSyntheticReceipt, corruptReceiptSig);
                 OtaOwnerPackageInstaller.Outcome badReceiptSigOutcome =
                         OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(
                                 ctxRestarted, retryV8, true, stagingApkSignerSha, nowSec);
@@ -1227,21 +1253,36 @@ public final class OtaDeliveryIntegrationTest {
 
                 OtaRecoveryEvidenceGate.Verdict refusedImport =
                         OtaRecoveryEvidenceStore.importVerifiedReceipt(
-                                ctxRestarted, validSyntheticReceipt, corruptReceiptSig,
+                                ctxRestarted, validReleaseSyntheticReceipt, corruptReceiptSig,
                                 6, 8, nowSec);
                 check(!refusedImport.accepted && "EVIDENCE_SIGNATURE_INVALID".equals(refusedImport.code),
                         "Scenario 11j importVerifiedReceipt must reject bad signature");
 
-                // 11k: valid synthetic host receipt imported (NON_AUTHORITATIVE for real TV)
+                // 11k: valid RSA signature on receipt + tampered local archive -> blocked BEFORE PackageInstaller!
+                byte[] tamperedBackup = v7Artifact.apkBytes.clone();
+                tamperedBackup[100] ^= 0x55;
+                writeLocalBackupArchive(clientFilesRestart, tamperedBackup);
+                writeRawEvidenceFiles(clientFilesRestart, validReleaseSyntheticReceipt, validReleaseSyntheticSig);
+                OtaOwnerPackageInstaller.Outcome tamperedLocalArchiveOutcome =
+                        OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(
+                                ctxRestarted, retryV8, true, stagingApkSignerSha, nowSec);
+                check(!tamperedLocalArchiveOutcome.submittedToAndroid
+                        && "EVIDENCE_LOCAL_ARCHIVE_HASH_MISMATCH".equals(tamperedLocalArchiveOutcome.code),
+                        "Scenario 11k local archive mismatch must fail closed: " + tamperedLocalArchiveOutcome.code);
+                check(installerRestarted.createSessionCount == 0 && installerRestarted.commitCount == 0,
+                        "Installer must NOT create session when local archive bytes differ from signed receipt");
+
+                // Restore genuine matching local archive and import cleanly
+                writeLocalBackupArchive(clientFilesRestart, v7Artifact.apkBytes);
                 OtaRecoveryEvidenceGate.Verdict importedSynthetic =
                         OtaRecoveryEvidenceStore.importVerifiedReceipt(
-                                ctxRestarted, validSyntheticReceipt, validSyntheticSig,
+                                ctxRestarted, validReleaseSyntheticReceipt, validReleaseSyntheticSig,
                                 6, 8, nowSec);
                 check(importedSynthetic.accepted
                         && "LOCAL_RECOVERY_EVIDENCE_VERIFIED_NOT_AUTHORIZED_ALONE".equals(importedSynthetic.code),
-                        "Scenario 11k synthetic receipt import: " + importedSynthetic.code);
+                        "Scenario 11k2 synthetic release receipt import: " + importedSynthetic.code);
                 check(installerRestarted.createSessionCount == 0 && installerRestarted.commitCount == 0,
-                        "Installer must NOT create or commit session while any consent/evidence/preflight gate fails");
+                        "Installer must NOT create or commit session before final submit");
 
                 // 11l: public submit still blocks staging signer even with valid synthetic receipt
                 OtaOwnerPackageInstaller.Outcome publicInstallerBlocked =
@@ -1252,8 +1293,8 @@ public final class OtaDeliveryIntegrationTest {
                 check(installerRestarted.createSessionCount == 0 && installerRestarted.commitCount == 0,
                         "Scenario 11l must leave PackageInstaller untouched");
 
-                // 11m: positive synthetic fixture (NON_AUTHORITATIVE ephemeral key + receipt):
-                // ownerConsent=true + verified synthetic receipt + staging signer yields committed session
+                // 11m: positive synthetic release fixture (NON_AUTHORITATIVE ephemeral key + receipt):
+                // installed=6 <= priorRescue=7 < candidate=8 < recoveryRescue=9
                 OtaOwnerPackageInstaller.Outcome committed =
                         OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(
                                 ctxRestarted, retryV8, true, stagingApkSignerSha, nowSec);

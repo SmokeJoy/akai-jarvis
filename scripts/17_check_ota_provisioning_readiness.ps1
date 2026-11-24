@@ -23,6 +23,7 @@ param(
     [string]$ChannelProfile = 'Release',
     [int]$RescueVersionCode = 0,
     [int]$MaxInstalledOrPreparedVersionCode = 0,
+    [int]$PostReleaseRescueVersionCode = 0,
     [switch]$InventoryOnly = $false,
     # Solo per test unitari/E2E: consente di iniettare report apksigner/aapt
     # simulati o di forzare il test dei parser autoritativi senza keystore owner.
@@ -177,6 +178,11 @@ if (-not $InventoryOnly -and $ChannelProfile -eq 'Release' -and (-not $maxInstal
     [void]$reasons.Add("OTA_MAX_INSTALLED_VERSION_FLOOR_UNKNOWN")
 }
 
+$postReleaseRescueSupplied = ($PostReleaseRescueVersionCode -ge 5 -and $PostReleaseRescueVersionCode -le 2147483646)
+if ($PostReleaseRescueVersionCode -ne 0 -and (-not $postReleaseRescueSupplied)) {
+    [void]$reasons.Add("OTA_POST_RELEASE_RESCUE_VERSION_INVALID")
+}
+
 $manFloor = 0
 if ([string]::IsNullOrWhiteSpace($BuildManifestPath)) {
     if (-not $InventoryOnly) {
@@ -282,6 +288,9 @@ if ([string]::IsNullOrWhiteSpace($BuildManifestPath)) {
                 }
                 if ($maxInstalledFloorPositive -and $manifestVersionCode -le $MaxInstalledOrPreparedVersionCode) {
                     [void]$reasons.Add("RELEASE_VERSION_NOT_ABOVE_MAX_INSTALLED")
+                }
+                if ($postReleaseRescueSupplied -and $PostReleaseRescueVersionCode -le $manifestVersionCode) {
+                    [void]$reasons.Add("RELEASE_POST_RESCUE_NOT_ABOVE_CANDIDATE")
                 }
             }
         }
@@ -633,6 +642,8 @@ $verdict = [ordered]@{
     maxInstalledFloorSupplied = [bool]$maxInstalledFloorSupplied
     versionFloorPhysicallyAttested = $false
     rescueVersionCode = $(if ($rescueFloorSupplied) { $RescueVersionCode } else { $null })
+    priorRescueFloorVersionCode = $(if ($rescueFloorSupplied) { $RescueVersionCode } else { $null })
+    postReleaseRescueVersionCode = $(if ($postReleaseRescueSupplied) { $PostReleaseRescueVersionCode } else { $null })
     maxInstalledOrPreparedVersionCode = $(if ($maxInstalledFloorPositive) { $MaxInstalledOrPreparedVersionCode } else { $null })
     effectiveVersionFloor = $effectiveVersionFloor
     status = $status

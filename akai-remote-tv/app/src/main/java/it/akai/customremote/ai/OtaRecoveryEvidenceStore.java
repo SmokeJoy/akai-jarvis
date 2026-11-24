@@ -14,20 +14,25 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
 import java.security.PublicKey;
+import java.util.Locale;
 
 /**
  * Private on-device reader/verifier for PC-off OTA recovery evidence receipts.
  *
  * Reads only from app-private filesDir/ota-evidence without network calls or PC
  * dependency at runtime, binding cryptographic receipt verification to the
- * bundled trust anchor and Android Settings.Secure.ANDROID_ID.
+ * bundled trust anchor, Android Settings.Secure.ANDROID_ID, and — when present
+ * on disk — the exact SHA-256 of filesDir/ota-evidence/ota-backup.bundle.
  */
 public final class OtaRecoveryEvidenceStore {
     public static final String EVIDENCE_SUBDIR = "ota-evidence";
     public static final String RECEIPT_FILENAME = "ota-recovery-evidence.receipt";
     public static final String SIGNATURE_FILENAME = "ota-recovery-evidence.receipt.sig";
+    public static final String LOCAL_ARCHIVE_FILENAME = "ota-backup.bundle";
     private static final int MAX_SIG_BYTES = 512;
+    private static final long MAX_LOCAL_ARCHIVE_BYTES = 64L * 1024L * 1024L;
 
     private OtaRecoveryEvidenceStore() {}
 
@@ -79,9 +84,23 @@ public final class OtaRecoveryEvidenceStore {
                 return OtaRecoveryEvidenceGate.externalDeny("EVIDENCE_RECEIPT_UNREADABLE");
             }
 
-            return verifyBytesWithLocalAnchor(
+            OtaRecoveryEvidenceGate.Verdict verdict = verifyBytesWithLocalAnchor(
                     context, receiptBytes, sigBytes,
                     actualInstalledVersionCode, candidateVersionCode, nowEpochSec);
+            if (!verdict.accepted) return verdict;
+
+            // When a local encrypted backup bundle copy exists on device inside
+            // ota-evidence/, verify its physical bytes match backupArchiveSha256.
+            File localArchive = new File(expectedDir, LOCAL_ARCHIVE_FILENAME);
+            if (Files.exists(localArchive.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                String actualArchiveSha = sha256BoundedPrivateFile(
+                        localArchive, expectedDir, MAX_LOCAL_ARCHIVE_BYTES);
+                if (actualArchiveSha == null ||
+                        !actualArchiveSha.equalsIgnoreCase(verdict.backupArchiveSha256)) {
+                    return OtaRecoveryEvidenceGate.externalDeny("EVIDENCE_LOCAL_ARCHIVE_HASH_MISMATCH");
+                }
+            }
+            return verdict;
         } catch (Exception unavailable) {
             return OtaRecoveryEvidenceGate.externalDeny("EVIDENCE_STORAGE_UNAVAILABLE");
         }
@@ -112,6 +131,16 @@ public final class OtaRecoveryEvidenceStore {
                     !Files.isDirectory(dir.toPath(), LinkOption.NOFOLLOW_LINKS) ||
                     !dir.getCanonicalFile().equals(dir.getAbsoluteFile())) {
                 return OtaRecoveryEvidenceGate.externalDeny("EVIDENCE_STORAGE_UNAVAILABLE");
+            }
+
+            File localArchive = new File(dir, LOCAL_ARCHIVE_FILENAME);
+            if (Files.exists(localArchive.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                String actualArchiveSha = sha256BoundedPrivateFile(
+                        localArchive, dir, MAX_LOCAL_ARCHIVE_BYTES);
+                if (actualArchiveSha == null ||
+                        !actualArchiveSha.equalsIgnoreCase(verdict.backupArchiveSha256)) {
+                    return OtaRecoveryEvidenceGate.externalDeny("EVIDENCE_LOCAL_ARCHIVE_HASH_MISMATCH");
+                }
             }
 
             writeAtomicPrivateFile(dir, RECEIPT_FILENAME, receiptBytes);
@@ -163,6 +192,40 @@ public final class OtaRecoveryEvidenceStore {
                 }
             }
             return (total > 0) ? out.toByteArray() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String sha256BoundedPrivateFile(File target, File canonicalDir, long maxBytes) {
+        try {
+            Path p = target.toPath();
+            if (Files.isSymbolicLink(p) ||
+                    !Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) ||
+                    !canonicalDir.equals(target.getCanonicalFile().getParentFile())) {
+                return null;
+            }
+            long len = target.length();
+            if (len <= 0L || len > maxBytes) return null;
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[16 * 1024];
+            long total = 0L;
+            try (FileInputStream in = new FileInputStream(target)) {
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    if (n == 0) continue;
+                    total += n;
+                    if (total > maxBytes) return null;
+                    md.update(buf, 0, n);
+                }
+            }
+            if (total != len) return null;
+            byte[] digest = md.digest();
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                hex.append(String.format(Locale.ROOT, "%02x", b & 0xff));
+            }
+            return hex.toString();
         } catch (Exception e) {
             return null;
         }
