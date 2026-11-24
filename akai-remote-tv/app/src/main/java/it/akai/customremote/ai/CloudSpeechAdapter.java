@@ -22,7 +22,7 @@ import java.util.Comparator;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * CloudSpeechAdapter: Client TTS Neurale Cloud ad alta fedeltà per AKAI TV.
+ * CloudSpeechAdapter: disabled legacy cloud-speech compatibility shim for AKAI TV.
  * 
  * - Supporta Microsoft Azure Speech F0 (500.000 caratteri/mese gratuiti)
  * - Voci neurali italiane: it-IT-DiegoNeural (predefinita maschile), it-IT-IsabellaNeural (femminile)
@@ -86,108 +86,16 @@ public class CloudSpeechAdapter {
      * @return true se avviato con successo, false se fallito o fallback necessario
      */
     public synchronized boolean speakNeural(String text, String voice, String region, String apiKey, final Runnable onComplete) {
-        if (AkaiAiController.isStrictLocalOnly()) {
-            Log.w(TAG, "STRICT_LOCAL_ONLY active: Cloud speech strictly blocked (zero network requests).");
-            return false;
-        }
-        if (text == null || text.trim().isEmpty()) return false;
-        if (apiKey == null || apiKey.trim().isEmpty() || VOICE_OFFLINE.equals(voice)) return false;
-
-        String selectedVoice = (voice != null && !voice.isEmpty()) ? voice : VOICE_DIEGO;
-        String selectedRegion = (region != null && !region.isEmpty()) ? region : "westeurope";
-
-        try {
-            stopCurrentPlayback();
-
-            // 1. Verifica presenza nella cache locale
-            File audioFile = getCachedAudioFile(text, selectedVoice);
-            if (audioFile == null || !audioFile.exists() || audioFile.length() == 0) {
-                // 2. Download da Azure Speech REST API
-                audioFile = fetchFromAzure(text, selectedVoice, selectedRegion, apiKey);
-            }
-
-            if (audioFile == null || !audioFile.exists() || audioFile.length() == 0) {
-                Log.w(TAG, "Audio file not available from cloud. Triggering offline fallback.");
-                return false;
-            }
-
-            // 3. Riproduzione con AudioFocus Ducking
-            return playAudioFile(audioFile, onComplete);
-
-        } catch (Throwable t) {
-            Log.e(TAG, "Error in speakNeural: " + t.getMessage());
-            abandonAudioFocus();
-            return false;
-        }
+        // Legacy API retained only for compatibility with existing TV settings.
+        // No cloud TTS provider other than the owner-approved DeepSeek/Kimi AI
+        // services is permitted. Never read credentials or open network here.
+        Log.w(TAG, "Legacy Azure Neural TTS disabled by owner provider policy.");
+        return false;
     }
 
     private File fetchFromAzure(String text, String voice, String region, String apiKey) {
-        if (AkaiAiController.isStrictLocalOnly()) {
-            Log.w(TAG, "STRICT_LOCAL_ONLY active: fetchFromAzure blocked (zero network requests).");
-            return null;
-        }
-        HttpURLConnection conn = null;
-        try {
-            String endpoint = "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1";
-            URL url = new URL(endpoint);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(4500);
-            conn.setReadTimeout(5500);
-            conn.setDoOutput(true);
-
-            conn.setRequestProperty("Ocp-Apim-Subscription-Key", apiKey);
-            conn.setRequestProperty("Content-Type", "application/ssml+xml");
-            conn.setRequestProperty("X-Microsoft-OutputFormat", "audio-24khz-160kbitrate-mono-mp3");
-            conn.setRequestProperty("User-Agent", "AkaiJarvisAssistant/1.0");
-
-            // Costruzione SSML
-            String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='it-IT'>" +
-                    "<voice name='" + voice + "'>" + escapeXml(text) + "</voice>" +
-                    "</speak>";
-
-            byte[] bodyBytes = ssml.getBytes(StandardCharsets.UTF_8);
-            conn.setFixedLengthStreamingMode(bodyBytes.length);
-
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(bodyBytes);
-                os.flush();
-            }
-
-            int responseCode = conn.getResponseCode();
-            if (responseCode != 200) {
-                Log.w(TAG, "Azure Speech API error response code: " + responseCode);
-                return null;
-            }
-
-            // Se il testo contiene numeri sensibili, usa file temporaneo non persistito
-            boolean isSensitive = containsSensitiveData(text);
-            String hash = md5(voice + "_" + text);
-            File destFile = isSensitive ? File.createTempFile("tts_tmp_", ".mp3", mCacheDir) : new File(mCacheDir, hash + ".mp3");
-
-            try (InputStream is = conn.getInputStream(); FileOutputStream fos = new FileOutputStream(destFile)) {
-                byte[] buffer = new byte[4096];
-                int read;
-                while ((read = is.read(buffer)) != -1) {
-                    fos.write(buffer, 0, read);
-                }
-                fos.flush();
-            }
-
-            // Manutenzione limite 8 MB su cache
-            enforceCacheLimit();
-
-            Log.i(TAG, "Synthesized and cached audio (" + destFile.length() + " bytes) for voice: " + voice);
-            return destFile;
-
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to fetch speech from Azure: " + e.getMessage());
-            return null;
-        } finally {
-            if (conn != null) {
-                try { conn.disconnect(); } catch (Exception ignored) {}
-            }
-        }
+        // Defense in depth: block this historical path even if called directly.
+        return null;
     }
 
     private synchronized boolean playAudioFile(final File file, final Runnable onComplete) {

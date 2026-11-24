@@ -7,6 +7,13 @@ import java.util.List;
 import java.util.Set;
 
 public class PackageManager {
+    public static final int GET_SIGNING_CERTIFICATES = 0x08000000;
+
+    public static class NameNotFoundException extends Exception {
+        public NameNotFoundException() { super(); }
+        public NameNotFoundException(String name) { super(name); }
+    }
+
     // Installed packages for host tests only (no external Android runtime).
     private final Set<String> installed = new LinkedHashSet<>(Arrays.asList(
             "com.google.android.youtube.tv",
@@ -46,5 +53,21 @@ public class PackageManager {
             case "com.android.tv.settings": return "Impostazioni";
             default: return app.packageName;
         }
+    }
+
+    public PackageInfo getPackageInfo(String packageName, int flags) throws NameNotFoundException {
+        throw new NameNotFoundException(packageName);
+    }
+
+    public PackageInfo getPackageArchiveInfo(String archiveFilePath, int flags) {
+        return null;
+    }
+
+    public boolean canRequestPackageInstalls() {
+        return false;
+    }
+
+    public PackageInstaller getPackageInstaller() {
+        return null;
     }
 }

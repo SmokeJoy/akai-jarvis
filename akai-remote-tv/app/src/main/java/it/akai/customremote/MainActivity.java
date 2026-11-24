@@ -1,19 +1,37 @@
 package it.akai.customremote;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.CompoundButton;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import it.akai.customremote.qr.QrBitmapUtil;
+import it.akai.customremote.ai.OtaAndroidInstallPreflight;
+import it.akai.customremote.ai.OtaOwnerPackageInstaller;
+import it.akai.customremote.ai.OtaRecoveryEvidenceGate;
+import it.akai.customremote.ai.OtaRecoveryEvidenceStore;
+import it.akai.customremote.ai.OtaReleaseTrust;
+import it.akai.customremote.ai.OtaAndroidArchiveInspector;
+import it.akai.customremote.ai.OtaReleaseChannel;
+import it.akai.customremote.ai.OtaUpdatePreparation;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -21,6 +39,8 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.os.Handler;
 import android.os.Looper;
+import java.io.File;
+import java.io.InputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -74,6 +94,15 @@ public class MainActivity extends Activity {
     private Button btnRevokeAll;
     private Button btnMinimize;
     private Button btnVisionLocalTest;
+    private Button btnOtaCheck;
+    private Button btnOtaImportReceipt;
+    private Button btnOtaPermission;
+    private Button btnOtaInstallConfirmed;
+    private TextView tvOtaStatus;
+    private static final int REQ_IMPORT_OTA_RECEIPT = 4102;
+    private volatile OtaUpdatePreparation.Result pendingOtaCandidate = null;
+    private final java.util.concurrent.atomic.AtomicBoolean otaOperationInFlight = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private AlertDialog activeOtaConfirmDialog = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -96,6 +125,11 @@ public class MainActivity extends Activity {
         btnRevokeAll = findViewById(R.id.btn_revoke_all);
         btnMinimize = findViewById(R.id.btn_minimize);
         btnVisionLocalTest = findViewById(R.id.btn_vision_local_test);
+        btnOtaCheck = findViewById(R.id.btn_ota_check);
+        btnOtaImportReceipt = findViewById(R.id.btn_ota_import_receipt);
+        btnOtaPermission = findViewById(R.id.btn_ota_permission);
+        btnOtaInstallConfirmed = findViewById(R.id.btn_ota_install_confirmed);
+        tvOtaStatus = findViewById(R.id.tv_ota_status);
 
         // Avvio del servizio autonomo in foreground
         Intent serviceIntent = new Intent(this, RemoteServerService.class);
@@ -260,6 +294,146 @@ public class MainActivity extends Activity {
             }
         });
 
+        // Owner-only D-pad action: if an offline-pinned release key+channel
+        // are provisioned, verify and stage a real HTTPS APK on a worker.
+        // Never install or start PackageInstaller from this button.
+        // No Web API, at-boot polling, silent updates or paid AI calls.
+        btnOtaCheck.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (!otaOperationInFlight.compareAndSet(false, true)) return;
+                pendingOtaCandidate = null;
+                setOtaActionVisibility(false, false, null);
+                btnOtaCheck.setEnabled(false);
+                tvOtaStatus.setText("Verifica locale OTA in corso...");
+                if (!submitBackgroundTask(new Runnable() {
+                    @Override
+                    public void run() {
+                        String message = null;
+                        OtaUpdatePreparation.Result stagedCandidate = null;
+                        OtaAndroidInstallPreflight.Verdict stagedPreflight = null;
+                        try {
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                                message = "OTA non supportata: richiede Android 9.";
+                            } else if (OtaReleaseTrust.readBundledPublicKey(MainActivity.this) == null) {
+                                message = "OTA non configurata: chiave pubblica di rilascio mancante.";
+                            } else if (OtaAndroidArchiveInspector.readInstalledIdentity(
+                                    MainActivity.this) == null) {
+                                message = "OTA bloccata: firma/versione installata non verificabili.";
+                            } else {
+                                OtaReleaseChannel.Channel channel =
+                                        OtaReleaseChannel.loadBundled(MainActivity.this);
+                                if (channel == null) {
+                                    message = "OTA non configurata: manca il canale HTTPS ufficiale.";
+                                } else {
+                                    OtaUpdatePreparation.Result candidate =
+                                            OtaUpdatePreparation.prepare(MainActivity.this,
+                                                    channel.manifestUrl, channel.trustedHosts);
+                                    if (candidate.staged) {
+                                        stagedCandidate = candidate;
+                                        stagedPreflight = OtaAndroidInstallPreflight.inspect(
+                                                MainActivity.this, candidate);
+                                    } else {
+                                        message = "OTA: " + candidate.code +
+                                                " (nessuna installazione)";
+                                    }
+                                }
+                            }
+                        } finally {
+                            otaOperationInFlight.set(false);
+                        }
+                        final String finalMessage = message;
+                        final OtaUpdatePreparation.Result finalCandidate = stagedCandidate;
+                        final OtaAndroidInstallPreflight.Verdict finalPreflight = stagedPreflight;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                if (activityDestroyed || isFinishing() || isDestroyed()) return;
+                                btnOtaCheck.setEnabled(true);
+                                if (finalCandidate != null && finalPreflight != null) {
+                                    pendingOtaCandidate = finalCandidate;
+                                    applyOtaPreflightUi(finalCandidate, finalPreflight);
+                                } else {
+                                    pendingOtaCandidate = null;
+                                    setOtaActionVisibility(false, false, null);
+                                    tvOtaStatus.setText(finalMessage != null ? finalMessage : "Verifica OTA non disponibile.");
+                                }
+                            }
+                        });
+                    }
+                })) {
+                    otaOperationInFlight.set(false);
+                    if (!activityDestroyed) {
+                        tvOtaStatus.setText("Verifica OTA non disponibile.");
+                        btnOtaCheck.setEnabled(true);
+                    }
+                }
+            }
+        });
+
+        btnOtaPermission.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                    tvOtaStatus.setText("Permesso Origini sconosciute per app non supportato prima di Android 8.");
+                    return;
+                }
+                Intent permIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName()));
+                try {
+                    startActivity(permIntent);
+                    tvOtaStatus.setText("Abilita \"Consenti da questa origine\" e poi torna in JARVIS.");
+                } catch (ActivityNotFoundException | SecurityException e) {
+                    Log.w(TAG, "Impossibile aprire Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES: " + e.getClass().getSimpleName());
+                    tvOtaStatus.setText("Impossibile aprire le Impostazioni Android su questo firmware TV: abilita manualmente Origini sconosciute per JARVIS.");
+                }
+            }
+        });
+
+        btnOtaInstallConfirmed.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                final OtaUpdatePreparation.Result stagedCandidate = pendingOtaCandidate;
+                if (stagedCandidate == null || otaOperationInFlight.get()) {
+                    tvOtaStatus.setText("Nessun pacchetto OTA verificato pronto per la conferma.");
+                    return;
+                }
+                openOtaOwnerConfirmDialog(stagedCandidate);
+            }
+        });
+
+        btnOtaImportReceipt.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (otaOperationInFlight.get()) {
+                    tvOtaStatus.setText("Operazione OTA già in corso.");
+                    return;
+                }
+                File dropDir = getExternalFilesDir("ota-import");
+                if (dropDir != null && dropDir.isDirectory()) {
+                    File pkgFile = new File(dropDir, OtaRecoveryEvidenceStore.PORTABLE_BUNDLE_FILENAME);
+                    File recFile = new File(dropDir, OtaRecoveryEvidenceStore.RECEIPT_FILENAME);
+                    File sigFile = new File(dropDir, OtaRecoveryEvidenceStore.SIGNATURE_FILENAME);
+                    if (pkgFile.isFile() || (recFile.isFile() && sigFile.isFile())) {
+                        startOtaReceiptImport(dropDir, null);
+                        return;
+                    }
+                }
+                Intent docIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                docIntent.addCategory(Intent.CATEGORY_OPENABLE);
+                docIntent.setType("*/*");
+                try {
+                    startActivityForResult(docIntent, REQ_IMPORT_OTA_RECEIPT);
+                    tvOtaStatus.setText("Seleziona ota-recovery-evidence.pkg da chiavetta USB o archivio.");
+                } catch (ActivityNotFoundException | SecurityException e) {
+                    Log.w(TAG, "Picker ACTION_OPEN_DOCUMENT non disponibile: " + e.getClass().getSimpleName());
+                    tvOtaStatus.setText("Selettore file assente su questa TV: copia "
+                            + OtaRecoveryEvidenceStore.PORTABLE_BUNDLE_FILENAME
+                            + " in Android/data/" + getPackageName()
+                            + "/files/ota-import/ e ripremi Importa.");
+                }
+            }
+        });
+
         // A2 local vision diagnostic is launched exclusively by a physical
         // TV UI click. It cannot be triggered by the LAN remote.
         btnVisionLocalTest.setOnClickListener(new View.OnClickListener() {
@@ -281,12 +455,47 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateUI();
+        final OtaUpdatePreparation.Result staged = pendingOtaCandidate;
+        if (staged != null && !otaOperationInFlight.get()) {
+            submitBackgroundTask(new Runnable() {
+                @Override
+                public void run() {
+                    final OtaAndroidInstallPreflight.Verdict preflight =
+                            OtaAndroidInstallPreflight.inspect(MainActivity.this, staged);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (activityDestroyed || isFinishing() || isDestroyed()) return;
+                            if (pendingOtaCandidate == staged && !otaOperationInFlight.get()) {
+                                applyOtaPreflightUi(staged, preflight);
+                            }
+                        }
+                    });
+                }
+            });
+        } else if (staged == null && !otaOperationInFlight.get() && tvOtaStatus != null) {
+            String lastResult = OtaInstallResultReceiver.lastResult(this);
+            if (lastResult != null
+                    && !"NOT_INSTALLED".equals(lastResult)
+                    && !"OTA_STATUS_UNKNOWN".equals(lastResult)) {
+                tvOtaStatus.setText("Ultimo esito OTA PackageInstaller: " + lastResult);
+            }
+        }
     }
 
     @Override
     protected void onDestroy() {
         // Invalidate queued UI callbacks and QR work before shutting down the executor.
         activityDestroyed = true;
+        pendingOtaCandidate = null;
+        if (activeOtaConfirmDialog != null) {
+            try {
+                if (activeOtaConfirmDialog.isShowing()) {
+                    activeOtaConfirmDialog.dismiss();
+                }
+            } catch (Exception ignored) {}
+            activeOtaConfirmDialog = null;
+        }
         uiGenToken.incrementAndGet();
         retryHandler.removeCallbacksAndMessages(null);
         super.onDestroy();
@@ -305,6 +514,106 @@ public class MainActivity extends Activity {
         try {
             bgExecutor.shutdownNow();
         } catch (Exception ignored) {}
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_IMPORT_OTA_RECEIPT) return;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            if (tvOtaStatus != null) {
+                tvOtaStatus.setText("Importazione ricevuta OTA annullata.");
+            }
+            return;
+        }
+        startOtaReceiptImport(null, data.getData());
+    }
+
+    private void startOtaReceiptImport(final File dropDir, final Uri documentUri) {
+        if (!otaOperationInFlight.compareAndSet(false, true)) {
+            if (tvOtaStatus != null) tvOtaStatus.setText("Operazione OTA già in corso.");
+            return;
+        }
+        if (btnOtaImportReceipt != null) btnOtaImportReceipt.setEnabled(false);
+        if (tvOtaStatus != null) tvOtaStatus.setText("Verifica crittografica ricevuta backup/Rescue in corso...");
+        final OtaUpdatePreparation.Result staged = pendingOtaCandidate;
+        final int candidateVersionOrZero = (staged != null) ? staged.candidateVersionCode : 0;
+
+        if (!submitBackgroundTask(new Runnable() {
+            @Override
+            public void run() {
+                OtaRecoveryEvidenceGate.Verdict result = null;
+                try {
+                    int installedVersion = resolveInstalledVersionCode();
+                    long nowSec = System.currentTimeMillis() / 1000L;
+                    if (dropDir != null) {
+                        result = OtaRecoveryEvidenceStore.importVerifiedFromDirectory(
+                                MainActivity.this, dropDir, installedVersion,
+                                candidateVersionOrZero, nowSec);
+                    } else if (documentUri != null) {
+                        byte[] bundleBytes = null;
+                        try (InputStream in = getContentResolver().openInputStream(documentUri)) {
+                            bundleBytes = OtaRecoveryEvidenceStore.readBoundedStream(
+                                    in, OtaRecoveryEvidenceStore.MAX_PORTABLE_BUNDLE_BYTES);
+                        }
+                        if (bundleBytes == null) {
+                            result = null;
+                        } else {
+                            result = OtaRecoveryEvidenceStore.importVerifiedPortableBundle(
+                                    MainActivity.this, bundleBytes, installedVersion,
+                                    candidateVersionOrZero, nowSec);
+                        }
+                    }
+                } catch (Exception ignored) {
+                    result = null;
+                } finally {
+                    otaOperationInFlight.set(false);
+                }
+                final OtaRecoveryEvidenceGate.Verdict verdict = result;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (activityDestroyed || isFinishing() || isDestroyed()) return;
+                        if (btnOtaImportReceipt != null) btnOtaImportReceipt.setEnabled(true);
+                        if (tvOtaStatus == null) return;
+                        if (verdict != null && verdict.accepted) {
+                            tvOtaStatus.setText("Ricevuta OTA importata e verificata ("
+                                    + verdict.channelProfile + ", ID " + verdict.backupId
+                                    + ", Rescue v" + verdict.recoveryRescueVersionCode + ").");
+                        } else {
+                            String code = (verdict != null && verdict.code != null)
+                                    ? verdict.code : "EVIDENCE_BUNDLE_INVALID";
+                            tvOtaStatus.setText("Importazione ricevuta OTA rifiutata: " + code);
+                        }
+                    }
+                });
+            }
+        })) {
+            otaOperationInFlight.set(false);
+            if (btnOtaImportReceipt != null) btnOtaImportReceipt.setEnabled(true);
+            if (tvOtaStatus != null) {
+                tvOtaStatus.setText("Impossibile avviare importazione ricevuta in background.");
+            }
+        }
+    }
+
+    private int resolveInstalledVersionCode() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            if (info == null) return 0;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                long longCode = info.getLongVersionCode();
+                return (longCode > Integer.MAX_VALUE) ? 0 : (int) longCode;
+            }
+            return resolveLegacyVersionCode(info);
+        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+            return 0;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static int resolveLegacyVersionCode(PackageInfo info) {
+        return info.versionCode;
     }
 
     // Late network/service callbacks must not submit to the executor after teardown.
@@ -330,9 +639,11 @@ public class MainActivity extends Activity {
         }
 
         boolean uinputOk = (s != null && s.getTvController() != null && s.getTvController().isUInputReady());
+        boolean accOk = (AkaiAccessibilityService.getInstance() != null);
         if (tvUinputStatus != null) {
-            tvUinputStatus.setText("Driver Linux /dev/uinput: " + (uinputOk ? "ATTIVO" : "In attesa..."));
-            tvUinputStatus.setTextColor(uinputOk ? 0xFF34D399 : 0xFFF59E0B);
+            tvUinputStatus.setText("Driver /dev/uinput: " + (uinputOk ? "ATTIVO" : "In attesa...")
+                    + " · Accessibilità: " + (accOk ? "ATTIVA" : "DISATTIVA (riattiva in Impostazioni TV)"));
+            tvUinputStatus.setTextColor((uinputOk && accOk) ? 0xFF34D399 : 0xFFF59E0B);
         }
 
         int activeSessions = (s != null && s.getSecurityManager() != null) ? s.getSecurityManager().getActiveSessionCount() : 0;
@@ -438,6 +749,153 @@ public class MainActivity extends Activity {
                 }
             }
         });
+    }
+
+    private void setOtaActionVisibility(boolean showPermission, boolean showInstall, String installButtonLabel) {
+        if (btnOtaPermission != null) {
+            btnOtaPermission.setVisibility(showPermission ? View.VISIBLE : View.GONE);
+            btnOtaPermission.setEnabled(showPermission);
+        }
+        if (btnOtaInstallConfirmed != null) {
+            btnOtaInstallConfirmed.setVisibility(showInstall ? View.VISIBLE : View.GONE);
+            btnOtaInstallConfirmed.setEnabled(showInstall);
+            if (installButtonLabel != null) {
+                btnOtaInstallConfirmed.setText(installButtonLabel);
+            }
+        }
+    }
+
+    private static String abbreviateSha256(String sha256) {
+        if (sha256 == null || sha256.isEmpty()) return "n/d";
+        if (sha256.length() >= 24) {
+            return sha256.substring(0, 12) + "..." + sha256.substring(sha256.length() - 12);
+        }
+        return sha256;
+    }
+
+    private void applyOtaPreflightUi(OtaUpdatePreparation.Result candidate, OtaAndroidInstallPreflight.Verdict preflight) {
+        if (tvOtaStatus == null || candidate == null || preflight == null) return;
+        String shortSha = abbreviateSha256(candidate.expectedSha256);
+        if (preflight.readyForOwnerRecoveryReview) {
+            setOtaActionVisibility(false, true,
+                    "Installa versione v" + candidate.candidateVersionCode + " (richiede conferma)");
+            tvOtaStatus.setText("Versione " + candidate.candidateVersionCode +
+                    " verificata e pronta (SHA-256 " + shortSha +
+                    "). Conferma in TV dopo backup e ripristino verificati.");
+        } else if ("ANDROID_UNKNOWN_SOURCE_PERMISSION_REQUIRED".equals(preflight.code)) {
+            setOtaActionVisibility(true, false, null);
+            tvOtaStatus.setText("Versione " + candidate.candidateVersionCode +
+                    " verificata (SHA-256 " + shortSha +
+                    "). Android 9 richiede l'abilitazione manuale \"Origini sconosciute\" per JARVIS.");
+        } else {
+            setOtaActionVisibility(false, false, null);
+            tvOtaStatus.setText("OTA preflight bloccato: " + preflight.code);
+        }
+    }
+
+    private void openOtaOwnerConfirmDialog(final OtaUpdatePreparation.Result stagedCandidate) {
+        if (activityDestroyed || isFinishing() || isDestroyed() || stagedCandidate == null) return;
+        if (activeOtaConfirmDialog != null && activeOtaConfirmDialog.isShowing()) {
+            activeOtaConfirmDialog.dismiss();
+        }
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        Context dialogCtx = builder.getContext();
+        final int paddingPx = Math.round(18f * getResources().getDisplayMetrics().density);
+        LinearLayout container = new LinearLayout(dialogCtx);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(paddingPx, paddingPx / 2, paddingPx, paddingPx / 2);
+
+        TextView summary = new TextView(dialogCtx);
+        summary.setText("Versione candidata: v" + stagedCandidate.candidateVersionCode +
+                "\nSHA-256: " + abbreviateSha256(stagedCandidate.expectedSha256) +
+                "\nFirma certificato originale Android verificata.\n" +
+                "L'installazione avvierà PackageInstaller di Android 9 solo dopo verifica " +
+                "crittografica della ricevuta locale backup/A2 Rescue (ota-evidence) e tua conferma OS esplicita.");
+        container.addView(summary);
+
+        final CheckBox chkBackup = new CheckBox(dialogCtx);
+        chkBackup.setText("Consenso manuale: dichiaro di voler procedere con il backup locale esistente (non sostituisce la ricevuta firmata).");
+        chkBackup.setChecked(false);
+        chkBackup.setFocusable(true);
+        container.addView(chkBackup);
+
+        final CheckBox chkRecovery = new CheckBox(dialogCtx);
+        chkRecovery.setText("Consenso manuale: autorizzo la verifica indipendente della ricevuta A2 Rescue / restore prima dell'avvio OS.");
+        chkRecovery.setChecked(false);
+        chkRecovery.setFocusable(true);
+        container.addView(chkRecovery);
+
+        builder.setTitle("Conferma installazione OTA v" + stagedCandidate.candidateVersionCode)
+                .setView(container)
+                .setNegativeButton("Annulla", null)
+                .setPositiveButton("Avvia PackageInstaller Android 9", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (!chkBackup.isChecked() || !chkRecovery.isChecked()) return;
+                        if (pendingOtaCandidate != stagedCandidate) return;
+                        if (!otaOperationInFlight.compareAndSet(false, true)) return;
+                        final boolean ownerConsentOnTv = chkBackup.isChecked() && chkRecovery.isChecked();
+                        btnOtaCheck.setEnabled(false);
+                        setOtaActionVisibility(false, false, null);
+                        tvOtaStatus.setText("Verifica ricevuta backup/recupero e invio pacchetto a PackageInstaller Android...");
+                        if (!submitBackgroundTask(new Runnable() {
+                            @Override
+                            public void run() {
+                                final OtaOwnerPackageInstaller.Outcome outcome;
+                                try {
+                                    outcome = OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(
+                                            MainActivity.this, stagedCandidate, ownerConsentOnTv);
+                                } finally {
+                                    otaOperationInFlight.set(false);
+                                }
+                                runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (activityDestroyed || isFinishing() || isDestroyed()) return;
+                                        btnOtaCheck.setEnabled(true);
+                                        pendingOtaCandidate = null;
+                                        setOtaActionVisibility(false, false, null);
+                                        tvOtaStatus.setText("OTA PackageInstaller: " + outcome.code);
+                                    }
+                                });
+                            }
+                        })) {
+                            otaOperationInFlight.set(false);
+                            btnOtaCheck.setEnabled(true);
+                            pendingOtaCandidate = null;
+                            tvOtaStatus.setText("Impossibile avviare PackageInstaller in background.");
+                        }
+                    }
+                });
+
+        final AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override
+            public void onShow(DialogInterface d) {
+                chkBackup.requestFocus();
+                final Button positive = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+                if (positive == null) return;
+                positive.setEnabled(false);
+                CompoundButton.OnCheckedChangeListener listener = new CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                        positive.setEnabled(chkBackup.isChecked() && chkRecovery.isChecked());
+                    }
+                };
+                chkBackup.setOnCheckedChangeListener(listener);
+                chkRecovery.setOnCheckedChangeListener(listener);
+            }
+        });
+        dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override
+            public void onDismiss(DialogInterface d) {
+                if (activeOtaConfirmDialog == dialog) {
+                    activeOtaConfirmDialog = null;
+                }
+            }
+        });
+        activeOtaConfirmDialog = dialog;
+        dialog.show();
     }
 
     private String getLocalIpAddress() {

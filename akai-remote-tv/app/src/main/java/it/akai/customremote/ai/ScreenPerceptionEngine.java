@@ -43,6 +43,8 @@ public class ScreenPerceptionEngine {
 
     public static class PerceptionSnapshot {
         public final String foregroundPackage;
+        public final String foregroundActivity;
+        public final long foregroundActivityTimestamp;
         public final List<String> visibleTexts;
         public final List<ClickableElement> clickableElements;
         public final String focusedElementText;
@@ -54,14 +56,40 @@ public class ScreenPerceptionEngine {
         public PerceptionSnapshot(String foregroundPackage, List<String> visibleTexts,
                                   List<ClickableElement> clickableElements, String focusedElementText,
                                   boolean hasSensitiveFields, boolean isPlayerActive, boolean isMusicActive) {
+            this(foregroundPackage, null, 0L, visibleTexts, clickableElements, focusedElementText,
+                    hasSensitiveFields, isPlayerActive, isMusicActive, System.currentTimeMillis());
+        }
+
+        public PerceptionSnapshot(String foregroundPackage, String foregroundActivity, List<String> visibleTexts,
+                                  List<ClickableElement> clickableElements, String focusedElementText,
+                                  boolean hasSensitiveFields, boolean isPlayerActive, boolean isMusicActive,
+                                  long timestamp) {
+            this(foregroundPackage,
+                    foregroundActivity,
+                    (foregroundActivity != null && !foregroundActivity.trim().isEmpty()) ? timestamp : 0L,
+                    visibleTexts,
+                    clickableElements,
+                    focusedElementText,
+                    hasSensitiveFields,
+                    isPlayerActive,
+                    isMusicActive,
+                    timestamp);
+        }
+
+        public PerceptionSnapshot(String foregroundPackage, String foregroundActivity, long foregroundActivityTimestamp,
+                                  List<String> visibleTexts, List<ClickableElement> clickableElements,
+                                  String focusedElementText, boolean hasSensitiveFields,
+                                  boolean isPlayerActive, boolean isMusicActive, long timestamp) {
             this.foregroundPackage = foregroundPackage;
+            this.foregroundActivity = foregroundActivity;
+            this.foregroundActivityTimestamp = foregroundActivityTimestamp;
             this.visibleTexts = visibleTexts;
             this.clickableElements = clickableElements;
             this.focusedElementText = focusedElementText;
             this.hasSensitiveFields = hasSensitiveFields;
             this.isPlayerActive = isPlayerActive;
             this.isMusicActive = isMusicActive;
-            this.timestamp = System.currentTimeMillis();
+            this.timestamp = timestamp;
         }
 
         public String toContextPrompt() {
@@ -224,11 +252,24 @@ public class ScreenPerceptionEngine {
         }
 
         if (root == null) {
-            return new PerceptionSnapshot(pkg, new ArrayList<String>(), new ArrayList<ClickableElement>(), null, false, false, musicActive);
+            String activityClass = null;
+            long activityTimestamp = 0L;
+            if (pkg != null && pkg.equals(service.getLastWindowPackage())) {
+                activityClass = service.getLastWindowClass();
+                activityTimestamp = service.getLastWindowEventAtMs();
+            }
+            return new PerceptionSnapshot(pkg, activityClass, activityTimestamp,
+                    new ArrayList<String>(), new ArrayList<ClickableElement>(), null, false, false, musicActive, System.currentTimeMillis());
         }
 
         if (root.getPackageName() != null) {
             pkg = root.getPackageName().toString();
+        }
+        String activityClass = null;
+        long activityTimestamp = 0L;
+        if (pkg != null && pkg.equals(service.getLastWindowPackage())) {
+            activityClass = service.getLastWindowClass();
+            activityTimestamp = service.getLastWindowEventAtMs();
         }
         List<String> texts = new ArrayList<>();
         List<ClickableElement> clickables = new ArrayList<>();
@@ -242,7 +283,7 @@ public class ScreenPerceptionEngine {
             root.recycle();
         }
 
-        return new PerceptionSnapshot(pkg, texts, clickables, focusedHolder[0], sensitiveHolder[0], playerHolder[0], musicActive);
+        return new PerceptionSnapshot(pkg, activityClass, activityTimestamp, texts, clickables, focusedHolder[0], sensitiveHolder[0], playerHolder[0], musicActive, System.currentTimeMillis());
     }
 
     public static PerceptionSnapshot capture() {

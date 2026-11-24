@@ -291,7 +291,7 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
 
     public synchronized JSONObject findProcedureByGoal(String rawQuery) {
         if (rawQuery == null || rawQuery.trim().isEmpty()) return null;
-        String clean = rawQuery.trim().toLowerCase(Locale.ITALIAN).replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
+        String clean = ProcedureGoalMatcher.normalize(rawQuery);
         boolean guest = isGuestMode();
 
         SQLiteDatabase db = getReadableDatabase();
@@ -305,7 +305,8 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             if (c != null && c.moveToFirst()) {
                 JSONObject candidate = parseProcedureCursor(c);
                 if (AgentSkillGate.shouldReplay(candidate.optInt("success_count", 0),
-                        candidate.optInt("failure_count", 0))) {
+                        candidate.optInt("failure_count", 0))
+                        && ProcedureGoalMatcher.matches(rawQuery, candidate.optString("intent_key", ""))) {
                     return candidate;
                 }
             }
@@ -318,43 +319,34 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             if (c != null && c.moveToFirst()) {
                 JSONObject candidate = parseProcedureCursor(c);
                 if (AgentSkillGate.shouldReplay(candidate.optInt("success_count", 0),
-                        candidate.optInt("failure_count", 0))) {
+                        candidate.optInt("failure_count", 0))
+                        && ProcedureGoalMatcher.matches(rawQuery, candidate.optString("goal_intent", ""))) {
                     return candidate;
                 }
             }
             if (c != null) { c.close(); c = null; }
 
-            // Check 3: Match se la query contiene l'intent_key memorizzato (es. "metti italia 2")
-            String cleanNoSpace = clean.replaceAll("\\s+", "");
+            // Check 3: complete-token matching; prevent accidental reuse of
+            // another application/TV channel skill for partial substrings.
             String where3 = guest ? (COL_IS_PERSONAL + "=0") : null;
-            try (Cursor allProcs = db.query(TABLE_PROCEDURES, null, where3, null, null, null, COL_SUCCESS_COUNT + " DESC")) {
+            try (Cursor allProcs = db.query(TABLE_PROCEDURES, null, where3,
+                    null, null, null, COL_SUCCESS_COUNT + " DESC")) {
                 if (allProcs != null && allProcs.moveToFirst()) {
-                do {
-                    String ik = allProcs.getString(allProcs.getColumnIndex(COL_INTENT_KEY));
-                    String gi = allProcs.getString(allProcs.getColumnIndex(COL_GOAL_INTENT));
-                    if (ik != null) {
-                        String ikClean = ik.toLowerCase(Locale.ITALIAN).replaceAll("[_\\s]+", " ").trim();
-                        String ikNoSpace = ik.toLowerCase(Locale.ITALIAN).replaceAll("[_\\s]+", "");
-                        if (clean.contains(ikClean) || (!ikNoSpace.isEmpty() && cleanNoSpace.contains(ikNoSpace))) {
-                            JSONObject res = parseProcedureCursor(allProcs);
-                            if (AgentSkillGate.shouldReplay(res.optInt("success_count", 0),
-                                    res.optInt("failure_count", 0))) {
-                                return res;
+                    do {
+                        String ik = allProcs.getString(
+                                allProcs.getColumnIndex(COL_INTENT_KEY));
+                        String gi = allProcs.getString(
+                                allProcs.getColumnIndex(COL_GOAL_INTENT));
+                        if (ProcedureGoalMatcher.matches(rawQuery, ik)
+                                || ProcedureGoalMatcher.matches(rawQuery, gi)) {
+                            JSONObject candidate = parseProcedureCursor(allProcs);
+                            if (AgentSkillGate.shouldReplay(
+                                    candidate.optInt("success_count", 0),
+                                    candidate.optInt("failure_count", 0))) {
+                                return candidate;
                             }
                         }
-                    }
-                    if (gi != null) {
-                        String giClean = gi.toLowerCase(Locale.ITALIAN).replaceAll("[_\\s]+", " ").trim();
-                        String giNoSpace = gi.toLowerCase(Locale.ITALIAN).replaceAll("[_\\s]+", "");
-                        if (clean.contains(giClean) || giClean.contains(clean) || (!giNoSpace.isEmpty() && cleanNoSpace.contains(giNoSpace))) {
-                            JSONObject res = parseProcedureCursor(allProcs);
-                            if (AgentSkillGate.shouldReplay(res.optInt("success_count", 0),
-                                    res.optInt("failure_count", 0))) {
-                                return res;
-                            }
-                        }
-                    }
-                } while (allProcs.moveToNext());
+                    } while (allProcs.moveToNext());
                 }
             }
         } catch (Exception e) {
@@ -872,9 +864,31 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
             return false;
         }
 
+        // RESTORE SAFETY: retain an independently integrity-checked snapshot
+        // of the ORIGINAL database before any file replacement. This is only
+        // one part of recovery; the real on-TV restore still needs a live test.
+        File preRestore = new File(mContext.getFilesDir(),
+                "jarvis-pre-restore-safety.db");
+        try {
+            if (source.getCanonicalFile().equals(preRestore.getCanonicalFile()) ||
+                    source.getCanonicalFile().equals(mContext.getDatabasePath(DB_NAME).getCanonicalFile())) {
+                Log.e(TAG, "Refusing restore from current DB or its safety snapshot");
+                return false;
+            }
+            if (!performConsistentSnapshot(preRestore)) {
+                Log.e(TAG, "Unable to prove consistent pre-restore backup. No DB replacement performed.");
+                return false;
+            }
+        } catch (IOException unsafePath) {
+            Log.e(TAG, "Restore safety preflight failed");
+            return false;
+        }
+
         try {
             close();
             File currentDb = mContext.getDatabasePath(DB_NAME);
+            // VerifiedAtomicFileCopy requires a same-filesystem atomic swap;
+            // if unsupported, the original DB is not truncated or overwritten.
             copyFile(source, currentDb);
 
             // Elimina file di transazione WAL/SHM obsoleti per prevenire conflitti di replay
@@ -900,11 +914,9 @@ public class AkaiMemoryEngine extends SQLiteOpenHelper {
     }
 
     private static void copyFile(File src, File dst) throws IOException {
-        try (FileInputStream in = new FileInputStream(src);
-             FileOutputStream out = new FileOutputStream(dst);
-             FileChannel inChannel = in.getChannel();
-             FileChannel outChannel = out.getChannel()) {
-            inChannel.transferTo(0, inChannel.size(), outChannel);
-        }
+        // One-shot FileChannel.transferTo may copy only SOME bytes, leading to a
+        // truncated backup that would only be detected after damage. The
+        // replacement is staged/fsynced/sha-verified before an atomic move.
+        VerifiedAtomicFileCopy.copy(src, dst);
     }
 }

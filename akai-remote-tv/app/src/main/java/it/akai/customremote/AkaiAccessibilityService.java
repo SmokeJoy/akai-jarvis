@@ -15,9 +15,29 @@ import java.util.List;
 public class AkaiAccessibilityService extends AccessibilityService {
     private static final String TAG = "AKAI_Accessibility";
     private static AkaiAccessibilityService sInstance = null;
+    private volatile String lastWindowPackage = null;
+    private volatile String lastWindowClass = null;
+    private volatile long lastWindowEventAtMs = 0L;
+    private volatile long lastContentEventAtMs = 0L;
 
     public static AkaiAccessibilityService getInstance() {
         return sInstance;
+    }
+
+    public String getLastWindowPackage() {
+        return lastWindowPackage;
+    }
+
+    public String getLastWindowClass() {
+        return lastWindowClass;
+    }
+
+    public long getLastWindowEventAtMs() {
+        return lastWindowEventAtMs;
+    }
+
+    public long getLastContentEventAtMs() {
+        return lastContentEventAtMs;
     }
 
     // =========================================================================
@@ -163,7 +183,25 @@ public class AkaiAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        // Passive observation
+        if (event == null) {
+            return;
+        }
+        int eventType = event.getEventType();
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            lastContentEventAtMs = System.currentTimeMillis();
+        } else if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            long now = System.currentTimeMillis();
+            lastContentEventAtMs = now;
+            CharSequence pkgCs = event.getPackageName();
+            CharSequence clsCs = event.getClassName();
+            String pkg = pkgCs != null ? pkgCs.toString().trim() : "";
+            String cls = clsCs != null ? clsCs.toString().trim() : "";
+            if (!pkg.isEmpty() && !cls.isEmpty() && !cls.contains("Toast")) {
+                lastWindowPackage = pkg;
+                lastWindowClass = cls;
+                lastWindowEventAtMs = now;
+            }
+        }
     }
 
     @Override
@@ -174,6 +212,10 @@ public class AkaiAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        lastWindowPackage = null;
+        lastWindowClass = null;
+        lastWindowEventAtMs = 0L;
+        lastContentEventAtMs = 0L;
         if (sInstance == this) {
             sInstance = null;
         }

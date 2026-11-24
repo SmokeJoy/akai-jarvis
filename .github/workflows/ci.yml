@@ -1,15 +1,32 @@
 name: AKAI JARVIS CI
 
 on:
+  # The JARVIS final-agent branch must be built on its exact pushed HEAD.
+  # Previously only main/fix branches were eligible for push checks.
   push:
-    branches: [ main, "fix/*" ]
+    branches: [ main, "fix/*", "feat/jarvis-final-agent-ota-foundation-20261117" ]
   pull_request:
     branches: [ main, "fix/*", "feat/a2-*", "feat/jarvis-agent-a0-memory-learning", "feat/jarvis-a1-integration-candidate" ]
+  # Manual re-run without an artificial code commit (available when workflow
+  # exists on repository default branch; not a way around account-runner limits).
+  workflow_dispatch:
+
+
+# Cancel stale in-progress runs on the SAME PR when automation pushes a new
+# commit. This saves private-runner credits without skipping any final HEAD CI.
+# A completed PASS belongs only to its own exact commit SHA.
+concurrency:
+  group: akai-jarvis-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   audit-and-tests:
     name: Code Quality, Unit Tests, SQLite, Android APK & ARMv7 JNI Build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout Codebase
@@ -26,6 +43,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Verify MediaProjection STOP startup race source contract
+        run: python3 akai-remote-tests/test_visual_stop_source.py
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -37,6 +57,38 @@ jobs:
           node --check akai-remote-web/app.js
           node --check akai-remote-web/sw.js
           echo "JavaScript syntax check passed."
+
+      - name: 1a. Web AI feedback regression (handled HTTP 400 vs verified result)
+        run: node akai-remote-tests/test_web_ai_feedback.js
+
+      - name: 1a2. Optional local Italian Web Remote voice (no cloud TTS)
+        run: node akai-remote-tests/test_web_local_italian_voice.js
+
+      - name: 1a2b. Web Remote conversation lifecycle recovery & turnId race guard
+        run: node akai-remote-tests/test_web_convo_lifecycle.js
+
+      - name: 1a3. Owner-offline OTA release key and manifest tools syntax and actual APK evidence audit
+        run: |
+          node --check scripts/13_create_ota_release_trust.mjs
+          node --check scripts/14_sign_ota_release_manifest.mjs
+          node --check scripts/18_prepare_ota_staging.mjs
+          node --check scripts/19_issue_ota_recovery_evidence.mjs
+          node --check scripts/lib/ota_release_apk_proof.mjs
+          node --check scripts/lib/ota_recovery_evidence.mjs
+          node akai-remote-tests/test_ota_release_apk_proof.mjs
+          node akai-remote-tests/test_ota_staging_channel.mjs
+          # Never execute owner-offline cryptographic key generation in Actions.
+          grep -q 'process.env.CI' scripts/13_create_ota_release_trust.mjs
+          grep -q 'process.env.CI' scripts/14_sign_ota_release_manifest.mjs
+          grep -q 'process.env.CI' scripts/18_prepare_ota_staging.mjs
+          grep -q 'process.env.CI' scripts/19_issue_ota_recovery_evidence.mjs
+          grep -q 'aes-256-cbc' scripts/13_create_ota_release_trust.mjs
+          grep -q 'aes-256-cbc' scripts/18_prepare_ota_staging.mjs
+          grep -q 'AkaiJarvisOtaStagingTrust' scripts/18_prepare_ota_staging.mjs
+          grep -q 'STAGING_ONLY_DO_NOT_PUBLISH_PUBLICLY' scripts/18_prepare_ota_staging.mjs
+          ! grep -q 'AkaiJarvisOtaReleaseTrust' scripts/18_prepare_ota_staging.mjs
+          grep -q 'proveActualOwnerSignedApk' scripts/14_sign_ota_release_manifest.mjs
+          echo 'Offline key & isolated staging tooling parse; actual APK signature, staging isolation and manifest evidence tested, no production key generated in CI.'
 
       - name: 1b. Parse and safety-audit Windows A1 candidate build script
         shell: pwsh
@@ -59,6 +111,112 @@ jobs:
           if ($src -notmatch 'ExtractToFile\(\$entry,\s*\$soTarget\)') { throw "Fallback extraction gate missing" }
           if ($src -notmatch 'verify --print-certs \$baselineApk') { throw "Original APK signer verification missing" }
           Write-Host "A1 Windows candidate script parses and static release guards pass (no Windows hardware build in CI)."
+
+      - name: 1c. Parse final owner-signed APK build recipe and enforce no-deploy gates
+        shell: pwsh
+        run: |
+          $path = Join-Path $PWD "scripts/12_build_jarvis_final_candidate.ps1"
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          $src = Get-Content $path -Raw
+          if ($src -notmatch 'VersionCode = 4') { throw 'Diagnostic vCode4 default required' }
+          if (-not $src.Contains('$VersionName -match ''(?i)(diagnostic|debug)''')) { throw 'Release must refuse diagnostic versionName' }
+          if (-not $src.Contains('$VersionName -notmatch ''(?i)diagnostic''')) { throw 'Diagnostic must keep explicit versionName tag' }
+          if ($src -notmatch 'ValidateSet\(''Diagnostic'', ''Release''\)') { throw 'Explicit build profiles missing' }
+          if ($src -notmatch '\$BuildProfile -eq ''Diagnostic''' -or $src -notmatch '\$VersionCode -ne 4') { throw 'Diagnostic v4 version gate missing' }
+          if ($src -notmatch '\$BuildProfile -eq ''Release''' -or $src -notmatch '\$VersionCode -lt 5') { throw 'Non-debuggable v5+ version gate missing' }
+          if ($src -notmatch 'linkArgs \+= ''--debug-mode''') { throw 'AAPT2 diagnostic debuggable injection missing' }
+          if ($src -notmatch "'--replace-version'") { throw 'AAPT2 must override manifest v3 with diagnostic v4/release v5' }
+          if ($src -notmatch '\$minimumBuildToolsVersion\s*=\s*\[version\]''34\.0\.0''') { throw 'Windows builder must require SDK build-tools supporting replace-version' }
+          if ($src -notmatch 'Get-ChildItem -LiteralPath \$buildToolsRoot -Directory' -or
+              $src -notmatch 'Sort-Object \{ \[version\]\$_\.Name \} -Descending') { throw 'Windows builder must select latest compatible installed Android tools' }
+          if ($src -match '\$buildToolsDir\s*=\s*Join-Path \$sdkDir ["'']build-tools\\28\.0\.3') { throw 'Windows builder must NOT pin obsolete build-tools 28.0.3' }
+          if ($src -notmatch 'Android target resta API28') { throw 'Windows AAPT2 upgrade must preserve Android 9 target' }
+          foreach ($needed in @('aapt2.exe', 'aapt.exe', 'zipalign.exe', 'lib\d8.jar', 'lib\apksigner.jar')) {
+            if (-not $src.Contains("'$needed'")) { throw "Windows builder missing required SDK tool: $needed" }
+          }
+          if ($src -notmatch 'DIAGNOSTIC FAIL-CLOSED' -or $src -notmatch 'RELEASE FAIL-CLOSED') { throw 'Compiled manifest debug profile guards missing' }
+          if ($src -notmatch 'buildProfile = \$BuildProfile' -or $src -notmatch 'debuggable = \(\$BuildProfile') { throw 'Build provenance profile metadata missing' }
+          if ($src -notmatch 'feat/jarvis-final-agent-ota-foundation-20261117') { throw 'Wrong source branch' }
+          if ($src -notmatch '\[string\]\$ExpectedCiHeadSha') { throw 'Exact CI HEAD SHA parameter missing' }
+          if ($src -notmatch '\$actualHeadSha -ne \$ExpectedCiHeadSha\.ToLowerInvariant\(\)') { throw 'Local HEAD must match explicitly approved CI SHA' }
+          if ($src -notmatch 'FIRMA DIVERSA DA TV') { throw 'Signer gate missing' }
+          if ($src -notmatch 'JARVIS_SIGNING_STOREPASS' -or $src -notmatch 'JARVIS_SIGNING_KEYPASS') { throw 'Private signer env vars missing' }
+          if ($src -match 'pass:android|debug.keystore|New-SelfSignedCertificate|keytool -genkey') { throw 'Debug or self-generated signer forbidden in final candidate' }
+          if ($src -match '(?i)\badb(?:\.exe)?\s+(install|root|push|pull|connect|shell)\b') { throw 'Final build script must never touch TV' }
+          if ($src -notmatch 'Get-FileHash.*SHA256') { throw 'APK checksum missing' }
+          if ($src -notmatch 'apksigner') { throw 'APK signing verification missing' }
+          if ($src -notmatch '\$alignmentResult\s*=\s*&\s*\$zipalign\s+-c\s+-p\s+4\s+\$releaseApk') { throw 'Signed APK alignment verification missing' }
+          if ($src -notmatch 'signed APK zipalign verification failed') { throw 'Signed APK alignment must fail closed' }
+          if ($src -notmatch 'if \(-not \(Test-Path -LiteralPath \$aaptCli -PathType Leaf\)\)') { throw 'Missing fail-closed aapt.exe availability gate' }
+          if ($src -notmatch '\$LASTEXITCODE -ne 0 -or \[string\]::IsNullOrWhiteSpace\(\$xmlTree\)') { throw 'Missing fail-closed compiled manifest inspection gate' }
+          if ($src -match 'if \(Test-Path \$aaptCli\)') { throw 'Optional debuggable verification forbidden' }
+          foreach ($entry in @('classes.dex', 'lib/armeabi-v7a/libakai_uinput.so', 'assets/www/index.html')) {
+            if (-not $src.Contains("'$entry'")) { throw "Mandatory APK component verification missing: $entry" }
+          }
+          if ($src -notmatch 'GetEntry\(\$required\)' -or $src -notmatch '\$requiredEntry\.Length -le 0') { throw 'Mandatory APK entry must exist and be nonempty' }
+          if ($src -notmatch '\$entryNames\.Add\(\$entry\.FullName\)') { throw 'Duplicate ZIP entry rejection missing' }
+          if ($src -notmatch 'finally\s*\{\s*\$zipTest\.Dispose\(\)') { throw 'ZIP handle must close even when a gate fails' }
+          # Execute the same PowerShell regex used by the APK ZIP security gate.
+          # A doubled backslash in a single-quoted PowerShell regex fails to match '.key'.
+          $forbiddenExtension = [regex]::Match($src, [regex]::Escape('$entry.FullName') + "\s+-match\s+'([^']*p12[^']*)'")
+          if (-not $forbiddenExtension.Success) { throw 'APK forbidden-extension regex missing' }
+          $extensionPattern = $forbiddenExtension.Groups[1].Value
+          # The owner-only PUBLIC OTA SPKI .der is a deliberate allowlisted
+          # exception; ALL other .der names (e.g. private TLS/CA material)
+          # remain prohibited and are tested, not silently exempted.
+          if ($src -notmatch [regex]::Escape("FullName -match '\.der\z'") -or
+              $src -notmatch [regex]::Escape("FullName -ne 'assets/ota-release-public.der'")) {
+            throw 'APK must explicitly block other .der files while allowing only the pinned public OTA key'
+          }
+          foreach ($filename in @('assets/private.key', 'assets/secret.jks', 'assets/cert.p12', 'assets/ca.crt', 'assets/tls.der', 'assets/password.pass')) {
+            $forbidden = ($filename -match $extensionPattern) -or
+                         ($filename -match '\.der\z' -and $filename -ne 'assets/ota-release-public.der')
+            if (-not $forbidden) { throw "Private APK material was not rejected: $filename" }
+          }
+          foreach ($filename in @('assets/www/index.html', 'assets/www/app.js', 'assets/public.svg', 'assets/certificate.crt.txt', 'assets/ota-release-public.der')) {
+            $forbidden = ($filename -match $extensionPattern) -or
+                         ($filename -match '\.der\z' -and $filename -ne 'assets/ota-release-public.der')
+            if ($forbidden) { throw "Benign/public APK asset falsely rejected: $filename" }
+          }
+          Write-Host 'Final v4 source-only build recipe parses and is gated; no APK/device built in this step.'
+
+      - name: 1c2. Rescue builder, portable recovery bundle & OTA readiness PowerShell gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($rel in @(
+            'scripts/15_build_jarvis_a2_rescue.ps1',
+            'scripts/16_export_portable_recovery_bundle.ps1',
+            'scripts/17_check_ota_provisioning_readiness.ps1',
+            'akai-remote-tests/test_portable_recovery_bundle.ps1',
+            'akai-remote-tests/test_a2_rescue_builder_gates.ps1'
+          )) {
+            $path = Join-Path $PWD $rel
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $parseErrors | ForEach-Object { Write-Error "$rel : $($_.Message)" }
+              exit 1
+            }
+            $src = Get-Content $path -Raw
+            if ($src -match '(?i)\badb(?:\.exe)?\s+(install|root|push|pull|connect|shell)\b') {
+              throw "Script $rel must never invoke real ADB device commands"
+            }
+          }
+          Write-Host 'Scripts 15/16/17 and bundle test suite parse cleanly with zero real ADB commands.'
+
+      - name: 1d. Android JNI Bionic and secret-free packaging source regressions
+        run: python3 akai-remote-tests/test_android_jni_ci_contract.py
+
+      - name: 1e. Backup Memory REST must require HTTPS and a verified CA
+        run: python3 akai-remote-tests/test_backup_memory_transport_policy.py
 
       - name: 2. Secrets Leak Detection
         run: |
@@ -91,9 +249,11 @@ jobs:
           mkdir -p test_bin
           javac -encoding UTF-8 -d test_bin \
             akai-remote-tests/host_mock/android/content/*.java \
+            akai-remote-tests/host_mock/android/content/res/*.java \
             akai-remote-tests/host_mock/android/content/pm/*.java \
             akai-remote-tests/host_mock/android/graphics/*.java \
             akai-remote-tests/host_mock/android/media/*.java \
+            akai-remote-tests/host_mock/android/os/*.java \
             akai-remote-tests/host_mock/android/security/keystore/*.java \
             akai-remote-tests/host_mock/android/util/*.java \
             akai-remote-tests/host_mock/android/view/accessibility/*.java \
@@ -107,12 +267,24 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/UInputDriver.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/CommandResult.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/TvAppPackages.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/TvInputIntentPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/DtvChannelTuningCoordinator.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/TlsCertificateManager.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/RestApiRouter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/LocalIntentParser.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AgentSkillGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AgentFactMemory.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/KeystoreSecurityHelper.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudVisionRequestPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FreeItalianTtsPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationBridge.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualCaptureSessionGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FrameSequenceGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ProcedureGoalMatcher.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationProvider.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisionSessionCoordinator.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualStepPolicy.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AiProviderAdapter.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ScreenPerceptionEngine.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/GoalEvidenceVerifier.java \
@@ -122,35 +294,218 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/AkaiAiController.java \
             akai-remote-tests/UnitTests.java \
             akai-remote-tests/AgentSkillGateTest.java \
-            akai-remote-tests/AgentFactMemoryTest.java
+            akai-remote-tests/AgentFactMemoryTest.java \
+            akai-remote-tests/KeystoreCredentialHealthTest.java \
+            akai-remote-tests/TvInputGoalVerificationTest.java \
+            akai-remote-tests/DtvChannelTuningCoordinatorTest.java \
+            akai-remote-tests/VisualSingleStepRecoveryTest.java \
+            akai-remote-tests/VisionSessionHandoffTest.java
 
           java -cp test_bin it.akai.customremote.UnitTests
           java -cp test_bin it.akai.customremote.AgentSkillGateTest
           java -cp test_bin it.akai.customremote.AgentFactMemoryTest
-          echo "All 40 Java unit tests passed with 100% success."
+          java -cp test_bin it.akai.customremote.KeystoreCredentialHealthTest
+          java -cp test_bin it.akai.customremote.TvInputGoalVerificationTest
+          java -cp test_bin it.akai.customremote.DtvChannelTuningCoordinatorTest
+          java -cp test_bin it.akai.customremote.VisualSingleStepRecoveryTest
+          java -cp test_bin it.akai.customremote.VisionSessionHandoffTest
+          echo "All 40 Java unit tests + Keystore + TvInputGoalVerificationTest + DtvChannelTuningCoordinatorTest + VisualSingleStepRecoveryTest + VisionSessionHandoffTest passed with 100% success."
+
+      - name: 4b. V4 OTA archive/manifest signature and exact upgrade policy gates (JDK 8)
+        run: |
+          mkdir -p test_ota
+          javac -encoding UTF-8 -source 8 -target 8 -d test_ota \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaCandidateGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaArchiveIdentityGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSignedReleaseManifest.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaPinnedReleaseKey.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaHttpsTransport.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaStagingCommit.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaInstallReadinessGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaRecoveryEvidenceGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSessionByteTransfer.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VerifiedAtomicFileCopy.java \
+            akai-remote-tests/OtaCandidateGateTest.java \
+            akai-remote-tests/OtaArchiveIdentityGateTest.java \
+            akai-remote-tests/OtaSignedReleaseManifestTest.java \
+            akai-remote-tests/OtaPinnedReleaseKeyTest.java \
+            akai-remote-tests/OtaHttpsTransportTest.java \
+            akai-remote-tests/OtaStagingCommitTest.java \
+            akai-remote-tests/OtaInstallReadinessGateTest.java \
+            akai-remote-tests/OtaRecoveryEvidenceGateTest.java \
+            akai-remote-tests/OtaSessionByteTransferTest.java \
+            akai-remote-tests/VerifiedAtomicFileCopyTest.java
+          java -cp test_ota it.akai.customremote.OtaCandidateGateTest
+          java -cp test_ota it.akai.customremote.OtaArchiveIdentityGateTest
+          java -cp test_ota it.akai.customremote.OtaSignedReleaseManifestTest
+          java -cp test_ota it.akai.customremote.OtaPinnedReleaseKeyTest
+          java -cp test_ota it.akai.customremote.OtaHttpsTransportTest
+          java -cp test_ota it.akai.customremote.OtaStagingCommitTest
+          java -cp test_ota it.akai.customremote.OtaInstallReadinessGateTest
+          java -cp test_ota it.akai.customremote.OtaRecoveryEvidenceGateTest
+          java -cp test_ota it.akai.customremote.OtaSessionByteTransferTest
+          java -cp test_ota it.akai.customremote.VerifiedAtomicFileCopyTest
+          echo "Archive/staging policy gates passed; OTA real-device download, owner UI and installation remain unverified."
+
+      - name: 4b2. Signed OTA Provisioning E2E (RSA-3072 trust, channel & A2 rescue v5->v6 upgrade + Script 17 readiness)
+        run: node akai-remote-tests/test_ota_provisioning_e2e.mjs
+
+      - name: 4b2b. Host-only OTA recovery evidence workflow & Staging/Release cross-policy tests (no TV/keys)
+        run: node akai-remote-tests/test_ota_recovery_evidence_workflow.mjs
+
+      - name: 4b3. On-TV owner-confirmed OTA UI & PackageInstaller wiring checks
+        run: python3 akai-remote-tests/test_ota_owner_ui_wiring.py
+
+      - name: 4b4. Host-only OTA delivery & verification integration harness (local HTTPS fixture, no TV/keys)
+        run: |
+          mkdir -p test_ota_integration
+          javac -encoding UTF-8 -source 8 -target 8 -d test_ota_integration \
+            akai-remote-tests/host_mock/android/app/*.java \
+            akai-remote-tests/host_mock/android/content/*.java \
+            akai-remote-tests/host_mock/android/content/res/*.java \
+            akai-remote-tests/host_mock/android/content/pm/*.java \
+            akai-remote-tests/host_mock/android/os/*.java \
+            akai-remote-tests/host_mock/android/provider/*.java \
+            akai-remote-tests/host_mock/it/akai/customremote/OtaInstallResultReceiver.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaCandidateGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaArchiveIdentityGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSignedReleaseManifest.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaPinnedReleaseKey.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaHttpsTransport.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaStagingCommit.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaInstallReadinessGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaRecoveryEvidenceGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSessionByteTransfer.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaReleaseTrust.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaReleaseChannel.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaRecoveryEvidenceStore.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaAndroidArchiveInspector.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaUpdatePreparation.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaAndroidInstallPreflight.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaOwnerPackageInstaller.java \
+            akai-remote-tests/OtaDeliveryIntegrationTest.java
+          java -cp test_ota_integration it.akai.customremote.ai.OtaDeliveryIntegrationTest
+          echo "Host-only local HTTPS staging delivery harness passed; NEVER implies OTA_PROVISIONED_READY or real AKAI TV/PC-off OTA PASS."
+
+      - name: 4c. DeepSeek/Kimi-only provider guard (no local AI models)
+        run: |
+          mkdir -p test_providers
+          javac -encoding UTF-8 -source 8 -target 8 -d test_providers \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
+            akai-remote-tests/CloudProviderPolicyTest.java
+          java -cp test_providers it.akai.customremote.CloudProviderPolicyTest
+
+      - name: 4d. Cloud image consent gate (DeepSeek/Kimi only, no upload)
+        run: |
+          mkdir -p test_vision
+          javac -encoding UTF-8 -source 8 -target 8 -d test_vision \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudVisionRequestPolicy.java \
+            akai-remote-tests/CloudVisionRequestPolicyTest.java
+          java -cp test_vision it.akai.customremote.CloudVisionRequestPolicyTest
+
+      - name: 4e. Single-use vision-to-planner bridge (fresh UI, no local LLM)
+        run: |
+          mkdir -p test_visual_bridge
+          javac -encoding UTF-8 -source 8 -target 8 -d test_visual_bridge \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationBridge.java \
+            akai-remote-tests/VisualObservationBridgeTest.java
+          java -cp test_visual_bridge it.akai.customremote.VisualObservationBridgeTest
+
+      - name: 4f. Android 9 multi-frame session lifecycle gate (no pixels or API calls)
+        run: |
+          mkdir -p test_capture_session
+          javac -encoding UTF-8 -source 8 -target 8 -d test_capture_session \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualCaptureSessionGate.java \
+            akai-remote-tests/VisualCaptureSessionGateTest.java
+          java -cp test_capture_session it.akai.customremote.VisualCaptureSessionGateTest
+
+      - name: 4f2. MediaProjection overlapping-request regression (source contract)
+        run: python3 akai-remote-tests/test_visual_projection_request_serialization.py
+
+      - name: 4f3. Android 9 idle capture power and memory regression
+        run: python3 -m unittest akai-remote-tests/test_visual_projection_idle_surface.py -v
+
+      - name: 4f4. ImageReader frame sequence freshness across app switches
+        run: |
+          mkdir -p test_frame_sequence
+          javac -encoding UTF-8 -source 8 -target 8 -d test_frame_sequence \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FrameSequenceGate.java \
+            akai-remote-tests/FrameSequenceGateTest.java
+          java -cp test_frame_sequence it.akai.customremote.FrameSequenceGateTest
+
+      - name: 4g. Vision observer handoff to planner (provider lock, cancellation)
+        run: |
+          mkdir -p test_obs_provider
+          javac -encoding UTF-8 -source 8 -target 8 -d test_obs_provider \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/CloudProviderPolicy.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualObservationProvider.java \
+            akai-remote-tests/VisualObservationProviderTest.java
+          java -cp test_obs_provider it.akai.customremote.VisualObservationProviderTest
+
+      - name: 4h. Bounded visual single-step cloud navigation gate
+        run: |
+          mkdir -p test_visual_step
+          javac -encoding UTF-8 -source 8 -target 8 -d test_visual_step \
+            akai-remote-tests/host_mock/org/json/JSONException.java \
+            akai-remote-tests/host_mock/org/json/JSONArray.java \
+            akai-remote-tests/host_mock/org/json/JSONObject.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VisualStepPolicy.java \
+            akai-remote-tests/VisualStepPolicyTest.java
+          java -cp test_visual_step it.akai.customremote.VisualStepPolicyTest
+
+      - name: 4i. Safe procedural recall and channel/app name disambiguation
+        run: |
+          mkdir -p test_memory_matcher
+          javac -encoding UTF-8 -source 8 -target 8 -d test_memory_matcher \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/ProcedureGoalMatcher.java \
+            akai-remote-tests/ProcedureGoalMatcherTest.java
+          java -cp test_memory_matcher it.akai.customremote.ProcedureGoalMatcherTest
+
+      - name: 4j. Android offline TTS owner policy and stale callback regression
+        run: |
+          mkdir -p test_speech_gate
+          javac -encoding UTF-8 -source 8 -target 8 -d test_speech_gate \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/SpeechUtteranceGate.java \
+            akai-remote-tests/SpeechUtteranceGateTest.java
+          java -cp test_speech_gate it.akai.customremote.SpeechUtteranceGateTest
+          python3 akai-remote-tests/test_speech_owner_policy.py -v
+
+      - name: 4k. Free Italian TTS hard budget and endpoint policy
+        run: |
+          mkdir -p test_free_voice
+          javac -encoding UTF-8 -source 8 -target 8 -d test_free_voice \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/FreeItalianTtsPolicy.java \
+            akai-remote-tests/FreeItalianTtsPolicyTest.java
+          java -cp test_free_voice it.akai.customremote.FreeItalianTtsPolicyTest
+          python3 akai-remote-tests/test_free_italian_voice_source.py -v
+
+      - name: 4l. TV Input Framework (DTV/HDMI/Sources) policy and Accessibility UI telemetry contract
+        run: |
+          mkdir -p test_tif_policy
+          javac -encoding UTF-8 -source 8 -target 8 -d test_tif_policy \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/TvInputIntentPolicy.java \
+            akai-remote-tests/TvInputIntentPolicyTest.java
+          java -cp test_tif_policy it.akai.customremote.TvInputIntentPolicyTest
+          python3 akai-remote-tests/test_tv_input_tif_contract.py -v
 
       - name: 5. Native JNI C Driver ARMv7 Compilation & ABI Verification
         run: |
           echo "=== Compiling Native JNI Driver (uinput_jni.c) for ARMv7 ==="
           mkdir -p build_ci/lib/armeabi-v7a
 
-          NDK_CLANG=$(find "$ANDROID_HOME/ndk" "$ANDROID_NDK_ROOT" /usr/local/lib/android/sdk/ndk -name "armv7a-linux-androideabi21-clang" 2>/dev/null | sort -V | tail -n 1)
-          if [ -n "$NDK_CLANG" ]; then
-            echo "Using Android NDK Clang ARMv7: $NDK_CLANG"
-            "$NDK_CLANG" -shared -fPIC -O2 -llog akai-remote-tv/app/src/main/jni/uinput_jni.c -o build_ci/lib/armeabi-v7a/libakai_uinput.so
-          else
-            echo "Android NDK Clang not found in standard paths; installing gcc-arm-linux-gnueabihf cross-compiler..."
-            sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-linux-gnueabihf
-            mkdir -p /tmp/jni_include/android
-            printf '#pragma once\n#define ANDROID_LOG_INFO 4\n#define ANDROID_LOG_ERROR 6\nstatic inline int __android_log_print(int prio, const char* tag, const char* fmt, ...) { (void)prio; (void)tag; (void)fmt; return 0; }\n' > /tmp/jni_include/android/log.h
-
-            arm-linux-gnueabihf-gcc -shared -fPIC -O2 \
-              -I"$JAVA_HOME/include" \
-              -I"$JAVA_HOME/include/linux" \
-              -I/tmp/jni_include \
-              akai-remote-tv/app/src/main/jni/uinput_jni.c \
-              -o build_ci/lib/armeabi-v7a/libakai_uinput.so
+          # Only Android NDK builds Android/Bionic-compatible JNI libraries.
+          # A generic ARM Linux GCC can emit a valid ELF machine=ARM SO linked
+          # against glibc which Android cannot load. Never accept that fallback.
+          NDK_CLANG=$(find "$ANDROID_HOME/ndk" "${ANDROID_NDK_ROOT:-/nonexistent}" /usr/local/lib/android/sdk/ndk -name "armv7a-linux-androideabi21-clang" 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$NDK_CLANG" ] || [ ! -x "$NDK_CLANG" ]; then
+            echo "NO-GO: Android NDK ARMv7 API21 clang required; Linux glibc cross-GCC is NOT equivalent."
+            exit 1
           fi
+          echo "Using Android NDK Clang ARMv7: $NDK_CLANG"
+          "$NDK_CLANG" -shared -fPIC -O2 akai-remote-tv/app/src/main/jni/uinput_jni.c -llog -o build_ci/lib/armeabi-v7a/libakai_uinput.so
 
           if [ ! -f build_ci/lib/armeabi-v7a/libakai_uinput.so ]; then
             echo "ERROR: Native JNI compilation failed."
@@ -162,7 +517,14 @@ jobs:
           echo "--- ABI Verification ---"
           file build_ci/lib/armeabi-v7a/libakai_uinput.so
           readelf -h build_ci/lib/armeabi-v7a/libakai_uinput.so | grep -E "Class|Machine|Flags"
-          echo "ARM ABI confirmed."
+          readelf -h build_ci/lib/armeabi-v7a/libakai_uinput.so | grep -Eq 'Machine:[[:space:]]*ARM' || (echo 'NO-GO: not an ARM ELF library' && exit 1)
+          readelf -h build_ci/lib/armeabi-v7a/libakai_uinput.so | grep -Eq 'Class:[[:space:]]*ELF32' || (echo 'NO-GO: not ELF32' && exit 1)
+          readelf -d build_ci/lib/armeabi-v7a/libakai_uinput.so > build_ci/jni_dynamic.txt
+          if grep -Eq 'libc\.so\.6|libgcc_s\.so|ld-linux|glibc' build_ci/jni_dynamic.txt; then
+            echo 'NO-GO: Linux/glibc dependency in Android JNI library'; exit 1
+          fi
+          grep -Eq 'Shared library: \[liblog\.so\]' build_ci/jni_dynamic.txt || (echo 'NO-GO: Android liblog dependency missing' && exit 1)
+          echo "Android NDK/Bionic-compatible ARMv7 JNI ABI verified (not an OEM runtime test)."
 
       - name: 6. Full Android Production APK Build & Packaging (D8, AAPT2, ZipAlign, Apksigner)
         run: |
@@ -182,8 +544,8 @@ jobs:
             ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | grep "android-28" | head -n 1)
           fi
           if [ -z "$ANDROID_JAR" ]; then
-            echo "Notice: android-28 not installable; using highest available platform jar."
-            ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name "android.jar" 2>/dev/null | sort -V | tail -n 1)
+            echo "NO-GO: Android 9 platform API28 is required. Newer SDKs are NOT an equivalent compile proof."
+            exit 1
           fi
 
           AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
@@ -207,13 +569,9 @@ jobs:
           # 1. Copia asset statici del Web Remote (HTML, JS, CSS)
           cp -r akai-remote-web/* build_ci/assets/www/
 
-          # 2. Generazione keystore TLS effimero autofirmato per test di CI (assets/server_keystore.p12)
-          # NOTA: Questo keystore è puramente effimero per verificare che il server HTTPS possa caricarlo
-          keytool -genkeypair -alias akaiserver -keyalg RSA -keysize 2048 -validity 365 \
-            -keystore build_ci/assets/server_keystore.p12 -storetype PKCS12 \
-            -storepass akai1234 -keypass akai1234 \
-            -dname "CN=akai-remote-ci-test,O=AKAI TV,C=IT"
-
+          # 2. No embedded TLS private keys, including temporary/test ones.
+          # Runtime TLS identity is generated/stored by TlsCertificateManager
+          # in app-private storage. CI packaging should mirror release policy.
           # 3. AAPT2 compile resources
           "$AAPT2" compile --dir akai-remote-tv/app/src/main/res -o build_ci/compiled_res.zip
 
@@ -267,8 +625,28 @@ jobs:
           APK_SIZE=$(stat -c%s build_ci/app-ci-test-nondistributable.apk)
           echo "CI TEST APK BUILT AND VERIFIED: $APK_SIZE bytes."
 
+      - name: 6b. Actual AAPT2 compiled Debug v4 and non-Debug v5 manifest gates
+        run: |
+          set -euo pipefail
+          # Source-grep checks alone cannot validate AAPT2 --debug-mode.
+          # Reuse the resource ZIP from the Android9 compile, but create two
+          # NEW unsigned resource-only APKs in an isolated temporary folder.
+          # Never use an owner keystore or deploy either artifact.
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1)
+          ANDROID_28_JAR="$ANDROID_HOME/platforms/android-28/android.jar"
+          if [ ! -x "$AAPT2" ] || [ ! -f "$ANDROID_28_JAR" ] || [ ! -s build_ci/compiled_res.zip ]; then
+            echo "NO-GO: AAPT2 / android-28 platform / compiled resources missing"
+            exit 1
+          fi
+          python3 akai-remote-tests/test_compiled_build_profiles.py \
+            --aapt2 "$AAPT2" \
+            --android-jar "$ANDROID_28_JAR" \
+            --compiled-res build_ci/compiled_res.zip \
+            --manifest akai-remote-tv/app/src/main/AndroidManifest.xml
+
       - name: 7. Explicit APK Contents Inspection and Verification (unzip -l)
         run: |
+          set -euo pipefail
           echo "=== Verifying internal contents of candidate CI APK ==="
           unzip -l build_ci/app-ci-test-nondistributable.apk > build_ci/apk_contents.txt
           cat build_ci/apk_contents.txt
@@ -278,11 +656,24 @@ jobs:
           grep "lib/armeabi-v7a/libakai_uinput.so" build_ci/apk_contents.txt || (echo "FATAL: libakai_uinput.so missing from APK!" && exit 1)
           grep "assets/www/index.html" build_ci/apk_contents.txt || (echo "FATAL: assets/www/index.html missing from APK!" && exit 1)
           grep "assets/www/app.js" build_ci/apk_contents.txt || (echo "FATAL: assets/www/app.js missing from APK!" && exit 1)
-          grep "assets/server_keystore.p12" build_ci/apk_contents.txt || (echo "FATAL: assets/server_keystore.p12 missing from APK!" && exit 1)
           grep "AndroidManifest.xml" build_ci/apk_contents.txt || (echo "FATAL: AndroidManifest.xml missing from APK!" && exit 1)
-          echo "ALL MANDATORY ARTIFACTS VERIFIED INSIDE APK (DEX, ARMv7 SO, Web Assets, TLS Keystore)."
+          if unzip -Z1 build_ci/app-ci-test-nondistributable.apk | grep -Ei '(^|/)(server_keystore|ca_key)|\.(p12|jks|key|der|crt|pass)$'; then
+            echo "NO-GO: APK contains TLS/private signing material; NOT equivalent to production package."
+            exit 1
+          fi
+          echo "MANDATORY APK COMPONENTS VERIFIED: DEX, Android ARMv7 SO, Web, no embedded TLS secrets."
 
-      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (35 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, ADB Root/Unroot, Watchdog HTTPS Down/SAN Mismatch Auto-Rollback, HTTP 426 LAN Regression, Provisional vs Approved OOB Trust, Read-Only verify-tls & Candidate TLS Forbidden Asset Negative Gate)"
+      - name: "8. PowerShell Safe Install & Rollback Mock ADB Verification (45 Tests: Fail-Closed, WAL Tri-State, Quiescence, Preflight Dumpsys, Greenfield Safety, Strict TLS SAN/CA, .p12.bak, In-Place Rescue Zero-Uninstall, Strict Keystore Health, Watchdog Keystore Rescue Rollback, Candidate Hash Lock & Read-Only Accessibility Advisory)"
         shell: pwsh
         run: |
           ./akai-remote-tests/test_safe_install_mocked_adb.ps1
+
+      - name: "8b. Portable Encrypted Recovery Bundle Export & Offline Restore Verification"
+        shell: pwsh
+        run: |
+          ./akai-remote-tests/test_portable_recovery_bundle.ps1
+
+      - name: "8c. A2 Rescue Builder Fail-Closed Provenance & Path Gates"
+        shell: pwsh
+        run: |
+          ./akai-remote-tests/test_a2_rescue_builder_gates.ps1
