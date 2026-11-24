@@ -7244,6 +7244,405 @@ exit `$LASTEXITCODE
     Remove-Item $testDir45 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ==============================================================================
+# TEST 46: NON-DEBUGGABLE RESCUE ROLLBACK (RUN-AS STDERR FALLBACK -> ADB ROOT)
+# ==============================================================================
+Write-Host "`n--- Esecuzione Test 46: Compatibilita' Rollback Rescue Non-Debuggable (run-as stderr -> adb root) ---"
+$testDir46 = Join-Path ([System.IO.Path]::GetTempPath()) ("akai_test46_" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $testDir46 | Out-Null
+$httpProc46 = $null
+$httpsProc46 = $null
+try {
+    $isWin46 = ($env:OS -eq 'Windows_NT') -or (-not (Get-Variable -Name IsLinux -ErrorAction SilentlyContinue)) -or (-not $IsLinux)
+    $subPassed46 = 0
+
+    $realDb46 = Join-Path $testDir46 "device_db46.sqlite"
+    New-MockRealDatabase -FilePath $realDb46
+    $devApk46 = Join-Path $testDir46 "device_v9_rescue.apk"
+    $candApk46 = Join-Path $testDir46 "candidate_v10.apk"
+    $rescueApk46 = Join-Path $testDir46 "rescue_v11.apk"
+    foreach ($p46 in @($devApk46, $candApk46, $rescueApk46)) {
+        New-TestApkArchive $p46 @("classes.dex", "AndroidManifest.xml", "assets/www/index.html")
+    }
+    $candSha46 = (Get-FileHash -LiteralPath $candApk46 -Algorithm SHA256).Hash.ToLowerInvariant()
+    $rescueSha46 = (Get-FileHash -LiteralPath $rescueApk46 -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    $devPrefs46 = Join-Path $testDir46 "dev_prefs46"
+    New-Item -ItemType Directory -Force -Path $devPrefs46 | Out-Null
+    [IO.File]::WriteAllText((Join-Path $devPrefs46 "akai_remote_sessions.xml"), "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>`n<map>`n  <string name=`"session_1`">tok46</string>`n</map>", [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText((Join-Path $devPrefs46 "akai_ai_security_prefs.xml"), "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>`n<map>`n  <string name=`"sec_enc_deepseek_key`">enc_ds_blob_46</string>`n</map>", [Text.Encoding]::UTF8)
+
+    $devTls46 = Join-Path $testDir46 "dev_tls46"
+    New-Item -ItemType Directory -Force -Path $devTls46 | Out-Null
+    $p12Bytes46 = New-Object byte[] 768
+    for ($bi = 0; $bi -lt $p12Bytes46.Length; $bi++) { $p12Bytes46[$bi] = [byte](($bi * 13 + 7) % 256) }
+    [IO.File]::WriteAllBytes((Join-Path $devTls46 "server_keystore.p12"), $p12Bytes46)
+    [IO.File]::WriteAllText((Join-Path $devTls46 "server_keystore.pass"), "akai-test-pass-46", [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText((Join-Path $devTls46 "ca.pem"), "-----BEGIN CERTIFICATE-----`nTESTCA46`n-----END CERTIFICATE-----", [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText((Join-Path $devTls46 "ca.crt"), "-----BEGIN CERTIFICATE-----`nTESTCA46`n-----END CERTIFICATE-----", [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText((Join-Path $devTls46 "ca_key.der"), "TESTCAKEY46", [Text.Encoding]::ASCII)
+
+    $sdkRoot46 = Join-Path $testDir46 "sdk46"
+    $bt46 = Join-Path $sdkRoot46 "build-tools/34.0.0"
+    New-Item -ItemType Directory -Force -Path $bt46 | Out-Null
+    $mockAapt46Js = Join-Path $sdkRoot46 "mock_aapt46.js"
+    @'
+const fs = require('fs');
+const path = require('path');
+const args = process.argv.slice(2);
+if (args.length !== 3 || args[0] !== 'dump' || args[1] !== 'badging' || !fs.existsSync(args[2])) process.exit(2);
+const b = path.basename(args[2]);
+if (b.includes('rescue_v11')) console.log("package: name='it.akai.customremote' versionCode='11' versionName='1.2.0-a2-rescue-v11'");
+else if (b.includes('candidate_v10')) console.log("package: name='it.akai.customremote' versionCode='10' versionName='1.3.0-diagnostic-rc4-ota-stage'");
+else console.log("package: name='it.akai.customremote' versionCode='9' versionName='1.2.0-a2-rescue-v9'");
+'@ | Set-Content -LiteralPath $mockAapt46Js -Encoding UTF8
+    $aapt46Cmd = if ($isWin46) { Join-Path $bt46 "aapt.cmd" } else { Join-Path $bt46 "aapt" }
+    if ($isWin46) {
+        Set-Content -LiteralPath $aapt46Cmd -Value ("@echo off`n`"{0}`" `"{1}`" %*" -f $validNode, $mockAapt46Js) -Encoding ASCII
+    } else {
+        Set-Content -LiteralPath $aapt46Cmd -Value ("#!/bin/sh`nexec `"{0}`" `"{1}`" `"`$@`"" -f $validNode, $mockAapt46Js) -Encoding UTF8
+        & chmod +x $aapt46Cmd
+    }
+    $mockSigner46Js = Join-Path $testDir46 "mock_signer46.js"
+    "console.log('Signer #1 certificate SHA-256 digest: aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb'); process.exit(0);" | Set-Content -LiteralPath $mockSigner46Js -Encoding UTF8
+    $mockSigner46Cmd = if ($isWin46) { Join-Path $testDir46 "apksigner.cmd" } else { Join-Path $testDir46 "apksigner" }
+    if ($isWin46) {
+        Set-Content -LiteralPath $mockSigner46Cmd -Value ("@echo off`n`"{0}`" `"{1}`" %*" -f $validNode, $mockSigner46Js) -Encoding ASCII
+    } else {
+        Set-Content -LiteralPath $mockSigner46Cmd -Value ("#!/bin/sh`nexec `"{0}`" `"{1}`" `"`$@`"" -f $validNode, $mockSigner46Js) -Encoding UTF8
+        & chmod +x $mockSigner46Cmd
+    }
+
+    $pfx46 = Join-Path $testDir46 "cert46.pfx"
+    $shaCa46 = New-MockTlsPfx -FilePath $pfx46 -SanIp "127.0.0.1"
+    $adbStateFile46 = Join-Path $testDir46 "adb_state46.txt"
+    $appModeFile46 = Join-Path $testDir46 "app_mode46.txt"
+    $walFlagFile46 = Join-Path $testDir46 "wal_present46.txt"
+    $adbLog46 = Join-Path $testDir46 "adb46.log"
+    [IO.File]::WriteAllText($adbStateFile46, "shell")
+    [IO.File]::WriteAllText($appModeFile46, "v9_rescue")
+    [IO.File]::WriteAllText($walFlagFile46, "1")
+
+    $httpPort46 = Get-FreeLoopbackPort
+    $httpsPort46 = Get-FreeLoopbackPort
+    $httpReady46 = Join-Path $testDir46 "http46.ready"
+    $httpsReady46 = Join-Path $testDir46 "https46.ready"
+    $httpJs46 = Join-Path $testDir46 "mock_http46.js"
+    $httpsJs46 = Join-Path $testDir46 "mock_https46.js"
+    $httpReadyEsc46 = $httpReady46.Replace('\', '/')
+    $httpsReadyEsc46 = $httpsReady46.Replace('\', '/')
+    $pfxEsc46 = $pfx46.Replace('\', '/')
+    $appModeEsc46 = $appModeFile46.Replace('\', '/')
+
+    @"
+const http = require('http');
+const fs = require('fs');
+const srv = http.createServer((req, res) => {
+    if (req.url === '/index.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body>Mock TV Remote 46</body></html>');
+        return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uinput_ready: true, active_sessions: 1 }));
+});
+srv.on('error', () => {});
+srv.listen($httpPort46, '127.0.0.1', () => fs.writeFileSync('$httpReadyEsc46', '1'));
+setInterval(() => {}, 1000);
+"@ | Out-File -FilePath $httpJs46 -Encoding ascii
+
+    @"
+const https = require('https');
+const fs = require('fs');
+function appMode() { try { return fs.readFileSync('$appModeEsc46', 'utf8').trim(); } catch (e) { return 'v9_rescue'; } }
+const srv = https.createServer({ pfx: fs.readFileSync('$pfxEsc46'), passphrase: 'pass123' }, (req, res) => {
+    if (req.url === '/api/ai/config') {
+        if (req.headers.authorization !== 'Bearer tok46') {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'unauthorized' }));
+            return;
+        }
+        const m = appMode();
+        if (m === 'v10_bad_ks') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                keystore_alias_present: true,
+                deepseek_ciphertext_present: true,
+                deepseek_decryptable: false,
+                kimi_ciphertext_present: false,
+                kimi_decryptable: false,
+                undecryptable_stored_credentials: true,
+                all_stored_credentials_decryptable: false
+            }));
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            has_deepseek_key: true,
+            has_kimi_key: false,
+            keystore_available: true
+        }));
+        return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
+});
+srv.on('error', () => {});
+srv.on('tlsClientError', () => {});
+srv.listen($httpsPort46, '127.0.0.1', () => fs.writeFileSync('$httpsReadyEsc46', '1'));
+setInterval(() => {}, 1000);
+"@ | Out-File -FilePath $httpsJs46 -Encoding ascii
+
+    $httpProc46 = Start-Process -FilePath $validNode -ArgumentList "`"$httpJs46`"" -PassThru -NoNewWindow
+    $httpsProc46 = Start-Process -FilePath $validNode -ArgumentList "`"$httpsJs46`"" -PassThru -NoNewWindow
+    $w46 = 0
+    while ((-not (Test-Path $httpReady46) -or -not (Test-Path $httpsReady46)) -and $w46 -lt 50) { Start-Sleep -Milliseconds 100; $w46++ }
+
+    $mockAdb46Js = Join-Path $testDir46 "mock_adb46.js"
+    $adbStateEsc46 = $adbStateFile46.Replace('\', '/')
+    $walFlagEsc46 = $walFlagFile46.Replace('\', '/')
+    $adbLogEsc46 = $adbLog46.Replace('\', '/')
+    $realDbEsc46 = $realDb46.Replace('\', '/')
+    $devApkEsc46 = $devApk46.Replace('\', '/')
+    $devPrefsEsc46 = $devPrefs46.Replace('\', '/')
+    $devTlsEsc46 = $devTls46.Replace('\', '/')
+
+    @"
+const fs = require('fs');
+const path = require('path');
+const argv = process.argv.slice(2);
+const argStr = argv.join(' ');
+fs.appendFileSync('$adbLogEsc46', argStr + '\n');
+function st() { try { return fs.readFileSync('$adbStateEsc46', 'utf8').trim(); } catch (e) { return 'shell'; } }
+function appSt() { try { return fs.readFileSync('$appModeEsc46', 'utf8').trim(); } catch (e) { return 'v9_rescue'; } }
+function walPresent() { try { return fs.readFileSync('$walFlagEsc46', 'utf8').trim() === '1'; } catch (e) { return false; } }
+
+if (argStr.includes('get-state')) { console.log('device'); process.exit(0); }
+if (argv.includes('root')) { fs.writeFileSync('$adbStateEsc46', 'root'); console.log('restarting adbd as root'); process.exit(0); }
+if (argv.includes('unroot')) { fs.writeFileSync('$adbStateEsc46', 'shell'); console.log('restarting adbd as non root'); process.exit(0); }
+if (argStr.includes('shell id')) { console.log(st() === 'root' ? 'uid=0(root) gid=0(root)' : 'uid=2000(shell) gid=2000(shell)'); process.exit(0); }
+if (argStr.includes('pm list packages it.akai.customhome')) { console.log(''); process.exit(0); }
+if (argStr.includes('pm list packages')) { console.log('package:it.akai.customremote'); process.exit(0); }
+if (argStr.includes('pm path')) { console.log('package:/data/app/it.akai.customremote/base.apk'); process.exit(0); }
+if (argStr.includes('dumpsys package it.akai.customremote')) {
+    const m = appSt();
+    const vc = m === 'v10_bad_ks' ? 10 : (m === 'v11_rescued' ? 11 : 9);
+    console.log('    versionCode=' + vc + ' minSdk=21 targetSdk=28');
+    console.log('    userId=10051');
+    process.exit(0);
+}
+if (argStr.includes('settings get secure enabled_accessibility_services')) { console.log('null'); process.exit(0); }
+if (argStr.includes('am force-stop') || argStr.includes('ACTION_BACKUP_DB') || argStr.includes('am startservice') || argStr.includes('am start -n')) { process.exit(0); }
+if (argStr.includes('PIDOF_CHECK')) {
+    if (argStr.includes('am force-stop')) { console.log('PIDOF_CHECK:pids=[]:exit=[1]'); process.exit(0); }
+    console.log('PIDOF_CHECK:pids=[]:exit=[1]');
+    process.exit(0);
+}
+if (argStr.includes('pidof it.akai.customremote')) { console.log('4646'); process.exit(0); }
+if (argStr.includes('ADB_ALIVE')) { console.log('ADB_ALIVE'); process.exit(0); }
+// Non-debuggable rescue / rollback path: run-as writes STDERR and exits 1; su exits 1.
+if (argStr.includes('run-as')) {
+    process.stderr.write('run-as: package not debuggable: it.akai.customremote\n');
+    process.exit(1);
+}
+if (argStr.includes('su -c')) {
+    process.stderr.write('su: not found\n');
+    process.exit(1);
+}
+if (argStr.includes('rm -f /data/data/it.akai.customremote/databases/akai_memory.db-wal')) {
+    if (st() !== 'root') { process.stderr.write('Permission denied\n'); process.exit(1); }
+    fs.writeFileSync('$walFlagEsc46', '0');
+    process.exit(0);
+}
+if (argStr.includes('FILE_PROBE_RESULT')) {
+    if (st() !== 'root') { console.log('FILE_PROBE_RESULT:ACCESS_DENIED'); process.exit(13); }
+    if (argStr.includes('akai_memory.db-wal')) {
+        console.log(walPresent() ? 'FILE_PROBE_RESULT:EXISTS' : 'FILE_PROBE_RESULT:NOT_FOUND');
+        process.exit(0);
+    }
+    if (argStr.includes('akai_memory.db-shm')) {
+        console.log('FILE_PROBE_RESULT:NOT_FOUND');
+        process.exit(0);
+    }
+    const pm = argStr.match(/shared_prefs\/([A-Za-z0-9_.\-]+\.xml)/);
+    if (pm) {
+        console.log(fs.existsSync(path.join('$devPrefsEsc46', pm[1])) ? 'FILE_PROBE_RESULT:EXISTS' : 'FILE_PROBE_RESULT:NOT_FOUND');
+        process.exit(0);
+    }
+    const fm = argStr.match(/files\/([A-Za-z0-9_.\-]+)/);
+    if (fm) {
+        console.log(fs.existsSync(path.join('$devTlsEsc46', fm[1])) ? 'FILE_PROBE_RESULT:EXISTS' : 'FILE_PROBE_RESULT:NOT_FOUND');
+        process.exit(0);
+    }
+    console.log('FILE_PROBE_RESULT:NOT_FOUND');
+    process.exit(0);
+}
+if (argv.includes('pull')) { fs.copyFileSync('$devApkEsc46', argv[argv.length - 1]); console.log('1 file pulled'); process.exit(0); }
+if (argv.includes('exec-in')) {
+    if (st() !== 'root') process.exit(1);
+    const chunks = [];
+    process.stdin.on('data', c => chunks.push(c));
+    process.stdin.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        if (argStr.includes('akai_memory.db')) fs.writeFileSync('$realDbEsc46', buf);
+        process.exit(0);
+    });
+    return;
+}
+if (argv.includes('exec-out')) {
+    if (st() !== 'root') process.exit(1);
+    const pm = argStr.match(/shared_prefs\/([A-Za-z0-9_.\-]+\.xml)/);
+    if (pm) {
+        const src = path.join('$devPrefsEsc46', pm[1]);
+        if (!fs.existsSync(src)) process.exit(1);
+        process.stdout.write(fs.readFileSync(src), () => process.exit(0));
+        return;
+    }
+    const fm = argStr.match(/files\/([A-Za-z0-9_.\-]+)/);
+    if (fm) {
+        if (fm[1] === 'akai_memory_snapshot.db') process.exit(1);
+        const src = path.join('$devTlsEsc46', fm[1]);
+        if (!fs.existsSync(src)) process.exit(1);
+        process.stdout.write(fs.readFileSync(src), () => process.exit(0));
+        return;
+    }
+    if (argStr.includes('akai_memory.db-wal')) {
+        if (walPresent()) {
+            const walHdr = Buffer.alloc(64, 0);
+            process.stdout.write(walHdr, () => process.exit(0));
+            return;
+        }
+        process.exit(1);
+    }
+    if (argStr.includes('akai_memory.db')) {
+        process.stdout.write(fs.readFileSync('$realDbEsc46'), () => process.exit(0));
+        return;
+    }
+    process.exit(1);
+}
+if (argv.includes('install')) {
+    const target = argv[argv.length - 1] || '';
+    if (target.includes('candidate_v10')) {
+        fs.writeFileSync('$appModeEsc46', 'v10_bad_ks');
+        fs.writeFileSync('$walFlagEsc46', '1');
+    } else if (target.includes('rescue_v11')) {
+        fs.writeFileSync('$appModeEsc46', 'v11_rescued');
+    }
+    console.log('Success');
+    process.exit(0);
+}
+process.exit(0);
+"@ | Out-File -FilePath $mockAdb46Js -Encoding ascii
+
+    $mockAdb46Cmd = if ($isWin46) { Join-Path $testDir46 "adb.cmd" } else { Join-Path $testDir46 "adb" }
+    if ($isWin46) {
+        Set-Content -LiteralPath $mockAdb46Cmd -Value ("@echo off`n`"{0}`" `"{1}`" %*" -f $validNode, $mockAdb46Js) -Encoding ASCII
+    } else {
+        Set-Content -LiteralPath $mockAdb46Cmd -Value ("#!/bin/sh`nexec `"{0}`" `"{1}`" `"`$@`"" -f $validNode, $mockAdb46Js) -Encoding UTF8
+        & chmod +x $mockAdb46Cmd
+    }
+
+    $scriptEsc46 = $scriptPath.Replace('\', '/')
+    $candEsc46 = $candApk46.Replace('\', '/')
+    $rescueEsc46 = $rescueApk46.Replace('\', '/')
+    $adb46Esc = $mockAdb46Cmd.Replace('\', '/')
+    $signer46Esc = $mockSigner46Cmd.Replace('\', '/')
+    $sdk46Esc = $sdkRoot46.Replace('\', '/')
+    $bt46Esc = $bt46.Replace('\', '/')
+    $nodeEsc46 = $validNode.Replace('\', '/')
+
+    # 46a: Direct call to Remove-OrphanedWalAndShmFiles under ErrorActionPreference=Stop with run-as stderr -> adb root fallback
+    $sub46aPath = Join-Path $testDir46 "sub46a.ps1"
+    $sub46aTxt = @"
+`$ErrorActionPreference = 'Stop'
+`$env:NODE_EXE = '$nodeEsc46'
+`$env:ADB_EXECUTABLE = '$adb46Esc'
+. '$scriptEsc46' -Action status -AllowHardwareExecution | Out-Null
+Remove-OrphanedWalAndShmFiles -AdbExe '$adb46Esc' -TargetAdb '127.0.0.1:5555' -PackageName 'it.akai.customremote' | Out-Null
+Write-Output 'WAL_REMOVED_OK'
+"@
+    [IO.File]::WriteAllText($sub46aPath, $sub46aTxt, [Text.UTF8Encoding]::new($false))
+    $prevEap46 = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out46a = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $sub46aPath 2>&1 | Out-String)
+        $ec46a = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap46
+    }
+    $walAfter46a = (Get-Content $walFlagFile46 -Raw).Trim()
+    $stateAfter46a = (Get-Content $adbStateFile46 -Raw).Trim()
+    if ($ec46a -eq 0 -and $out46a -match 'WAL_REMOVED_OK' -and $walAfter46a -eq '0' -and $stateAfter46a -eq 'shell') {
+        $subPassed46++
+        Write-Host "   [PASS] Sotto-test 46a: Remove-OrphanedWalAndShmFiles supera run-as stderr via adb root e rientra in unroot (shell)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 46a: exit=$ec46a wal=$walAfter46a state=$stateAfter46a out='$out46a'" -ForegroundColor Red
+    }
+
+    # 46b: Full rollback toward non-debuggable Rescue v11 (run-as stderr everywhere, orphaned WAL created by v10)
+    [IO.File]::WriteAllText($adbStateFile46, "shell")
+    [IO.File]::WriteAllText($appModeFile46, "v9_rescue")
+    [IO.File]::WriteAllText($walFlagFile46, "0")
+    if (Test-Path $adbLog46) { Remove-Item $adbLog46 -Force }
+    $bDir46b = (Join-Path $testDir46 "b46b").Replace('\', '/')
+    New-Item -ItemType Directory -Force -Path $bDir46b | Out-Null
+    $sub46bPath = Join-Path $testDir46 "sub46b.ps1"
+    $sub46bTxt = @"
+`$env:NODE_EXE = '$nodeEsc46'
+`$env:ADB_EXECUTABLE = '$adb46Esc'
+`$env:APKSIGNER_EXECUTABLE = '$signer46Esc'
+`$env:ANDROID_HOME = '$sdk46Esc'
+`$env:ANDROID_SDK_ROOT = '$sdk46Esc'
+`$env:PATH = '$bt46Esc' + [IO.Path]::PathSeparator + `$env:PATH
+`$env:WATCHDOG_ATTEMPTS = '2'
+`$env:WATCHDOG_SLEEP_SEC = '1'
+& '$scriptEsc46' -Action install -ApkPath '$candEsc46' -ExpectedCandidateSha256 '$candSha46' -RescueApkPath '$rescueEsc46' -ExpectedRescueSha256 '$rescueSha46' -TargetTv '127.0.0.1' -HttpPort $httpPort46 -HttpsPort $httpsPort46 -AuthToken 'tok46' -ExpectedCaFingerprint '$shaCa46' -BackupDir '$bDir46b' -RequireOwnerRescue -RequireVerifiedKeystoreHealth -AllowHardwareExecution
+exit `$LASTEXITCODE
+"@
+    [IO.File]::WriteAllText($sub46bPath, $sub46bTxt, [Text.UTF8Encoding]::new($false))
+    $prevEap46b = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out46b = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $sub46bPath 2>&1 | Out-String)
+        $ec46b = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap46b
+    }
+    $log46b = if (Test-Path $adbLog46) { Get-Content $adbLog46 -Raw } else { "" }
+    $stateAfter46b = (Get-Content $adbStateFile46 -Raw).Trim()
+    $modeAfter46b = (Get-Content $appModeFile46 -Raw).Trim()
+    if ($ec46b -eq 1 -and
+        $modeAfter46b -eq 'v11_rescued' -and
+        $stateAfter46b -eq 'shell' -and
+        ($out46b -match "ROLLBACK CONSERVATIVO.*A2 Rescue") -and
+        ($out46b -match "Assenza file WAL/SHM orfani confermata") -and
+        ($out46b -match "ROLLBACK RIUSCITO E VERIFICATO") -and
+        ($out46b -match "LEGACY_LIMITED.*Verified=True") -and
+        ($log46b -match "install -r .*rescue_v11\.apk") -and
+        ($log46b -notmatch "install -r -d") -and
+        ($log46b -notmatch "\buninstall\b")) {
+        $subPassed46++
+        Write-Host "   [PASS] Sotto-test 46b: Rollback completo su Rescue non-debuggable (run-as stderr -> adb root -> unroot, Keystore LEGACY_LIMITED Verified=True)" -ForegroundColor Green
+    } else {
+        Write-Host "   [FAIL] Sotto-test 46b: exit=$ec46b mode=$modeAfter46b state=$stateAfter46b out='$out46b' log='$log46b'" -ForegroundColor Red
+    }
+
+    if ($subPassed46 -eq 2) {
+        Write-Host "[PASS] [TEST AFFERMATIVO & NEGATIVO / NON-DEBUGGABLE RESCUE ROLLBACK] Test 46: Superati 2/2" -ForegroundColor Green
+        $passed++
+    } else {
+        Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / NON-DEBUGGABLE RESCUE ROLLBACK] Test 46: Superati $subPassed46 / 2" -ForegroundColor Red
+        $failed++
+    }
+} catch {
+    Write-Host "[FAIL] [TEST AFFERMATIVO & NEGATIVO / NON-DEBUGGABLE RESCUE ROLLBACK] Test 46: Eccezione: $($_.Exception.Message)" -ForegroundColor Red
+    $failed++
+} finally {
+    if ($httpProc46 -and -not $httpProc46.HasExited) { Stop-Process -Id $httpProc46.Id -Force -ErrorAction SilentlyContinue }
+    if ($httpsProc46 -and -not $httpsProc46.HasExited) { Stop-Process -Id $httpsProc46.Id -Force -ErrorAction SilentlyContinue }
+    Remove-Item $testDir46 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "`n=== ESITO COMPLETO TEST POWERSHELL MOCK ADB ===" -ForegroundColor Cyan
 Write-Host "Test Superati: $passed / $($passed + $failed)" -ForegroundColor Green
 if ($failed -gt 0) { 

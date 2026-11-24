@@ -835,20 +835,36 @@ function Send-FileViaAdbExecIn {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
 
+    $writeFailed = $false
+    $writeError = $null
     $proc = [System.Diagnostics.Process]::Start($psi)
     $stream = $proc.StandardInput.BaseStream
-    $stream.Write($bytes, 0, $bytes.Length)
-    $stream.Flush()
-    $stream.Close()
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+    } catch [System.IO.IOException] {
+        $writeFailed = $true
+        $writeError = $_.Exception.Message
+    } catch [System.ObjectDisposedException] {
+        $writeFailed = $true
+        $writeError = $_.Exception.Message
+    } finally {
+        try { $stream.Close() } catch {}
+    }
 
     $stdout = $proc.StandardOutput.ReadToEnd()
     $stderr = $proc.StandardError.ReadToEnd()
-    $proc.WaitForExit(10000)
+    $exited = $proc.WaitForExit(10000)
+    $exitCode = if ($exited) { $proc.ExitCode } else { -1 }
+    $combinedOut = "$stdout $stderr".Trim()
+    if ($writeFailed -and $writeError) {
+        $combinedOut = ("$combinedOut [stdin write closed: $writeError]").Trim()
+    }
 
     return @{
-        ExitCode = $proc.ExitCode
-        Success = ($proc.ExitCode -eq 0)
-        Output = "$stdout $stderr".Trim()
+        ExitCode = $exitCode
+        Success = ($exited -and (-not $writeFailed) -and ($exitCode -eq 0))
+        Output = $combinedOut
     }
 }
 
@@ -1654,40 +1670,48 @@ function Probe-DeviceFileState {
     $runAsAttempted = $false
     $runAsExit = -1
     $runAsOut = ""
-    if ($Channel -eq "any" -or $Channel -eq "auto" -or $Channel -eq "run-as") {
-        $runAsAttempted = $true
-        $outRunAs = & $AdbExe -s $TargetAdb shell $probeCmdRunAs 2>&1
-        $runAsExit = $LASTEXITCODE
-        $runAsOut = if ($outRunAs) { $outRunAs.ToString().Trim() } else { "" }
-        if ($runAsExit -eq 0 -and $runAsOut -match "FILE_PROBE_RESULT:(EXISTS|NOT_FOUND)") {
-            return $Matches[1]
-        }
-    }
-
     $suAttempted = $false
     $suExit = -1
     $suOut = ""
-    if ($Channel -eq "any" -or $Channel -eq "auto" -or $Channel -eq "su") {
-        $suAttempted = $true
-        $outSu = & $AdbExe -s $TargetAdb shell $probeCmdSu 2>&1
-        $suExit = $LASTEXITCODE
-        $suOut = if ($outSu) { $outSu.ToString().Trim() } else { "" }
-        if ($suExit -eq 0 -and $suOut -match "FILE_PROBE_RESULT:(EXISTS|NOT_FOUND)") {
-            return $Matches[1]
-        }
-    }
-
     $rootAttempted = $false
     $rootExit = -1
     $rootOut = ""
-    if ($Channel -eq "root") {
-        $rootAttempted = $true
-        $outRoot = & $AdbExe -s $TargetAdb shell $probeCmdRoot 2>&1
-        $rootExit = $LASTEXITCODE
-        $rootOut = if ($outRoot) { $outRoot.ToString().Trim() } else { "" }
-        if ($rootExit -eq 0 -and $rootOut -match "FILE_PROBE_RESULT:(EXISTS|NOT_FOUND)") {
-            return $Matches[1]
+    $prevEap = $ErrorActionPreference
+    try {
+        # PS 5.1 con ErrorActionPreference=Stop lancia NativeCommandError su stderr (es. "run-as: package not debuggable")
+        # prima di raggiungere i fallback su/adb root: usa Continue localmente senza allentare i check fail-closed finali.
+        $ErrorActionPreference = "Continue"
+        if ($Channel -eq "any" -or $Channel -eq "auto" -or $Channel -eq "run-as") {
+            $runAsAttempted = $true
+            $outRunAs = & $AdbExe -s $TargetAdb shell $probeCmdRunAs 2>&1
+            $runAsExit = $LASTEXITCODE
+            $runAsOut = if ($outRunAs) { ($outRunAs | Out-String).Trim() } else { "" }
+            if ($runAsExit -eq 0 -and $runAsOut -match "FILE_PROBE_RESULT:(EXISTS|NOT_FOUND)") {
+                return $Matches[1]
+            }
         }
+
+        if ($Channel -eq "any" -or $Channel -eq "auto" -or $Channel -eq "su") {
+            $suAttempted = $true
+            $outSu = & $AdbExe -s $TargetAdb shell $probeCmdSu 2>&1
+            $suExit = $LASTEXITCODE
+            $suOut = if ($outSu) { ($outSu | Out-String).Trim() } else { "" }
+            if ($suExit -eq 0 -and $suOut -match "FILE_PROBE_RESULT:(EXISTS|NOT_FOUND)") {
+                return $Matches[1]
+            }
+        }
+
+        if ($Channel -eq "root") {
+            $rootAttempted = $true
+            $outRoot = & $AdbExe -s $TargetAdb shell $probeCmdRoot 2>&1
+            $rootExit = $LASTEXITCODE
+            $rootOut = if ($outRoot) { ($outRoot | Out-String).Trim() } else { "" }
+            if ($rootExit -eq 0 -and $rootOut -match "FILE_PROBE_RESULT:(EXISTS|NOT_FOUND)") {
+                return $Matches[1]
+            }
+        }
+    } finally {
+        $ErrorActionPreference = $prevEap
     }
 
     throw "ERRORE FAIL-CLOSED: Impossibile determinare lo stato del file ($RelativePath) su storage device. Probe run-as (tentato: $runAsAttempted, exit: $runAsExit, out: '$runAsOut'); Probe su (tentato: $suAttempted, exit: $suExit, out: '$suOut'); Probe root (tentato: $rootAttempted, exit: $rootExit, out: '$rootOut'). Operazione abortita per prevenire stati inconsistenti."
@@ -1700,8 +1724,14 @@ function Remove-OrphanedWalAndShmFiles {
         [string]$PackageName
     )
     Write-Host "      Rimozione e verifica assenza file WAL/SHM orfani su storage device..." -ForegroundColor Cyan
-    & $AdbExe -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>$null | Out-Null
-    & $AdbExe -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>$null | Out-Null
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $AdbExe -s $TargetAdb shell "run-as $PackageName rm -f databases/akai_memory.db-wal databases/akai_memory.db-shm" 2>&1 | Out-Null
+        & $AdbExe -s $TargetAdb shell "su -c 'rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm'" 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
 
     # Probing attivo tri-state su entrambi i file: solo NOT_FOUND con exit 0 e marcatore valido e' accettato
     $walState = $null
@@ -1715,7 +1745,13 @@ function Remove-OrphanedWalAndShmFiles {
         $script:elevShmState = $null
         try {
             Invoke-WithAdbElevation -AdbExe $AdbExe -TargetAdb $TargetAdb -ActionBlock {
-                & $AdbExe -s $TargetAdb shell "rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm" 2>$null | Out-Null
+                $innerPrevEap = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = "Continue"
+                    & $AdbExe -s $TargetAdb shell "rm -f /data/data/$PackageName/databases/akai_memory.db-wal /data/data/$PackageName/databases/akai_memory.db-shm" 2>&1 | Out-Null
+                } finally {
+                    $ErrorActionPreference = $innerPrevEap
+                }
                 $script:elevWalState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-wal" -Channel "root"
                 $script:elevShmState = Probe-DeviceFileState -AdbExe $AdbExe -TargetAdb $TargetAdb -PackageName $PackageName -RelativePath "databases/akai_memory.db-shm" -Channel "root"
             }
@@ -3937,14 +3973,20 @@ switch ($Action) {
 
                 # Risoluzione UID numerico Android per chown
                 $appUid = $null
-                $uidRaw = & $adb -s $TargetAdb shell "dumpsys package $PackageName | grep -E 'userId=|appId='" 2>$null
-                $uidOut = if ($uidRaw) { $uidRaw.ToString().Trim() } else { "" }
-                if ($uidOut -match "userId=(\d+)") { $appUid = $matches[1] }
-                elseif ($uidOut -match "appId=(\d+)") { $appUid = $matches[1] }
-                else {
-                    $statRaw = & $adb -s $TargetAdb shell "stat -c '%u' /data/data/$PackageName" 2>$null
-                    $statOut = if ($statRaw) { $statRaw.ToString().Trim() } else { "" }
-                    if ($statOut -match "^\d+$") { $appUid = $statOut }
+                $prevEapUid = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = "Continue"
+                    $uidRaw = & $adb -s $TargetAdb shell "dumpsys package $PackageName | grep -E 'userId=|appId='" 2>&1
+                    $uidOut = if ($uidRaw) { ($uidRaw | Out-String).Trim() } else { "" }
+                    if ($uidOut -match "userId=(\d+)") { $appUid = $matches[1] }
+                    elseif ($uidOut -match "appId=(\d+)") { $appUid = $matches[1] }
+                    else {
+                        $statRaw = & $adb -s $TargetAdb shell "stat -c '%u' /data/data/$PackageName" 2>&1
+                        $statOut = if ($statRaw) { ($statRaw | Out-String).Trim() } else { "" }
+                        if ($statOut -match "^\d+$") { $appUid = $statOut }
+                    }
+                } finally {
+                    $ErrorActionPreference = $prevEapUid
                 }
                 if ([string]::IsNullOrWhiteSpace($appUid) -or ($appUid -notmatch "^\d+$")) {
     throw "ERRORE FAIL-CLOSED: Impossibile risolvere con certezza l'identita' numerica UID Linux dell'applicazione ($PackageName) via dumpsys o stat. Applicazione permessi con UID arbitrario (es. 10000) categoricamente VIETATA per sicurezza."
@@ -4107,14 +4149,20 @@ $chownTarget = "${appUid}:${appUid}"
 
         # Risoluzione UID numerico Android per chown
         $appUid = $null
-        $uidRaw = & $adb -s $TargetAdb shell "dumpsys package $PackageName | grep -E 'userId=|appId='" 2>$null
-        $uidOut = if ($uidRaw) { $uidRaw.ToString().Trim() } else { "" }
-        if ($uidOut -match "userId=(\d+)") { $appUid = $matches[1] }
-        elseif ($uidOut -match "appId=(\d+)") { $appUid = $matches[1] }
-        else {
-            $statRaw = & $adb -s $TargetAdb shell "stat -c '%u' /data/data/$PackageName" 2>$null
-            $statOut = if ($statRaw) { $statRaw.ToString().Trim() } else { "" }
-            if ($statOut -match "^\d+$") { $appUid = $statOut }
+        $prevEapManualUid = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $uidRaw = & $adb -s $TargetAdb shell "dumpsys package $PackageName | grep -E 'userId=|appId='" 2>&1
+            $uidOut = if ($uidRaw) { ($uidRaw | Out-String).Trim() } else { "" }
+            if ($uidOut -match "userId=(\d+)") { $appUid = $matches[1] }
+            elseif ($uidOut -match "appId=(\d+)") { $appUid = $matches[1] }
+            else {
+                $statRaw = & $adb -s $TargetAdb shell "stat -c '%u' /data/data/$PackageName" 2>&1
+                $statOut = if ($statRaw) { ($statRaw | Out-String).Trim() } else { "" }
+                if ($statOut -match "^\d+$") { $appUid = $statOut }
+            }
+        } finally {
+            $ErrorActionPreference = $prevEapManualUid
         }
         if ([string]::IsNullOrWhiteSpace($appUid) -or ($appUid -notmatch "^\d+$")) {
     throw "ERRORE FAIL-CLOSED: Impossibile risolvere con certezza l'identita' numerica UID Linux dell'applicazione ($PackageName) via dumpsys o stat. Applicazione permessi con UID arbitrario (es. 10000) categoricamente VIETATA per sicurezza."
