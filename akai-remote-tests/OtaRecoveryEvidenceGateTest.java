@@ -223,6 +223,30 @@ public final class OtaRecoveryEvidenceGateTest {
                         DEVICE_UID, 6, 7, NOW),
                 "CRLF rejected");
 
+        // 7. ADB-free pre-candidate UI import gate (verifyForInstalled)
+        expect(true, "LOCAL_RECOVERY_EVIDENCE_VERIFIED_NOT_AUTHORIZED_ALONE",
+                OtaRecoveryEvidenceGate.verifyForInstalled(
+                        validStaging, validStagingSig, key.getPublic(), DEVICE_UID, 6, NOW),
+                "verifyForInstalled valid staging");
+        expect(true, "LOCAL_RECOVERY_EVIDENCE_VERIFIED_NOT_AUTHORIZED_ALONE",
+                OtaRecoveryEvidenceGate.verifyForInstalled(
+                        validRelease, sign(validRelease, key), key.getPublic(), DEVICE_UID, 6, NOW),
+                "verifyForInstalled valid release");
+        byte[] releaseNoCandidateSlot = buildReceipt(
+                "jarvis-ota-evidence-v2", OtaCandidateGate.PACKAGE, "release", DEVICE_UID,
+                6, "bkp-rel-noslot", created, expires, BACKUP_SHA, 7, 8, RESCUE_SHA, "true", "true");
+        expect(false, "EVIDENCE_RELEASE_NOT_ABOVE_PRIOR_RESCUE",
+                OtaRecoveryEvidenceGate.verifyForInstalled(
+                        releaseNoCandidateSlot, sign(releaseNoCandidateSlot, key),
+                        key.getPublic(), DEVICE_UID, 6, NOW),
+                "verifyForInstalled release requires recoveryRescue > priorRescueFloor + 1");
+        byte[] corruptImportSig = validStagingSig.clone();
+        corruptImportSig[0] ^= 0x55;
+        expect(false, "EVIDENCE_SIGNATURE_INVALID",
+                OtaRecoveryEvidenceGate.verifyForInstalled(
+                        validStaging, corruptImportSig, key.getPublic(), DEVICE_UID, 6, NOW),
+                "verifyForInstalled rejects corrupted signature");
+
         System.out.println("OtaRecoveryEvidenceGateTest PASS: " + checks
                 + " assertions across v2 staging & release cross-policy rules (SYNTHETIC HOST FIXTURE ONLY — NOT AUTHORITATIVE TV EVIDENCE)");
     }

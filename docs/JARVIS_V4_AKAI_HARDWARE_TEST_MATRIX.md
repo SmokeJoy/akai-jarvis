@@ -30,12 +30,12 @@ Tutte le operazioni seguenti girano esclusivamente sul PC Windows privato dell'o
    - Staging diagnostico: `node scripts/18_prepare_ota_staging.mjs --mode sign-staging ...`
    - Release finale *(solo dopo `V4_COMPLETE_ACCEPTED`)*: `node scripts/14_sign_ota_release_manifest.mjs ...`
    - Pubblicare manifest, firma e APK su un endpoint HTTPS pubblico/durevole raggiungibile dalla TV anche a **PC spento**.
-6. **Emissione ricevuta (`scripts/19`) e procedura operativa di import sulla TV:**
-   - Emissione offline: `node scripts/19_issue_ota_recovery_evidence.mjs --mode issue ...` *(verifica via `apksigner.jar` + `aapt` certificato originale `EXPECTED_CERT`, `package=it.akai.customremote`, `versionCode == recoveryRescueVersionCode`, SDK `21`/`28`, `armeabi-v7a`, `android:debuggable=false`, esegue `scripts/16 -Action verify-restore-offline` e lega gli SHA-256 reali su disco)*.
+6. **Emissione ricevuta (`scripts/19`) e import operativo in-app senza ADB (identico tra v4 e v5):**
+   - Emissione offline: `node scripts/19_issue_ota_recovery_evidence.mjs --mode issue ...` *(verifica via `apksigner.jar` + `aapt` certificato originale `EXPECTED_CERT`, `package=it.akai.customremote`, `versionCode == recoveryRescueVersionCode`, SDK `21`/`28`, `armeabi-v7a`, `android:debuggable=false`, esegue `scripts/16 -Action verify-restore-offline`, lega gli SHA-256 reali su disco ed emette sia `.receipt` + `.sig` sia il file portatile unico **`ota-recovery-evidence.pkg`**).*
    - Riesame locale: `node scripts/19_issue_ota_recovery_evidence.mjs --mode verify-with-archive ...`
-   - **Import operativo sulla TV (`ota-evidence/`):**
-     - **Su v4 Diagnostic (`android:debuggable=true`):** l'owner autorizzato copia `ota-recovery-evidence.receipt` e `.receipt.sig` nella sandbox privata dell'app (`files/ota-evidence/`) tramite `adb shell run-as it.akai.customremote` prima dell'esecuzione `HW-06` a PC spento.
-     - **Limite operativo noto per v5 Release (`android:debuggable=false`):** con `debuggable=false` `adb shell run-as` non è utilizzabile e in `OtaRecoveryEvidenceStore.importVerifiedReceipt(...)` esiste oggi solo il metodo helper offline senza ancora un chiamante UI/operativo esposto sull'app; questo gap va considerato prima di passare alla fase v5 se si vorranno emettere nuove ricevute in produzione dopo la chiusura del debug.
+   - **Import operativo sulla TV senza ADB (`btn_ota_import_receipt`, nessun servizio residente):**
+     - **Opzione USB / Document Picker:** copiare `ota-recovery-evidence.pkg` su chiavetta USB (o memoria esterna), premere **`Importa ricevuta backup/Rescue (USB / file)`** nella schermata principale JARVIS e selezionare il file (`ACTION_OPEN_DOCUMENT`), identico in v4 Diagnostic e v5 Release (`debuggable=false`).
+     - **Fallback senza picker TV:** copiare `ota-recovery-evidence.pkg` (oppure `.receipt` + `.sig`) in `Android/data/it.akai.customremote/files/ota-import/` (zero permessi runtime richiesti su Android 9) e premere **`Importa ricevuta backup/Rescue (USB / file)`**: `OtaRecoveryEvidenceStore` verifica firma, UID, versione installata e digest *prima* di scrivere atomicamente in `filesDir/ota-evidence/`.
 
 ---
 
@@ -97,6 +97,5 @@ Ricognizione in sola lettura eseguita sull'host Windows privato dell'owner (ness
 2. **Trust OTA e chiavi offline** (`$LOCALAPPDATA/AkaiJarvisOtaStagingTrust` e `$LOCALAPPDATA/AkaiJarvisOtaReleaseTrust` assenti): `scripts/17_check_ota_provisioning_readiness.ps1 -InventoryOnly` restituisce `OTA_TRUST_INVENTORY_INCOMPLETE` (`MISSING_OTA_TRUST_PUBLIC_KEY`, `MISSING_OTA_MANIFEST_URL`); assenti anche `JARVIS_OTA_STAGING_PASSPHRASE` e `JARVIS_OTA_RELEASE_PASSPHRASE`.
 3. **Endpoint HTTPS durevole PC-off** configurato per servire manifest e APK di staging (e successivamente release).
 4. **Backup aggiornato dell'attuale `RC2 v6` (SQLite/WAL + TLS + pairing)** esportato in bundle portatile cifrato e verificato con `scripts/16 -Action verify-restore-offline` (`JARVIS_RECOVERY_PASSPHRASE` oggi assente).
-5. **Nuova coppia di APK compilata da HEAD verificato CI e firmata con certificato originale:** candidato v4 Diagnostic (es. `v8`) + nuovo Rescue A2 in-place (es. `v9`; e per eventuale OTA staging `v8 -> v9`, relativo Rescue `v10`).
-6. **Chiamante UI/operativo per `OtaRecoveryEvidenceStore.importVerifiedReceipt(...)` prima di v5:** oggi `run-as` copre l'import durante il collaudo su v4 Diagnostic `debuggable=true` (`HW-06`), mentre su v5 Release `debuggable=false` servirà esporre un percorso UI/operativo autenticato di import ricevuta se si vorranno importare nuove ricevute post-release.
-7. **Sessione fisica autorizzata sulla TV:** riattivazione Accessibilità sulla AKAI ed esecuzione completa `HW-01..HW-08`.
+5. **Nuova coppia APK compilata da HEAD verificato CI e firmata con certificato originale:** candidato v4 Diagnostic (es. `v8`) + nuovo Rescue A2 in-place (es. `v9`; e per eventuale OTA staging `v8 -> v9`, relativo Rescue `v10`). *(L'import ricevuta senza ADB via `btn_ota_import_receipt` / `ota-recovery-evidence.pkg` è ora già completato nella base sorgente v4.)*
+6. **Sessione fisica autorizzata sulla TV:** riattivazione Accessibilità sulla AKAI ed esecuzione completa `HW-01..HW-08`.

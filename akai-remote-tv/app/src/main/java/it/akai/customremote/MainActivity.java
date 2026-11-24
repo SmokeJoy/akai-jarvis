@@ -6,6 +6,8 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
@@ -24,6 +26,8 @@ import android.widget.Toast;
 import it.akai.customremote.qr.QrBitmapUtil;
 import it.akai.customremote.ai.OtaAndroidInstallPreflight;
 import it.akai.customremote.ai.OtaOwnerPackageInstaller;
+import it.akai.customremote.ai.OtaRecoveryEvidenceGate;
+import it.akai.customremote.ai.OtaRecoveryEvidenceStore;
 import it.akai.customremote.ai.OtaReleaseTrust;
 import it.akai.customremote.ai.OtaAndroidArchiveInspector;
 import it.akai.customremote.ai.OtaReleaseChannel;
@@ -35,6 +39,8 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.os.Handler;
 import android.os.Looper;
+import java.io.File;
+import java.io.InputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -89,9 +95,11 @@ public class MainActivity extends Activity {
     private Button btnMinimize;
     private Button btnVisionLocalTest;
     private Button btnOtaCheck;
+    private Button btnOtaImportReceipt;
     private Button btnOtaPermission;
     private Button btnOtaInstallConfirmed;
     private TextView tvOtaStatus;
+    private static final int REQ_IMPORT_OTA_RECEIPT = 4102;
     private volatile OtaUpdatePreparation.Result pendingOtaCandidate = null;
     private final java.util.concurrent.atomic.AtomicBoolean otaOperationInFlight = new java.util.concurrent.atomic.AtomicBoolean(false);
     private AlertDialog activeOtaConfirmDialog = null;
@@ -118,6 +126,7 @@ public class MainActivity extends Activity {
         btnMinimize = findViewById(R.id.btn_minimize);
         btnVisionLocalTest = findViewById(R.id.btn_vision_local_test);
         btnOtaCheck = findViewById(R.id.btn_ota_check);
+        btnOtaImportReceipt = findViewById(R.id.btn_ota_import_receipt);
         btnOtaPermission = findViewById(R.id.btn_ota_permission);
         btnOtaInstallConfirmed = findViewById(R.id.btn_ota_install_confirmed);
         tvOtaStatus = findViewById(R.id.tv_ota_status);
@@ -392,6 +401,39 @@ public class MainActivity extends Activity {
             }
         });
 
+        btnOtaImportReceipt.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (otaOperationInFlight.get()) {
+                    tvOtaStatus.setText("Operazione OTA già in corso.");
+                    return;
+                }
+                File dropDir = getExternalFilesDir("ota-import");
+                if (dropDir != null && dropDir.isDirectory()) {
+                    File pkgFile = new File(dropDir, OtaRecoveryEvidenceStore.PORTABLE_BUNDLE_FILENAME);
+                    File recFile = new File(dropDir, OtaRecoveryEvidenceStore.RECEIPT_FILENAME);
+                    File sigFile = new File(dropDir, OtaRecoveryEvidenceStore.SIGNATURE_FILENAME);
+                    if (pkgFile.isFile() || (recFile.isFile() && sigFile.isFile())) {
+                        startOtaReceiptImport(dropDir, null);
+                        return;
+                    }
+                }
+                Intent docIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                docIntent.addCategory(Intent.CATEGORY_OPENABLE);
+                docIntent.setType("*/*");
+                try {
+                    startActivityForResult(docIntent, REQ_IMPORT_OTA_RECEIPT);
+                    tvOtaStatus.setText("Seleziona ota-recovery-evidence.pkg da chiavetta USB o archivio.");
+                } catch (ActivityNotFoundException | SecurityException e) {
+                    Log.w(TAG, "Picker ACTION_OPEN_DOCUMENT non disponibile: " + e.getClass().getSimpleName());
+                    tvOtaStatus.setText("Selettore file assente su questa TV: copia "
+                            + OtaRecoveryEvidenceStore.PORTABLE_BUNDLE_FILENAME
+                            + " in Android/data/" + getPackageName()
+                            + "/files/ota-import/ e ripremi Importa.");
+                }
+            }
+        });
+
         // A2 local vision diagnostic is launched exclusively by a physical
         // TV UI click. It cannot be triggered by the LAN remote.
         btnVisionLocalTest.setOnClickListener(new View.OnClickListener() {
@@ -472,6 +514,106 @@ public class MainActivity extends Activity {
         try {
             bgExecutor.shutdownNow();
         } catch (Exception ignored) {}
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_IMPORT_OTA_RECEIPT) return;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            if (tvOtaStatus != null) {
+                tvOtaStatus.setText("Importazione ricevuta OTA annullata.");
+            }
+            return;
+        }
+        startOtaReceiptImport(null, data.getData());
+    }
+
+    private void startOtaReceiptImport(final File dropDir, final Uri documentUri) {
+        if (!otaOperationInFlight.compareAndSet(false, true)) {
+            if (tvOtaStatus != null) tvOtaStatus.setText("Operazione OTA già in corso.");
+            return;
+        }
+        if (btnOtaImportReceipt != null) btnOtaImportReceipt.setEnabled(false);
+        if (tvOtaStatus != null) tvOtaStatus.setText("Verifica crittografica ricevuta backup/Rescue in corso...");
+        final OtaUpdatePreparation.Result staged = pendingOtaCandidate;
+        final int candidateVersionOrZero = (staged != null) ? staged.candidateVersionCode : 0;
+
+        if (!submitBackgroundTask(new Runnable() {
+            @Override
+            public void run() {
+                OtaRecoveryEvidenceGate.Verdict result = null;
+                try {
+                    int installedVersion = resolveInstalledVersionCode();
+                    long nowSec = System.currentTimeMillis() / 1000L;
+                    if (dropDir != null) {
+                        result = OtaRecoveryEvidenceStore.importVerifiedFromDirectory(
+                                MainActivity.this, dropDir, installedVersion,
+                                candidateVersionOrZero, nowSec);
+                    } else if (documentUri != null) {
+                        byte[] bundleBytes = null;
+                        try (InputStream in = getContentResolver().openInputStream(documentUri)) {
+                            bundleBytes = OtaRecoveryEvidenceStore.readBoundedStream(
+                                    in, OtaRecoveryEvidenceStore.MAX_PORTABLE_BUNDLE_BYTES);
+                        }
+                        if (bundleBytes == null) {
+                            result = null;
+                        } else {
+                            result = OtaRecoveryEvidenceStore.importVerifiedPortableBundle(
+                                    MainActivity.this, bundleBytes, installedVersion,
+                                    candidateVersionOrZero, nowSec);
+                        }
+                    }
+                } catch (Exception ignored) {
+                    result = null;
+                } finally {
+                    otaOperationInFlight.set(false);
+                }
+                final OtaRecoveryEvidenceGate.Verdict verdict = result;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (activityDestroyed || isFinishing() || isDestroyed()) return;
+                        if (btnOtaImportReceipt != null) btnOtaImportReceipt.setEnabled(true);
+                        if (tvOtaStatus == null) return;
+                        if (verdict != null && verdict.accepted) {
+                            tvOtaStatus.setText("Ricevuta OTA importata e verificata ("
+                                    + verdict.channelProfile + ", ID " + verdict.backupId
+                                    + ", Rescue v" + verdict.recoveryRescueVersionCode + ").");
+                        } else {
+                            String code = (verdict != null && verdict.code != null)
+                                    ? verdict.code : "EVIDENCE_BUNDLE_INVALID";
+                            tvOtaStatus.setText("Importazione ricevuta OTA rifiutata: " + code);
+                        }
+                    }
+                });
+            }
+        })) {
+            otaOperationInFlight.set(false);
+            if (btnOtaImportReceipt != null) btnOtaImportReceipt.setEnabled(true);
+            if (tvOtaStatus != null) {
+                tvOtaStatus.setText("Impossibile avviare importazione ricevuta in background.");
+            }
+        }
+    }
+
+    private int resolveInstalledVersionCode() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            if (info == null) return 0;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                long longCode = info.getLongVersionCode();
+                return (longCode > Integer.MAX_VALUE) ? 0 : (int) longCode;
+            }
+            return resolveLegacyVersionCode(info);
+        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+            return 0;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static int resolveLegacyVersionCode(PackageInfo info) {
+        return info.versionCode;
     }
 
     // Late network/service callbacks must not submit to the executor after teardown.

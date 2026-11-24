@@ -20,6 +20,7 @@ import { proveActualRescueApk } from './ota_release_apk_proof.mjs';
 
 export const EXPECTED_PACKAGE = 'it.akai.customremote';
 export const MAX_RECEIPT_BYTES = 4096;
+export const MAX_PORTABLE_BUNDLE_BYTES = 8192;
 export const MAX_FUTURE_SKEW_SEC = 300;
 export const MAX_RECEIPT_LIFETIME_SEC = 90 * 86400;
 
@@ -321,6 +322,32 @@ export function verifyReceiptWithRealArchives({
   };
 }
 
+export function buildPortableEvidenceBundle(receiptBuf, sigBuf) {
+  if (!Buffer.isBuffer(receiptBuf) || receiptBuf.length === 0 || receiptBuf.length > MAX_RECEIPT_BYTES) {
+    fail('EVIDENCE_FORMAT_INVALID');
+  }
+  if (!Buffer.isBuffer(sigBuf) || sigBuf.length === 0 || sigBuf.length > 512) {
+    fail('EVIDENCE_SIGNATURE_INVALID');
+  }
+  const receiptAscii = receiptBuf.toString('ascii');
+  if (!receiptAscii.endsWith('\n') || receiptAscii.includes('\r')) {
+    fail('EVIDENCE_NONCANONICAL_BYTES');
+  }
+  const sigB64 = sigBuf.toString('base64');
+  const text =
+    '-----BEGIN JARVIS OTA EVIDENCE RECEIPT V2-----\n' +
+    receiptAscii +
+    '-----END JARVIS OTA EVIDENCE RECEIPT V2-----\n' +
+    '-----BEGIN JARVIS OTA EVIDENCE SIGNATURE BASE64-----\n' +
+    sigB64 +
+    '\n-----END JARVIS OTA EVIDENCE SIGNATURE BASE64-----\n';
+  const outBuf = Buffer.from(text, 'ascii');
+  if (outBuf.length > MAX_PORTABLE_BUNDLE_BYTES) {
+    fail('EVIDENCE_BUNDLE_INVALID');
+  }
+  return outBuf;
+}
+
 export function issueArchiveVerifiedReceipt({
   repoRoot,
   channelProfile,
@@ -338,6 +365,7 @@ export function issueArchiveVerifiedReceipt({
   publicKeyDerBuf,
   outReceiptPath,
   outSigPath,
+  outBundlePkgPath,
   nowEpochSec,
   validityDays = 7,
   nonDestructiveVerified = true,
@@ -399,13 +427,17 @@ export function issueArchiveVerifiedReceipt({
   });
 
   const outDir = dirname(outReceiptPath);
+  const pkgOutPath = outBundlePkgPath || join(outDir, 'ota-recovery-evidence.pkg');
+  const pkgBuf = buildPortableEvidenceBundle(receiptBuf, sigBuf);
   mkdirSync(outDir, { recursive: true });
   writeAtomicOut(outReceiptPath, receiptBuf);
   writeAtomicOut(outSigPath, sigBuf);
+  writeAtomicOut(pkgOutPath, pkgBuf);
 
   return {
     receiptPath: outReceiptPath,
     sigPath: outSigPath,
+    bundlePkgPath: pkgOutPath,
     backupArchiveSha256: bundleInfo.sha256,
     rescueApkSha256: rescueInfo.sha256,
     rescueApkProof,

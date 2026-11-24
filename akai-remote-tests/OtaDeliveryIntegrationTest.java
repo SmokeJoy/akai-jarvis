@@ -1309,6 +1309,89 @@ public final class OtaDeliveryIntegrationTest {
                 check(sessionBytes != null && sessionBytes.length == v8Bytes.length
                         && v8Artifact.apkSha256.equalsIgnoreCase(sha256Hex(sessionBytes)),
                         "Scenario 11m committed PackageInstaller bytes must match staged v8 SHA-256");
+
+                // 11n: ADB-free portable .pkg import (verifyForInstalled before staging, then OTA submit)
+                File clientFilesN = workRoot.resolve("client-s11n-pkg").toFile();
+                if (!clientFilesN.mkdirs() && !clientFilesN.isDirectory()) {
+                    throw new IOException("mkdir failed: " + clientFilesN);
+                }
+                TestPackageManager pmN = new TestPackageManager(catalog, 6, false);
+                pmN.canRequestInstalls = true;
+                TestClientContext ctxN = new TestClientContext(
+                        clientFilesN, MANIFEST_URL, bundledPublicDer, pmN, deviceUid);
+                PackageInstaller installerN = pmN.getPackageInstaller();
+
+                byte[] validPkgBytes = ("-----BEGIN JARVIS OTA EVIDENCE RECEIPT V2-----\n"
+                        + new String(validReleaseSyntheticReceipt, StandardCharsets.US_ASCII)
+                        + "-----END JARVIS OTA EVIDENCE RECEIPT V2-----\n"
+                        + "-----BEGIN JARVIS OTA EVIDENCE SIGNATURE BASE64-----\n"
+                        + java.util.Base64.getEncoder().encodeToString(validReleaseSyntheticSig)
+                        + "\n-----END JARVIS OTA EVIDENCE SIGNATURE BASE64-----\n")
+                        .getBytes(StandardCharsets.US_ASCII);
+                check(OtaRecoveryEvidenceStore.readBoundedStream(
+                        new java.io.ByteArrayInputStream(validPkgBytes),
+                        OtaRecoveryEvidenceStore.MAX_PORTABLE_BUNDLE_BYTES) != null,
+                        "Scenario 11n readBoundedStream must read valid .pkg");
+                check(OtaRecoveryEvidenceStore.readBoundedStream(
+                        new java.io.ByteArrayInputStream(new byte[OtaRecoveryEvidenceStore.MAX_PORTABLE_BUNDLE_BYTES + 1]),
+                        OtaRecoveryEvidenceStore.MAX_PORTABLE_BUNDLE_BYTES) == null,
+                        "Scenario 11n readBoundedStream must reject oversized stream");
+
+                OtaRecoveryEvidenceGate.Verdict malformedPkg =
+                        OtaRecoveryEvidenceStore.importVerifiedPortableBundle(
+                                ctxN, "NOT_A_VALID_BUNDLE\n".getBytes(StandardCharsets.US_ASCII),
+                                6, 0, nowSec);
+                check(!malformedPkg.accepted && "EVIDENCE_BUNDLE_INVALID".equals(malformedPkg.code),
+                        "Scenario 11n malformed .pkg rejected: " + malformedPkg.code);
+
+                byte[] badPkgSig = validReleaseSyntheticSig.clone();
+                badPkgSig[0] ^= 0x33;
+                byte[] badSigPkgBytes = ("-----BEGIN JARVIS OTA EVIDENCE RECEIPT V2-----\n"
+                        + new String(validReleaseSyntheticReceipt, StandardCharsets.US_ASCII)
+                        + "-----END JARVIS OTA EVIDENCE RECEIPT V2-----\n"
+                        + "-----BEGIN JARVIS OTA EVIDENCE SIGNATURE BASE64-----\n"
+                        + java.util.Base64.getEncoder().encodeToString(badPkgSig)
+                        + "\n-----END JARVIS OTA EVIDENCE SIGNATURE BASE64-----\n")
+                        .getBytes(StandardCharsets.US_ASCII);
+                OtaRecoveryEvidenceGate.Verdict badPkgVerdict =
+                        OtaRecoveryEvidenceStore.importVerifiedPortableBundle(
+                                ctxN, badSigPkgBytes, 6, 0, nowSec);
+                check(!badPkgVerdict.accepted && "EVIDENCE_SIGNATURE_INVALID".equals(badPkgVerdict.code),
+                        "Scenario 11n tampered .pkg signature rejected: " + badPkgVerdict.code);
+
+                File dropDirN = workRoot.resolve("drop-s11n").toFile();
+                if (!dropDirN.mkdirs() && !dropDirN.isDirectory()) {
+                    throw new IOException("mkdir failed: " + dropDirN);
+                }
+                OtaRecoveryEvidenceGate.Verdict emptyDropVerdict =
+                        OtaRecoveryEvidenceStore.importVerifiedFromDirectory(
+                                ctxN, dropDirN, 6, 0, nowSec);
+                check(!emptyDropVerdict.accepted && "EVIDENCE_IMPORT_SOURCE_MISSING".equals(emptyDropVerdict.code),
+                        "Scenario 11n empty drop dir rejected: " + emptyDropVerdict.code);
+
+                File dropPkgFile = new File(dropDirN, OtaRecoveryEvidenceStore.PORTABLE_BUNDLE_FILENAME);
+                Files.write(dropPkgFile.toPath(), validPkgBytes);
+                OtaRecoveryEvidenceGate.Verdict importedPkgVerdict =
+                        OtaRecoveryEvidenceStore.importVerifiedFromDirectory(
+                                ctxN, dropDirN, 6, 0, nowSec);
+                check(importedPkgVerdict.accepted
+                        && "LOCAL_RECOVERY_EVIDENCE_VERIFIED_NOT_AUTHORIZED_ALONE".equals(importedPkgVerdict.code),
+                        "Scenario 11n directory .pkg import failed: " + importedPkgVerdict.code);
+                check(installerN.createSessionCount == 0 && installerN.commitCount == 0,
+                        "Scenario 11n import alone must NEVER create or commit PackageInstaller session");
+
+                OtaUpdatePreparation.Result preparedN = OtaUpdatePreparation.prepare(
+                        ctxN, channel.manifestUrl, channel.trustedHosts, normalOpener, stagingApkSignerSha);
+                check(preparedN.staged && preparedN.candidateVersionCode == 8,
+                        "Scenario 11n prepare failed: " + preparedN.code);
+                OtaOwnerPackageInstaller.Outcome committedAfterPkg =
+                        OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(
+                                ctxN, preparedN, true, stagingApkSignerSha, nowSec);
+                check(committedAfterPkg.submittedToAndroid
+                        && "SUBMITTED_TO_ANDROID_AWAITING_OS_USER_RESULT".equals(committedAfterPkg.code),
+                        "Scenario 11n OTA submit after .pkg import failed: " + committedAfterPkg.code);
+                check(installerN.createSessionCount == 1 && installerN.commitCount == 1,
+                        "Scenario 11n expected 1 created & 1 committed PackageInstaller session");
             }
         } finally {
             deleteTree(workRoot);

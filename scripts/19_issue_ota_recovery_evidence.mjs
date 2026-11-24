@@ -198,6 +198,7 @@ function runCli() {
     publicKeyDerBuf: pubDer,
     outReceiptPath: join(outDir, 'ota-recovery-evidence.receipt'),
     outSigPath: join(outDir, 'ota-recovery-evidence.receipt.sig'),
+    outBundlePkgPath: join(outDir, 'ota-recovery-evidence.pkg'),
     nowEpochSec: nowSec,
   });
   console.log(JSON.stringify(issued, null, 2));

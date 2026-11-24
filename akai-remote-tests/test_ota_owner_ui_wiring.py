@@ -28,14 +28,28 @@ class OtaOwnerUiWiringTests(unittest.TestCase):
 
     def test_layout_has_hidden_focusable_owner_ota_controls(self):
         self.assertIn('android:id="@+id/btn_ota_check"', self.layout)
+        self.assertIn('android:id="@+id/btn_ota_import_receipt"', self.layout)
         self.assertIn('android:id="@+id/tv_ota_status"', self.layout)
         self.assertIn('android:id="@+id/btn_ota_permission"', self.layout)
         self.assertIn('android:id="@+id/btn_ota_install_confirmed"', self.layout)
+        import_block = self.layout.split('btn_ota_import_receipt', 1)[1].split('/>', 1)[0]
+        self.assertIn('android:focusable="true"', import_block)
         for btn_id in ('btn_ota_permission', 'btn_ota_install_confirmed'):
             block = self.layout.split(btn_id, 1)[1].split('/>', 1)[0]
             self.assertIn('android:focusable="true"', block)
             self.assertIn('android:enabled="false"', block)
             self.assertIn('android:visibility="gone"', block)
+
+    def test_adb_free_receipt_import_ui_and_guards(self):
+        self.assertIn('btnOtaImportReceipt.setOnClickListener', self.main_activity)
+        self.assertIn('Intent.ACTION_OPEN_DOCUMENT', self.main_activity)
+        self.assertIn('onActivityResult(', self.main_activity)
+        self.assertIn('OtaRecoveryEvidenceStore.importVerified', self.main_activity)
+        import_block = self.main_activity.split('btnOtaImportReceipt.setOnClickListener', 1)[1]
+        import_block = import_block.split('btnVisionLocalTest.setOnClickListener', 1)[0]
+        self.assertIn('ActivityNotFoundException', import_block)
+        self.assertNotIn('OtaOwnerPackageInstaller', import_block)
+        self.assertNotIn('submitAfterPhysicalOwnerApproval', import_block)
 
     def test_btn_ota_check_never_invokes_package_installer_directly(self):
         check_block = self.main_activity.split('btnOtaCheck.setOnClickListener', 1)[1]

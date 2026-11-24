@@ -113,6 +113,37 @@ public final class OtaRecoveryEvidenceGate {
                                  int actualInstalledVersionCode,
                                  int candidateVersionCode,
                                  long nowEpochSec) {
+        return verifyCore(receiptBytes, detachedSignature, pinnedReleaseKey,
+                localDeviceUid, actualInstalledVersionCode,
+                candidateVersionCode, true, nowEpochSec);
+    }
+
+    /**
+     * Validate a signed jarvis-ota-evidence-v2 receipt at ADB-free import time
+     * before a concrete OTA candidate version is fetched. Still enforces signature,
+     * device UID, installed version, backup digest, lifetime, restore flags, and
+     * a coherent upgrade slot above installed (and above priorRescueFloor if release).
+     * Exact candidate checks still run in loadAndVerify() before createSession().
+     */
+    public static Verdict verifyForInstalled(byte[] receiptBytes,
+                                             byte[] detachedSignature,
+                                             PublicKey pinnedReleaseKey,
+                                             String localDeviceUid,
+                                             int actualInstalledVersionCode,
+                                             long nowEpochSec) {
+        return verifyCore(receiptBytes, detachedSignature, pinnedReleaseKey,
+                localDeviceUid, actualInstalledVersionCode,
+                0, false, nowEpochSec);
+    }
+
+    private static Verdict verifyCore(byte[] receiptBytes,
+                                      byte[] detachedSignature,
+                                      PublicKey pinnedReleaseKey,
+                                      String localDeviceUid,
+                                      int actualInstalledVersionCode,
+                                      int candidateVersionCode,
+                                      boolean enforceCandidateVersion,
+                                      long nowEpochSec) {
         if (receiptBytes == null || receiptBytes.length == 0 ||
                 receiptBytes.length > MAX_RECEIPT_BYTES ||
                 !OtaCandidateGate.verifyManifestSignature(
@@ -206,22 +237,33 @@ public final class OtaRecoveryEvidenceGate {
             }
             String rescueApkSha256 = fields[11].toLowerCase(Locale.ROOT);
 
-            if (candidateVersionCode <= actualInstalledVersionCode) {
-                return deny("EVIDENCE_CANDIDATE_NOT_ABOVE_INSTALLED");
-            }
-
-            if ("release".equals(channelProfile)) {
-                if (priorRescueFloor < 5 || candidateVersionCode <= priorRescueFloor) {
-                    return deny("EVIDENCE_RELEASE_NOT_ABOVE_PRIOR_RESCUE");
+            if (enforceCandidateVersion) {
+                if (candidateVersionCode <= actualInstalledVersionCode) {
+                    return deny("EVIDENCE_CANDIDATE_NOT_ABOVE_INSTALLED");
+                }
+                if ("release".equals(channelProfile)) {
+                    if (priorRescueFloor < 5 || candidateVersionCode <= priorRescueFloor) {
+                        return deny("EVIDENCE_RELEASE_NOT_ABOVE_PRIOR_RESCUE");
+                    }
+                } else {
+                    if (priorRescueFloor != 0 && candidateVersionCode <= priorRescueFloor) {
+                        return deny("EVIDENCE_STAGING_NOT_ABOVE_PRIOR_RESCUE");
+                    }
+                }
+                if (recoveryRescueVersion < 5 || recoveryRescueVersion <= candidateVersionCode) {
+                    return deny("EVIDENCE_RECOVERY_RESCUE_NOT_ABOVE_CANDIDATE");
                 }
             } else {
-                if (priorRescueFloor != 0 && candidateVersionCode <= priorRescueFloor) {
+                if ("release".equals(channelProfile)) {
+                    if (priorRescueFloor < 5 || recoveryRescueVersion <= priorRescueFloor + 1) {
+                        return deny("EVIDENCE_RELEASE_NOT_ABOVE_PRIOR_RESCUE");
+                    }
+                } else if (priorRescueFloor != 0 && recoveryRescueVersion <= priorRescueFloor + 1) {
                     return deny("EVIDENCE_STAGING_NOT_ABOVE_PRIOR_RESCUE");
                 }
-            }
-
-            if (recoveryRescueVersion < 5 || recoveryRescueVersion <= candidateVersionCode) {
-                return deny("EVIDENCE_RECOVERY_RESCUE_NOT_ABOVE_CANDIDATE");
+                if (recoveryRescueVersion < 5 || recoveryRescueVersion <= actualInstalledVersionCode) {
+                    return deny("EVIDENCE_RECOVERY_RESCUE_NOT_ABOVE_CANDIDATE");
+                }
             }
 
             Boolean offlineRestore = parseStrictBoolean(fields[12]);

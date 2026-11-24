@@ -379,9 +379,10 @@ try {
   assert.equal(verRelease.rescueApkVersionCode, 9);
   assert.equal(verRelease.priorRescueFloorVersionCode, 7);
   assert.equal(verRelease.recoveryRescueVersionCode, 9);
+  assert.ok(fs.existsSync(issuedRelease.bundlePkgPath), 'Portable .pkg bundle must be emitted');
   count++;
 
-  // 3. Cross-check Java OtaRecoveryEvidenceGate directly on BOTH Node-issued receipts
+  // 3. Cross-check Java OtaRecoveryEvidenceGate & OtaRecoveryEvidenceStore.parsePortableBundle directly on Node-issued artifacts
   const javaDir = path.join(workDir, 'java_cross');
   const javaBin = path.join(javaDir, 'bin');
   fs.mkdirSync(javaBin, { recursive: true });
@@ -403,12 +404,22 @@ public final class WorkflowJavaCrossCheck {
         byte[] relSig = Files.readAllBytes(Paths.get(args[5]));
         long now = Long.parseLong(args[6]);
         String uid = args[7];
+        byte[] relPkgBytes = Files.readAllBytes(Paths.get(args[8]));
 
         OtaRecoveryEvidenceGate.Verdict vStg = OtaRecoveryEvidenceGate.verify(stgRec, stgSig, stgPub, uid, 6, 7, now);
         if (!vStg.accepted) throw new AssertionError("Java rejected staging receipt: " + vStg.code);
 
         OtaRecoveryEvidenceGate.Verdict vRel = OtaRecoveryEvidenceGate.verify(relRec, relSig, relPub, uid, 6, 8, now);
         if (!vRel.accepted) throw new AssertionError("Java rejected release receipt: " + vRel.code);
+
+        OtaRecoveryEvidenceStore.PortableBundle parsedPkg = OtaRecoveryEvidenceStore.parsePortableBundle(relPkgBytes);
+        if (parsedPkg == null) throw new AssertionError("Java failed to parse Node-issued .pkg bundle");
+        OtaRecoveryEvidenceGate.Verdict vPkg = OtaRecoveryEvidenceGate.verify(
+                parsedPkg.receiptBytes, parsedPkg.signatureBytes, relPub, uid, 6, 8, now);
+        if (!vPkg.accepted) throw new AssertionError("Java rejected decoded .pkg receipt: " + vPkg.code);
+        OtaRecoveryEvidenceGate.Verdict vPkgInstalled = OtaRecoveryEvidenceGate.verifyForInstalled(
+                parsedPkg.receiptBytes, parsedPkg.signatureBytes, relPub, uid, 6, now);
+        if (!vPkgInstalled.accepted) throw new AssertionError("verifyForInstalled rejected .pkg receipt: " + vPkgInstalled.code);
 
         // Negative cross-policy check inside Java gate
         OtaRecoveryEvidenceGate.Verdict vRelLowCand = OtaRecoveryEvidenceGate.verify(relRec, relSig, relPub, uid, 6, 7, now);
@@ -425,13 +436,30 @@ public final class WorkflowJavaCrossCheck {
 `,
     'utf8'
   );
+  const hostMockDirs = [
+    ['android', 'content'],
+    ['android', 'content', 'res'],
+    ['android', 'content', 'pm'],
+    ['android', 'os'],
+    ['android', 'provider'],
+  ];
+  const hostMockSources = [];
+  for (const segs of hostMockDirs) {
+    const dir = path.join(repoRoot, 'akai-remote-tests', 'host_mock', ...segs);
+    for (const entry of fs.readdirSync(dir)) {
+      if (entry.endsWith('.java')) hostMockSources.push(path.join(dir, entry));
+    }
+  }
   execFileSync(
     resolveJdkTool('javac'),
     [
       '-encoding', 'UTF-8', '-source', '8', '-target', '8', '-d', javaBin,
+      ...hostMockSources,
       path.join(repoRoot, 'akai-remote-tv', 'app', 'src', 'main', 'java', 'it', 'akai', 'customremote', 'ai', 'OtaPinnedReleaseKey.java'),
       path.join(repoRoot, 'akai-remote-tv', 'app', 'src', 'main', 'java', 'it', 'akai', 'customremote', 'ai', 'OtaCandidateGate.java'),
+      path.join(repoRoot, 'akai-remote-tv', 'app', 'src', 'main', 'java', 'it', 'akai', 'customremote', 'ai', 'OtaReleaseTrust.java'),
       path.join(repoRoot, 'akai-remote-tv', 'app', 'src', 'main', 'java', 'it', 'akai', 'customremote', 'ai', 'OtaRecoveryEvidenceGate.java'),
+      path.join(repoRoot, 'akai-remote-tv', 'app', 'src', 'main', 'java', 'it', 'akai', 'customremote', 'ai', 'OtaRecoveryEvidenceStore.java'),
       crossRunner,
     ],
     { stdio: 'inherit' }
@@ -442,7 +470,7 @@ public final class WorkflowJavaCrossCheck {
       '-cp', javaBin, 'WorkflowJavaCrossCheck',
       stagingPubPath, issuedStaging.receiptPath, issuedStaging.sigPath,
       releasePubPath, issuedRelease.receiptPath, issuedRelease.sigPath,
-      String(nowSec), deviceUid,
+      String(nowSec), deviceUid, issuedRelease.bundlePkgPath,
     ],
     { encoding: 'utf8' }
   );

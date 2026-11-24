@@ -332,6 +332,16 @@
             android:background="#334155"
             android:focusable="true" />
 
+        <Button
+            android:id="@+id/btn_ota_import_receipt"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:layout_marginTop="8dp"
+            android:text="Importa ricevuta backup/Rescue (USB / file)"
+            android:textColor="#FFFFFF"
+            android:background="#1E293B"
+            android:focusable="true" />
+
         <TextView
             android:id="@+id/tv_ota_status"
             android:layout_width="match_parent"
