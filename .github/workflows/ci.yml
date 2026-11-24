@@ -319,6 +319,7 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaHttpsTransport.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaStagingCommit.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaInstallReadinessGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaRecoveryEvidenceGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSessionByteTransfer.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/VerifiedAtomicFileCopy.java \
             akai-remote-tests/OtaCandidateGateTest.java \
@@ -328,6 +329,7 @@ jobs:
             akai-remote-tests/OtaHttpsTransportTest.java \
             akai-remote-tests/OtaStagingCommitTest.java \
             akai-remote-tests/OtaInstallReadinessGateTest.java \
+            akai-remote-tests/OtaRecoveryEvidenceGateTest.java \
             akai-remote-tests/OtaSessionByteTransferTest.java \
             akai-remote-tests/VerifiedAtomicFileCopyTest.java
           java -cp test_ota it.akai.customremote.OtaCandidateGateTest
@@ -337,6 +339,7 @@ jobs:
           java -cp test_ota it.akai.customremote.OtaHttpsTransportTest
           java -cp test_ota it.akai.customremote.OtaStagingCommitTest
           java -cp test_ota it.akai.customremote.OtaInstallReadinessGateTest
+          java -cp test_ota it.akai.customremote.OtaRecoveryEvidenceGateTest
           java -cp test_ota it.akai.customremote.OtaSessionByteTransferTest
           java -cp test_ota it.akai.customremote.VerifiedAtomicFileCopyTest
           echo "Archive/staging policy gates passed; OTA real-device download, owner UI and installation remain unverified."
@@ -356,6 +359,7 @@ jobs:
             akai-remote-tests/host_mock/android/content/res/*.java \
             akai-remote-tests/host_mock/android/content/pm/*.java \
             akai-remote-tests/host_mock/android/os/*.java \
+            akai-remote-tests/host_mock/android/provider/*.java \
             akai-remote-tests/host_mock/it/akai/customremote/OtaInstallResultReceiver.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaCandidateGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaArchiveIdentityGate.java \
@@ -364,9 +368,11 @@ jobs:
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaHttpsTransport.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaStagingCommit.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaInstallReadinessGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaRecoveryEvidenceGate.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSessionByteTransfer.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaReleaseTrust.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaReleaseChannel.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaRecoveryEvidenceStore.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaAndroidArchiveInspector.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaUpdatePreparation.java \
             akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaAndroidInstallPreflight.java \

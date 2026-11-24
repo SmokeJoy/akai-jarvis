@@ -667,17 +667,18 @@ public class MainActivity extends Activity {
         summary.setText("Versione candidata: v" + stagedCandidate.candidateVersionCode +
                 "\nSHA-256: " + abbreviateSha256(stagedCandidate.expectedSha256) +
                 "\nFirma certificato originale Android verificata.\n" +
-                "L'installazione avvierà PackageInstaller di Android 9 con tua conferma OS esplicita.");
+                "L'installazione avvierà PackageInstaller di Android 9 solo dopo verifica " +
+                "crittografica della ricevuta locale backup/A2 Rescue (ota-evidence) e tua conferma OS esplicita.");
         container.addView(summary);
 
         final CheckBox chkBackup = new CheckBox(dialogCtx);
-        chkBackup.setText("Confermo di avere un backup verificato (APK + SQLite/WAL + TLS).");
+        chkBackup.setText("Consenso manuale: dichiaro di voler procedere con il backup locale esistente (non sostituisce la ricevuta firmata).");
         chkBackup.setChecked(false);
         chkBackup.setFocusable(true);
         container.addView(chkBackup);
 
         final CheckBox chkRecovery = new CheckBox(dialogCtx);
-        chkRecovery.setText("Confermo che il recupero conservativo (A2 Rescue / restore) è verificato.");
+        chkRecovery.setText("Consenso manuale: autorizzo la verifica indipendente della ricevuta A2 Rescue / restore prima dell'avvio OS.");
         chkRecovery.setChecked(false);
         chkRecovery.setFocusable(true);
         container.addView(chkRecovery);
@@ -691,16 +692,17 @@ public class MainActivity extends Activity {
                         if (!chkBackup.isChecked() || !chkRecovery.isChecked()) return;
                         if (pendingOtaCandidate != stagedCandidate) return;
                         if (!otaOperationInFlight.compareAndSet(false, true)) return;
+                        final boolean ownerConsentOnTv = chkBackup.isChecked() && chkRecovery.isChecked();
                         btnOtaCheck.setEnabled(false);
                         setOtaActionVisibility(false, false, null);
-                        tvOtaStatus.setText("Invio pacchetto verificato a PackageInstaller Android...");
+                        tvOtaStatus.setText("Verifica ricevuta backup/recupero e invio pacchetto a PackageInstaller Android...");
                         if (!submitBackgroundTask(new Runnable() {
                             @Override
                             public void run() {
                                 final OtaOwnerPackageInstaller.Outcome outcome;
                                 try {
                                     outcome = OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(
-                                            MainActivity.this, stagedCandidate, true, true, true);
+                                            MainActivity.this, stagedCandidate, ownerConsentOnTv);
                                 } finally {
                                     otaOperationInFlight.set(false);
                                 }

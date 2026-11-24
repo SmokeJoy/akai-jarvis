@@ -44,8 +44,10 @@ public final class OtaOwnerPackageInstaller {
 
     /**
      * This function is BLOCKED unless the owner has explicitly confirmed
-     * THIS specific candidate on the physical TV and independently checked
-     * actual backup+restoration evidence. Do NOT pass guessed true booleans.
+     * THIS specific candidate on the physical TV AND a locally stored,
+     * RSA-verified backup+recovery evidence receipt (OtaRecoveryEvidenceStore)
+     * passes all cryptographic, UID, version, expiry and Rescue > candidate checks.
+     * Callers cannot supply boolean overrides for backup/recovery evidence.
      * It must be called on a short-lived background worker, never at boot.
      *
      * Only MainActivity's physical two-checkbox owner confirmation dialog after
@@ -54,31 +56,24 @@ public final class OtaOwnerPackageInstaller {
     public static Outcome submitAfterPhysicalOwnerApproval(
             Context context,
             OtaUpdatePreparation.Result prepared,
-            boolean ownerApprovedOnTv,
-            boolean backupEvidenceIndependentlyVerified,
-            boolean restorationEvidenceIndependentlyVerified) {
+            boolean ownerApprovedOnTv) {
         return submitAfterPhysicalOwnerApproval(
                 context, prepared, ownerApprovedOnTv,
-                backupEvidenceIndependentlyVerified,
-                restorationEvidenceIndependentlyVerified,
-                OtaCandidateGate.EXPECTED_SIGNER_SHA256);
+                OtaCandidateGate.EXPECTED_SIGNER_SHA256,
+                System.currentTimeMillis() / 1000L);
     }
 
     static Outcome submitAfterPhysicalOwnerApproval(
             Context context,
             OtaUpdatePreparation.Result prepared,
             boolean ownerApprovedOnTv,
-            boolean backupEvidenceIndependentlyVerified,
-            boolean restorationEvidenceIndependentlyVerified,
-            String expectedSignerSha256) {
+            String expectedSignerSha256,
+            long nowEpochSec) {
 
         if (Build.VERSION.SDK_INT != Build.VERSION_CODES.P)
             return deny("ANDROID9_ONLY");
         if (context == null || prepared == null || !ownerApprovedOnTv)
             return deny("PHYSICAL_OWNER_APPROVAL_REQUIRED");
-        if (!backupEvidenceIndependentlyVerified ||
-                !restorationEvidenceIndependentlyVerified)
-            return deny("BACKUP_AND_RECOVERY_EVIDENCE_REQUIRED");
 
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
             return deny("INSTALL_MAIN_THREAD_FORBIDDEN");
@@ -93,6 +88,13 @@ public final class OtaOwnerPackageInstaller {
         OtaAndroidArchiveInspector.InstalledIdentity installed =
                 OtaAndroidArchiveInspector.readInstalledIdentity(context, expectedSignerSha256);
         if (installed == null) return deny("INSTALLED_IDENTITY_NOT_TRUSTED");
+
+        OtaRecoveryEvidenceGate.Verdict evidence =
+                OtaRecoveryEvidenceStore.loadAndVerify(
+                        context, (int) installed.versionCode,
+                        prepared.candidateVersionCode, nowEpochSec);
+        if (!evidence.accepted || !evidence.backupVerified || !evidence.recoveryVerified)
+            return deny(evidence.code);
 
         PackageInstaller installer = context.getPackageManager().getPackageInstaller();
         if (installer == null) return deny("PACKAGE_INSTALLER_UNAVAILABLE");
@@ -132,8 +134,8 @@ public final class OtaOwnerPackageInstaller {
             OtaInstallReadinessGate.Verdict decision =
                     OtaInstallReadinessGate.evaluate(
                             ownerApprovedOnTv,
-                            backupEvidenceIndependentlyVerified,
-                            restorationEvidenceIndependentlyVerified,
+                            evidence.backupVerified,
+                            evidence.recoveryVerified,
                             context.getPackageManager().canRequestPackageInstalls(),
                             prepared.verifiedCandidate != null &&
                                     "VERIFIED_PRIVATE_APK_NOT_INSTALLED".equals(prepared.code),

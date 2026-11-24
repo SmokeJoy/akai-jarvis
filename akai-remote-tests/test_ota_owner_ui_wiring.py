@@ -57,11 +57,20 @@ class OtaOwnerUiWiringTests(unittest.TestCase):
         self.assertIn('positive.setEnabled(false)', dialog_fn)
         self.assertIn('chkBackup.isChecked() && chkRecovery.isChecked()', dialog_fn)
         self.assertIn('OtaOwnerPackageInstaller.submitAfterPhysicalOwnerApproval(', dialog_fn)
+        self.assertNotIn('true, true', dialog_fn)
         self.assertIn('OtaOwnerPackageInstaller.Outcome', dialog_fn)
+
+    def test_installer_enforces_signed_recovery_receipt_not_caller_booleans(self):
+        self.assertIn('OtaRecoveryEvidenceStore.loadAndVerify(', self.installer)
+        self.assertIn('evidence.backupVerified', self.installer)
+        self.assertIn('evidence.recoveryVerified', self.installer)
+        self.assertIn('OtaInstallReadinessGate.evaluate(', self.installer)
+        self.assertNotIn('true, true, true', self.main_activity)
 
     def test_no_remote_ai_or_boot_caller_can_invoke_ota_installer(self):
         for forbidden_caller in (self.router, self.service, self.boot, self.ai):
             self.assertNotIn('OtaOwnerPackageInstaller', forbidden_caller)
+            self.assertNotIn('OtaRecoveryEvidenceStore', forbidden_caller)
             self.assertNotIn('submitAfterPhysicalOwnerApproval', forbidden_caller)
             self.assertNotIn('OtaUpdatePreparation', forbidden_caller)
 
