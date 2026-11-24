@@ -57,6 +57,20 @@ public final class OtaOwnerPackageInstaller {
             boolean ownerApprovedOnTv,
             boolean backupEvidenceIndependentlyVerified,
             boolean restorationEvidenceIndependentlyVerified) {
+        return submitAfterPhysicalOwnerApproval(
+                context, prepared, ownerApprovedOnTv,
+                backupEvidenceIndependentlyVerified,
+                restorationEvidenceIndependentlyVerified,
+                OtaCandidateGate.EXPECTED_SIGNER_SHA256);
+    }
+
+    static Outcome submitAfterPhysicalOwnerApproval(
+            Context context,
+            OtaUpdatePreparation.Result prepared,
+            boolean ownerApprovedOnTv,
+            boolean backupEvidenceIndependentlyVerified,
+            boolean restorationEvidenceIndependentlyVerified,
+            String expectedSignerSha256) {
 
         if (Build.VERSION.SDK_INT != Build.VERSION_CODES.P)
             return deny("ANDROID9_ONLY");
@@ -72,12 +86,12 @@ public final class OtaOwnerPackageInstaller {
             return deny("INSTALL_CANCELLED");
 
         OtaAndroidInstallPreflight.Verdict preflight =
-                OtaAndroidInstallPreflight.inspect(context, prepared);
+                OtaAndroidInstallPreflight.inspect(context, prepared, expectedSignerSha256);
         if (!preflight.readyForOwnerRecoveryReview)
             return deny("PREFLIGHT_" + preflight.code);
 
         OtaAndroidArchiveInspector.InstalledIdentity installed =
-                OtaAndroidArchiveInspector.readInstalledIdentity(context);
+                OtaAndroidArchiveInspector.readInstalledIdentity(context, expectedSignerSha256);
         if (installed == null) return deny("INSTALLED_IDENTITY_NOT_TRUSTED");
 
         PackageInstaller installer = context.getPackageManager().getPackageInstaller();

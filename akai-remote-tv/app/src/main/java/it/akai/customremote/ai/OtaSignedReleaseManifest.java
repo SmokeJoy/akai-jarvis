@@ -55,6 +55,17 @@ public final class OtaSignedReleaseManifest {
                                 int installedVersionCode,
                                 String installedSignerSha256,
                                 Set<String> locallyTrustedHosts) {
+        return verify(signedBytes, signature, pinnedReleaseKey, installedVersionCode,
+                installedSignerSha256, locallyTrustedHosts,
+                OtaCandidateGate.EXPECTED_SIGNER_SHA256);
+    }
+
+    static Result verify(byte[] signedBytes, byte[] signature,
+                         PublicKey pinnedReleaseKey,
+                         int installedVersionCode,
+                         String installedSignerSha256,
+                         Set<String> locallyTrustedHosts,
+                         String expectedSignerSha256) {
         if (!OtaCandidateGate.verifyManifestSignature(signedBytes, signature, pinnedReleaseKey))
             return deny("MANIFEST_SIGNATURE_INVALID");
         try {
@@ -85,7 +96,8 @@ public final class OtaSignedReleaseManifest {
                     parsePositiveLong(fields[8]), fields[9]);
 
             OtaCandidateGate.Verdict verdict = OtaCandidateGate.inspect(
-                    candidate, installedVersionCode, installedSignerSha256, locallyTrustedHosts);
+                    candidate, installedVersionCode, installedSignerSha256,
+                    locallyTrustedHosts, expectedSignerSha256);
             if (!verdict.eligibleForDownload) return deny("CANDIDATE_" + verdict.code);
             return new Result(candidate, "SIGNED_MANIFEST_VERIFIED_NOT_INSTALLED");
         } catch (RuntimeException invalid) {

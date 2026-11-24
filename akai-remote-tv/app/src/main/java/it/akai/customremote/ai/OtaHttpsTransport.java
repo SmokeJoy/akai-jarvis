@@ -29,6 +29,15 @@ public final class OtaHttpsTransport {
     private static final int CONNECT_TIMEOUT_MS = 8000;
     private static final int READ_TIMEOUT_MS = 12000;
 
+    /**
+     * Package-private connection seam allowing host integration tests to route
+     * already-validated public HTTPS URLs to a deterministic local TLS fixture
+     * without relaxing production URL/host/port/redirect enforcement.
+     */
+    interface ConnectionOpener {
+        HttpsURLConnection open(String validatedUrl) throws IOException;
+    }
+
     public static boolean safeHttpsEndpoint(String url, Set<String> locallyTrustedHosts,
                                             String requiredSuffix) {
         if (url == null || locallyTrustedHosts == null ||
@@ -112,16 +121,30 @@ public final class OtaHttpsTransport {
         return output.toByteArray();
     }
 
+    private static HttpsURLConnection openWith(ConnectionOpener opener, String url) throws IOException {
+        HttpsURLConnection connection = (opener != null) ? opener.open(url) : open(url);
+        if (connection == null) throw new IOException("HTTPS_CONNECTION_NULL");
+        connection.setInstanceFollowRedirects(false);
+        connection.setUseCaches(false);
+        return connection;
+    }
+
     /** Fetch a signed protocol .manifest or detached .sig. Never accepts HTTP redirects. */
     public static byte[] fetchSmall(String url, Set<String> trustedHosts,
                                     String expectedSuffix, int maxBytes) throws IOException {
+        return fetchSmall(url, trustedHosts, expectedSuffix, maxBytes, null);
+    }
+
+    static byte[] fetchSmall(String url, Set<String> trustedHosts,
+                             String expectedSuffix, int maxBytes,
+                             ConnectionOpener opener) throws IOException {
         boolean manifestOrSig = ".manifest".equals(expectedSuffix) || ".sig".equals(expectedSuffix);
         boolean endpointOk = manifestOrSig
                 ? safePublicHttpsManifestEndpoint(url, trustedHosts, expectedSuffix)
                 : safeHttpsEndpoint(url, trustedHosts, expectedSuffix);
         if (!endpointOk)
             throw new IOException("URL_NOT_TRUSTED");
-        HttpsURLConnection conn = open(url);
+        HttpsURLConnection conn = openWith(opener, url);
         try {
             int responseCode = conn.getResponseCode();
             if (isRedirectStatus(responseCode)) throw new IOException("HTTP_REDIRECT_FORBIDDEN");
@@ -146,6 +169,13 @@ public final class OtaHttpsTransport {
     public static File stageVerifiedApk(OtaSignedReleaseManifest.Result verifiedManifest,
                                         Set<String> trustedHosts,
                                         File privateFilesDir) throws IOException {
+        return stageVerifiedApk(verifiedManifest, trustedHosts, privateFilesDir, null);
+    }
+
+    static File stageVerifiedApk(OtaSignedReleaseManifest.Result verifiedManifest,
+                                 Set<String> trustedHosts,
+                                 File privateFilesDir,
+                                 ConnectionOpener opener) throws IOException {
         // Cannot accept a caller-constructed Candidate: only an already
         // RSA-verified manifest Result may authorize staging this URL.
         if (verifiedManifest == null || !verifiedManifest.verified())
@@ -171,7 +201,7 @@ public final class OtaHttpsTransport {
         boolean approvedBytes = false;
         HttpsURLConnection connection = null;
         try {
-            connection = open(signedCandidate.downloadUrl);
+            connection = openWith(opener, signedCandidate.downloadUrl);
             int responseCode = connection.getResponseCode();
             if (isRedirectStatus(responseCode))
                 throw new IOException("APK_HTTP_REDIRECT_FORBIDDEN");

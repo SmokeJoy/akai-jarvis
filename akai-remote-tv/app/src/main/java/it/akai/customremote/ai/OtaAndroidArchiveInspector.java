@@ -63,7 +63,12 @@ public final class OtaAndroidArchiveInspector {
     }
 
     public static InstalledIdentity readInstalledIdentity(Context context) {
-        if (context == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.P)
+        return readInstalledIdentity(context, OtaCandidateGate.EXPECTED_SIGNER_SHA256);
+    }
+
+    static InstalledIdentity readInstalledIdentity(Context context, String expectedSignerSha256) {
+        if (context == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+                expectedSignerSha256 == null || !expectedSignerSha256.matches("[0-9a-fA-F]{64}"))
             return null;
         try {
             PackageInfo installed = context.getPackageManager().getPackageInfo(
@@ -72,7 +77,7 @@ public final class OtaAndroidArchiveInspector {
                     installed.getLongVersionCode() > Integer.MAX_VALUE)
                 return null;
             String signer = signerSha256(installed.signingInfo);
-            if (signer == null || !OtaCandidateGate.EXPECTED_SIGNER_SHA256.equalsIgnoreCase(signer))
+            if (signer == null || !expectedSignerSha256.equalsIgnoreCase(signer))
                 return null;
             return new InstalledIdentity(installed.getLongVersionCode(), signer);
         } catch (Exception unavailable) {
@@ -92,9 +97,17 @@ public final class OtaAndroidArchiveInspector {
      */
     public static Result inspect(Context context, File downloadedApk,
                                  OtaCandidateGate.Candidate expectedCandidate) {
+        return inspect(context, downloadedApk, expectedCandidate,
+                OtaCandidateGate.EXPECTED_SIGNER_SHA256);
+    }
+
+    static Result inspect(Context context, File downloadedApk,
+                          OtaCandidateGate.Candidate expectedCandidate,
+                          String expectedSignerSha256) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P)
             return deny("ANDROID_API_UNSUPPORTED");
-        if (context == null || downloadedApk == null || expectedCandidate == null)
+        if (context == null || downloadedApk == null || expectedCandidate == null ||
+                expectedSignerSha256 == null || !expectedSignerSha256.matches("[0-9a-fA-F]{64}"))
             return deny("MISSING_INSPECTION_INPUT");
         try {
             File privateDir = context.getFilesDir().getCanonicalFile();
@@ -121,7 +134,7 @@ public final class OtaAndroidArchiveInspector {
                     archive.applicationInfo.minSdkVersion,
                     archive.applicationInfo.targetSdkVersion,
                     archiveDigest, installed.getLongVersionCode(), installedDigest,
-                    OtaCandidateGate.EXPECTED_SIGNER_SHA256);
+                    expectedSignerSha256);
             if (!verdict.accepted) return deny(verdict.code);
             if (!archive.packageName.equals(expectedCandidate.packageName) ||
                     archive.getLongVersionCode() != expectedCandidate.versionCode ||

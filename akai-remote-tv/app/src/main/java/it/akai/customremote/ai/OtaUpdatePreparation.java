@@ -51,6 +51,14 @@ public final class OtaUpdatePreparation {
 
     public static Result prepare(Context context, String locallyConfiguredManifestUrl,
                                  Set<String> locallyTrustedHosts) {
+        return prepare(context, locallyConfiguredManifestUrl, locallyTrustedHosts,
+                null, OtaCandidateGate.EXPECTED_SIGNER_SHA256);
+    }
+
+    static Result prepare(Context context, String locallyConfiguredManifestUrl,
+                          Set<String> locallyTrustedHosts,
+                          OtaHttpsTransport.ConnectionOpener opener,
+                          String expectedSignerSha256) {
         if (context == null || locallyConfiguredManifestUrl == null)
             return deny("PREPARE_MISSING_INPUT");
         if (Looper.myLooper() == Looper.getMainLooper())
@@ -62,7 +70,7 @@ public final class OtaUpdatePreparation {
             return deny("PREPARE_MANIFEST_HOST_NOT_ALLOWED");
 
         OtaAndroidArchiveInspector.InstalledIdentity installed =
-                OtaAndroidArchiveInspector.readInstalledIdentity(context);
+                OtaAndroidArchiveInspector.readInstalledIdentity(context, expectedSignerSha256);
         if (installed == null) return deny("PREPARE_INSTALLED_IDENTITY_UNKNOWN");
 
         // The release public key is bundled in the owner's original-signed APK.
@@ -74,15 +82,17 @@ public final class OtaUpdatePreparation {
         try {
             byte[] manifest = OtaHttpsTransport.fetchSmall(
                     locallyConfiguredManifestUrl, locallyTrustedHosts,
-                    ".manifest", OtaCandidateGate.MAX_MANIFEST_BYTES);
+                    ".manifest", OtaCandidateGate.MAX_MANIFEST_BYTES, opener);
             if (Thread.currentThread().isInterrupted()) return deny("PREPARE_CANCELLED");
             byte[] detachedSignature = OtaHttpsTransport.fetchSmall(
-                    locallyConfiguredManifestUrl + ".sig", locallyTrustedHosts, ".sig", 512);
+                    locallyConfiguredManifestUrl + ".sig", locallyTrustedHosts,
+                    ".sig", 512, opener);
             signed = OtaSignedReleaseManifest.verify(
                     manifest, detachedSignature, pinnedReleaseKey,
                     (int) installed.versionCode, installed.signerSha256,
-                    locallyTrustedHosts);
+                    locallyTrustedHosts, expectedSignerSha256);
         } catch (Exception transportFailure) {
+            if (Thread.currentThread().isInterrupted()) return deny("PREPARE_CANCELLED");
             return deny("PREPARE_MANIFEST_FETCH_FAILED");
         }
         if (!signed.verified()) return deny("PREPARE_" + signed.code);
@@ -91,11 +101,12 @@ public final class OtaUpdatePreparation {
         File staged = null;
         try {
             staged = OtaHttpsTransport.stageVerifiedApk(
-                    signed, locallyTrustedHosts, context.getFilesDir());
+                    signed, locallyTrustedHosts, context.getFilesDir(), opener);
             if (Thread.currentThread().isInterrupted()) return deny("PREPARE_CANCELLED");
 
             OtaAndroidArchiveInspector.Result inspected =
-                    OtaAndroidArchiveInspector.inspect(context, staged, signed.candidate);
+                    OtaAndroidArchiveInspector.inspect(
+                            context, staged, signed.candidate, expectedSignerSha256);
             if (!inspected.accepted) return deny("PREPARE_" + inspected.code);
 
             // Rehash after the PackageManager archive inspection too. The later
@@ -110,6 +121,7 @@ public final class OtaUpdatePreparation {
                     staged, signed.candidate.versionCode, signed.candidate.apkSha256,
                     signed.candidate);
         } catch (Exception unavailable) {
+            if (Thread.currentThread().isInterrupted()) return deny("PREPARE_CANCELLED");
             return deny("PREPARE_DOWNLOAD_OR_INSPECTION_FAILED");
         }
         // Do not delete 'staged' on later Android PackageManager inspection

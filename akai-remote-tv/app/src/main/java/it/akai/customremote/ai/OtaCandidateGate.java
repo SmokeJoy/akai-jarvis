@@ -114,14 +114,26 @@ public final class OtaCandidateGate {
      */
     public static Verdict inspect(Candidate candidate, int installedVersionCode,
                                   String installedSignerSha256, Set<String> trustedHosts) {
+        return inspect(candidate, installedVersionCode, installedSignerSha256,
+                trustedHosts, EXPECTED_SIGNER_SHA256);
+    }
+
+    /**
+     * Package-private overload allowing host staging fixtures to bind an
+     * ephemeral APK signer digest while keeping the public production gate
+     * pinned strictly to EXPECTED_SIGNER_SHA256.
+     */
+    static Verdict inspect(Candidate candidate, int installedVersionCode,
+                           String installedSignerSha256, Set<String> trustedHosts,
+                           String expectedSignerSha256) {
         if (candidate == null) return deny("MISSING_CANDIDATE");
         if (installedVersionCode < 1) return deny("UNKNOWN_INSTALLED_VERSION");
-        if (!equalsHex(installedSignerSha256, EXPECTED_SIGNER_SHA256)) {
+        if (!equalsHex(installedSignerSha256, expectedSignerSha256)) {
             return deny("INSTALLED_SIGNER_MISMATCH");
         }
         if (!PACKAGE.equals(candidate.packageName)) return deny("PACKAGE_MISMATCH");
         if (candidate.versionCode <= installedVersionCode) return deny("NOT_AN_UPGRADE");
-        if (!equalsHex(candidate.signerCertificateSha256, EXPECTED_SIGNER_SHA256)) {
+        if (!equalsHex(candidate.signerCertificateSha256, expectedSignerSha256)) {
             return deny("CANDIDATE_SIGNER_MISMATCH");
         }
         if (!validSha256(candidate.apkSha256)) return deny("MISSING_APK_DIGEST");

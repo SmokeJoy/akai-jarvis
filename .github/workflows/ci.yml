@@ -246,6 +246,7 @@ jobs:
           mkdir -p test_bin
           javac -encoding UTF-8 -d test_bin \
             akai-remote-tests/host_mock/android/content/*.java \
+            akai-remote-tests/host_mock/android/content/res/*.java \
             akai-remote-tests/host_mock/android/content/pm/*.java \
             akai-remote-tests/host_mock/android/graphics/*.java \
             akai-remote-tests/host_mock/android/media/*.java \
@@ -345,6 +346,34 @@ jobs:
 
       - name: 4b3. On-TV owner-confirmed OTA UI & PackageInstaller wiring checks
         run: python3 akai-remote-tests/test_ota_owner_ui_wiring.py
+
+      - name: 4b4. Host-only OTA delivery & verification integration harness (local HTTPS fixture, no TV/keys)
+        run: |
+          mkdir -p test_ota_integration
+          javac -encoding UTF-8 -source 8 -target 8 -d test_ota_integration \
+            akai-remote-tests/host_mock/android/app/*.java \
+            akai-remote-tests/host_mock/android/content/*.java \
+            akai-remote-tests/host_mock/android/content/res/*.java \
+            akai-remote-tests/host_mock/android/content/pm/*.java \
+            akai-remote-tests/host_mock/android/os/*.java \
+            akai-remote-tests/host_mock/it/akai/customremote/OtaInstallResultReceiver.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaCandidateGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaArchiveIdentityGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSignedReleaseManifest.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaPinnedReleaseKey.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaHttpsTransport.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaStagingCommit.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaInstallReadinessGate.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaSessionByteTransfer.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaReleaseTrust.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaReleaseChannel.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaAndroidArchiveInspector.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaUpdatePreparation.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaAndroidInstallPreflight.java \
+            akai-remote-tv/app/src/main/java/it/akai/customremote/ai/OtaOwnerPackageInstaller.java \
+            akai-remote-tests/OtaDeliveryIntegrationTest.java
+          java -cp test_ota_integration it.akai.customremote.ai.OtaDeliveryIntegrationTest
+          echo "Host-only local HTTPS staging delivery harness passed; NEVER implies OTA_PROVISIONED_READY or real AKAI TV/PC-off OTA PASS."
 
       - name: 4c. DeepSeek/Kimi-only provider guard (no local AI models)
         run: |

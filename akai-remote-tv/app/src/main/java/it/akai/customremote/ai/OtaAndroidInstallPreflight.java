@@ -34,6 +34,11 @@ public final class OtaAndroidInstallPreflight {
     }
 
     public static Verdict inspect(Context context, OtaUpdatePreparation.Result prepared) {
+        return inspect(context, prepared, OtaCandidateGate.EXPECTED_SIGNER_SHA256);
+    }
+
+    static Verdict inspect(Context context, OtaUpdatePreparation.Result prepared,
+                           String expectedSignerSha256) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P)
             return deny("ANDROID9_REQUIRED");
         if (context == null || prepared == null || !prepared.staged ||
@@ -67,7 +72,8 @@ public final class OtaAndroidInstallPreflight {
             // Android must inspect the ACTUAL signed package/certificate again;
             // never rely on metadata previously supplied by the OTA server.
             OtaAndroidArchiveInspector.Result archive =
-                    OtaAndroidArchiveInspector.inspect(context, input, prepared.verifiedCandidate);
+                    OtaAndroidArchiveInspector.inspect(
+                            context, input, prepared.verifiedCandidate, expectedSignerSha256);
             if (!archive.accepted) return deny("APK_" + archive.code);
 
             try (FileInputStream bytes = new FileInputStream(input)) {
