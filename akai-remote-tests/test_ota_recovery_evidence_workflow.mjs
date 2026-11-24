@@ -229,6 +229,33 @@ function invokeScript17(args) {
   return { exitCode: res.status, json: JSON.parse(text) };
 }
 
+/**
+ * SYNTHETIC_HOST_FIXTURE_NON_AUTHORITATIVE:
+ * Simulates stdout of apksigner.jar + aapt for host workflow tests without
+ * shipping any real owner signing key or owner-signed Rescue APK.
+ */
+function makeSyntheticRescueApkRunner({
+  versionCode,
+  signerSha256 = '21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed',
+  packageName = 'it.akai.customremote',
+  debuggable = false,
+}) {
+  return (cmd, args) => {
+    const joined = args.join(' ');
+    if (joined.includes('verify --verbose --print-certs')) {
+      return `Verifies\nVerified using v2 scheme (APK Signature Scheme v2): true\nNumber of signers: 1\nSigner #1 certificate SHA-256 digest: ${signerSha256}\n`;
+    }
+    if (joined.includes('dump badging')) {
+      return `package: name='${packageName}' versionCode='${versionCode}' versionName='1.3.0-rescue-v${versionCode}'\nsdkVersion:'21'\ntargetSdkVersion:'28'\nnative-code: 'armeabi-v7a'\n`;
+    }
+    if (joined.includes('dump xmltree')) {
+      const dbg = debuggable ? '0xffffffff' : '0x0';
+      return `E: manifest\n  E: application\n    A: android:debuggable(0x0101000f)=(type 0x12)${dbg}\n`;
+    }
+    throw new Error('UNEXPECTED_APK_TOOL_INVOCATION: ' + cmd + ' ' + joined);
+  };
+}
+
 const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis_ota_ev_wf_'));
 let count = 0;
 
@@ -270,6 +297,9 @@ try {
   const nowSec = 1_795_000_000;
   const deviceUid = 'akai-tv-workflow-uid-001';
 
+  const runnerV8 = makeSyntheticRescueApkRunner({ versionCode: 8 });
+  const runnerV9 = makeSyntheticRescueApkRunner({ versionCode: 9 });
+
   // 1. Issue archive-verified STAGING receipt (installed=6, candidate=7, recoveryRescue=8)
   const stagingDir = path.join(workDir, 'out_staging');
   const issuedStaging = issueArchiveVerifiedReceipt({
@@ -289,8 +319,10 @@ try {
     outReceiptPath: path.join(stagingDir, 'ota-recovery-evidence.receipt'),
     outSigPath: path.join(stagingDir, 'ota-recovery-evidence.receipt.sig'),
     nowEpochSec: nowSec,
+    rescueApkProofRunner: runnerV8,
   });
   const verStaging = verifyReceiptWithRealArchives({
+    repoRoot,
     receiptPath: issuedStaging.receiptPath,
     sigPath: issuedStaging.sigPath,
     publicKeyDerPath: stagingPubPath,
@@ -300,8 +332,11 @@ try {
     installedVersionCode: 6,
     candidateVersionCode: 7,
     nowEpochSec: nowSec,
+    rescueApkProofRunner: runnerV8,
   });
   assert.equal(verStaging.archivePhysicallyVerified, true);
+  assert.equal(verStaging.rescueApkCertVerified, true);
+  assert.equal(verStaging.rescueApkVersionCode, 8);
   assert.equal(verStaging.recoveryRescueVersionCode, 8);
   count++;
 
@@ -324,8 +359,10 @@ try {
     outReceiptPath: path.join(releaseDir, 'ota-recovery-evidence.receipt'),
     outSigPath: path.join(releaseDir, 'ota-recovery-evidence.receipt.sig'),
     nowEpochSec: nowSec,
+    rescueApkProofRunner: runnerV9,
   });
   const verRelease = verifyReceiptWithRealArchives({
+    repoRoot,
     receiptPath: issuedRelease.receiptPath,
     sigPath: issuedRelease.sigPath,
     publicKeyDerPath: releasePubPath,
@@ -335,8 +372,11 @@ try {
     installedVersionCode: 6,
     candidateVersionCode: 8,
     nowEpochSec: nowSec,
+    rescueApkProofRunner: runnerV9,
   });
   assert.equal(verRelease.archivePhysicallyVerified, true);
+  assert.equal(verRelease.rescueApkCertVerified, true);
+  assert.equal(verRelease.rescueApkVersionCode, 9);
   assert.equal(verRelease.priorRescueFloorVersionCode, 7);
   assert.equal(verRelease.recoveryRescueVersionCode, 9);
   count++;
@@ -584,10 +624,85 @@ public final class WorkflowJavaCrossCheck {
       outReceiptPath: path.join(failOutDir, 'ota-recovery-evidence.receipt'),
       outSigPath: path.join(failOutDir, 'ota-recovery-evidence.receipt.sig'),
       nowEpochSec: nowSec,
+      rescueApkProofRunner: runnerV9,
     })
   );
   assert.equal(fs.existsSync(path.join(failOutDir, 'ota-recovery-evidence.receipt')), false);
   count++;
+
+  // 6. NEXT-8 Rescue APK cert / package / versionCode / debuggable negative checks:
+  // Even with valid ZIP header + matching SHA-256 + valid RSA signature, BOTH issue & verify MUST fail closed!
+  const rescueProofCases = [
+    {
+      label: 'wrong Rescue APK signer cert',
+      runner: makeSyntheticRescueApkRunner({ versionCode: 9, signerSha256: 'f'.repeat(64) }),
+      pattern: /APK_REJECTED_REAL_SIGNER/,
+    },
+    {
+      label: 'wrong Rescue APK package',
+      runner: makeSyntheticRescueApkRunner({ versionCode: 9, packageName: 'org.evil.rescue' }),
+      pattern: /APK_REJECTED_PACKAGE_VERSION/,
+    },
+    {
+      label: 'wrong Rescue APK versionCode != recoveryRescueVersionCode',
+      runner: makeSyntheticRescueApkRunner({ versionCode: 8 }),
+      pattern: /APK_REJECTED_PACKAGE_VERSION/,
+    },
+    {
+      label: 'debuggable Rescue APK',
+      runner: makeSyntheticRescueApkRunner({ versionCode: 9, debuggable: true }),
+      pattern: /APK_REJECTED_DEBUGGABLE_TRUE/,
+    },
+  ];
+  for (let i = 0; i < rescueProofCases.length; i++) {
+    const tc = rescueProofCases[i];
+    const badIssueDir = path.join(workDir, 'bad_rescue_issue_' + i);
+    assert.throws(
+      () =>
+        issueArchiveVerifiedReceipt({
+          repoRoot,
+          channelProfile: 'release',
+          deviceUid,
+          installedVersionCode: 6,
+          candidateVersionCode: 8,
+          priorRescueFloorVersionCode: 7,
+          recoveryRescueVersionCode: 9,
+          backupId: 'bkp-bad-apk-' + i,
+          bundlePath,
+          rescueApkPath: rescueV9Apk,
+          bundlePassphrase: passphrase,
+          privateKeyPemOrKeyObject: releasePriv,
+          publicKeyDerBuf: releasePubDer,
+          outReceiptPath: path.join(badIssueDir, 'ota-recovery-evidence.receipt'),
+          outSigPath: path.join(badIssueDir, 'ota-recovery-evidence.receipt.sig'),
+          nowEpochSec: nowSec,
+          rescueApkProofRunner: tc.runner,
+        }),
+      tc.pattern,
+      'issue must reject ' + tc.label
+    );
+    assert.equal(fs.existsSync(path.join(badIssueDir, 'ota-recovery-evidence.receipt')), false);
+
+    assert.throws(
+      () =>
+        verifyReceiptWithRealArchives({
+          repoRoot,
+          receiptPath: issuedRelease.receiptPath,
+          sigPath: issuedRelease.sigPath,
+          publicKeyDerPath: releasePubPath,
+          bundlePath,
+          rescueApkPath: rescueV9Apk,
+          deviceUid,
+          installedVersionCode: 6,
+          candidateVersionCode: 8,
+          nowEpochSec: nowSec,
+          rescueApkProofRunner: tc.runner,
+        }),
+      tc.pattern,
+      'verifyReceiptWithRealArchives must reject ' + tc.label
+    );
+    count++;
+  }
 
   console.log(
     `test_ota_recovery_evidence_workflow PASS: ${count} checks (SYNTHETIC_HOST_FIXTURE_NON_AUTHORITATIVE — real script 16 restore + real archive hashes + Staging/Release cross-policy coherence; NOT OTA_PROVISIONED_READY, NOT TV PASS)`

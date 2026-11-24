@@ -123,6 +123,7 @@ function runCli() {
       if (!args.has(k)) throw new Error('MISSING_ARG_' + k);
     }
     const verdict = verifyReceiptWithRealArchives({
+      repoRoot,
       receiptPath: resolve(args.get('--receipt')),
       sigPath: resolve(args.get('--sig')),
       publicKeyDerPath: resolve(args.get('--pubkey')),

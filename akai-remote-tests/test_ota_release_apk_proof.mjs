@@ -1,6 +1,11 @@
 // Critical OTA release publishing regressions. No real Android tool or key.
 import assert from 'node:assert/strict';
-import { auditActualApkOutputs } from '../scripts/lib/ota_release_apk_proof.mjs';
+import {
+  auditActualApkOutputs,
+  auditActualRescueApkOutputs,
+  EXPECTED_CERT,
+  EXPECTED_PACKAGE,
+} from '../scripts/lib/ota_release_apk_proof.mjs';
 import { validateReleaseHttpsUrl } from '../scripts/14_sign_ota_release_manifest.mjs';
 
 const original = '21c2c41dc4c34576cca14ad5404e87d1c5a07ace961c0fab96d128c2164a51ed';
@@ -106,6 +111,68 @@ for (const badUrl of [
   assert.throws(() => validateReleaseHttpsUrl(badUrl, '.apk'), /RELEASE_URL_REJECTED_/, 'reject unsafe release URL: ' + badUrl);
   count++;
 }
+
+// Rescue APK audit checks (cert, package, expected versionCode, debuggable=false)
+const rescueBadgingV9 = fixture.badging.replace("versionCode='5' versionName='1.3.0'", "versionCode='9' versionName='1.3.0-rescue-v9'");
+const rescueOk = auditActualRescueApkOutputs({
+  signerReport: fixture.signerReport,
+  badging: rescueBadgingV9,
+  manifestXml: fixture.manifestXml,
+  expectedVersionCode: 9,
+});
+assert.equal(rescueOk.verified, true);
+assert.equal(rescueOk.packageName, EXPECTED_PACKAGE);
+assert.equal(rescueOk.versionCode, 9);
+assert.equal(rescueOk.originalSignerSha256, EXPECTED_CERT);
+count++;
+
+assert.throws(
+  () => auditActualRescueApkOutputs({
+    signerReport: fixture.signerReport.replace(original, alternate),
+    badging: rescueBadgingV9,
+    manifestXml: fixture.manifestXml,
+    expectedVersionCode: 9,
+  }),
+  /APK_REJECTED_REAL_SIGNER/,
+  'reject rescue APK with wrong signing certificate'
+);
+count++;
+
+assert.throws(
+  () => auditActualRescueApkOutputs({
+    signerReport: fixture.signerReport,
+    badging: rescueBadgingV9.replace('it.akai.customremote', 'org.evil.rescue'),
+    manifestXml: fixture.manifestXml,
+    expectedVersionCode: 9,
+  }),
+  /APK_REJECTED_PACKAGE_VERSION/,
+  'reject rescue APK with wrong package'
+);
+count++;
+
+assert.throws(
+  () => auditActualRescueApkOutputs({
+    signerReport: fixture.signerReport,
+    badging: rescueBadgingV9.replace("versionCode='9'", "versionCode='8'"),
+    manifestXml: fixture.manifestXml,
+    expectedVersionCode: 9,
+  }),
+  /APK_REJECTED_PACKAGE_VERSION/,
+  'reject rescue APK with mismatched versionCode'
+);
+count++;
+
+assert.throws(
+  () => auditActualRescueApkOutputs({
+    signerReport: fixture.signerReport,
+    badging: rescueBadgingV9,
+    manifestXml: fixture.manifestXml.replace('(type 0x12)0x0', '(type 0x12)0xffffffff'),
+    expectedVersionCode: 9,
+  }),
+  /APK_REJECTED_DEBUGGABLE_TRUE/,
+  'reject debuggable rescue APK'
+);
+count++;
 
 console.log('test_ota_release_apk_proof PASS: ' + count +
             ' real-evidence parser and PC-off URL cases; no local APK/signing key used');

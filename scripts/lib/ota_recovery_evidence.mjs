@@ -15,6 +15,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { proveActualRescueApk } from './ota_release_apk_proof.mjs';
 
 export const EXPECTED_PACKAGE = 'it.akai.customremote';
 export const MAX_RECEIPT_BYTES = 4096;
@@ -259,6 +261,7 @@ export function runScript16OfflineRestoreVerify({ repoRoot, bundlePath, verifica
 }
 
 export function verifyReceiptWithRealArchives({
+  repoRoot,
   receiptPath,
   sigPath,
   publicKeyDerPath,
@@ -268,6 +271,7 @@ export function verifyReceiptWithRealArchives({
   installedVersionCode,
   candidateVersionCode,
   nowEpochSec,
+  rescueApkProofRunner,
 }) {
   if (!existsSync(receiptPath) || !existsSync(sigPath)) fail('EVIDENCE_RECEIPT_MISSING');
   if (!existsSync(publicKeyDerPath)) fail('EVIDENCE_TRUST_KEY_NOT_PROVISIONED');
@@ -296,11 +300,22 @@ export function verifyReceiptWithRealArchives({
   if (rescueInfo.sha256 !== policy.rescueApkSha256) {
     fail('EVIDENCE_RESCUE_APK_HASH_MISMATCH');
   }
+  const resolvedRepoRoot = repoRoot || resolve(fileURLToPath(new URL('../..', import.meta.url)));
+  const rescueApkProof = proveActualRescueApk({
+    repoRoot: resolvedRepoRoot,
+    apkPath: rescueApkPath,
+    expectedVersionCode: policy.recoveryRescueVersionCode,
+    runner: rescueApkProofRunner,
+  });
 
   return {
     ...policy,
     archivePhysicallyVerified: true,
     rescueApkPhysicallyVerified: true,
+    rescueApkCertVerified: true,
+    rescueApkPackage: rescueApkProof.packageName,
+    rescueApkVersionCode: rescueApkProof.versionCode,
+    rescueApkSignerSha256: rescueApkProof.originalSignerSha256,
     verifiedBundleBytes: bundleInfo.size,
     verifiedRescueApkBytes: rescueInfo.size,
   };
@@ -326,6 +341,7 @@ export function issueArchiveVerifiedReceipt({
   nowEpochSec,
   validityDays = 7,
   nonDestructiveVerified = true,
+  rescueApkProofRunner,
 }) {
   if (!Number.isInteger(validityDays) || validityDays < 1 || validityDays > 90) {
     fail('EVIDENCE_LIFETIME_EXCESSIVE');
@@ -339,6 +355,14 @@ export function issueArchiveVerifiedReceipt({
   if (rescueInfo.size < 1024 || rescueInfo.bytes[0] !== 0x50 || rescueInfo.bytes[1] !== 0x4b) {
     fail('EVIDENCE_RESCUE_APK_INVALID');
   }
+
+  // Verify actual Rescue APK signing cert, packageName, versionCode, SDK/ABI & debuggable=false BEFORE signing
+  const rescueApkProof = proveActualRescueApk({
+    repoRoot,
+    apkPath: rescueApkPath,
+    expectedVersionCode: recoveryRescueVersionCode,
+    runner: rescueApkProofRunner,
+  });
 
   // Execute real encrypted backup decryption, SQLite integrity check, PKCS#12 + XML verification
   const restoreEvidence = runScript16OfflineRestoreVerify({
@@ -384,6 +408,7 @@ export function issueArchiveVerifiedReceipt({
     sigPath: outSigPath,
     backupArchiveSha256: bundleInfo.sha256,
     rescueApkSha256: rescueInfo.sha256,
+    rescueApkProof,
     restoreEvidence,
   };
 }
